@@ -1,0 +1,31 @@
+groups:
+  - name: api-latency
+    interval: 1m
+    rules:
+      - alert: EmptyExpr
+        source: otel_traces
+        expr: ""
+        labels:
+          team: payments
+          severity: warning
+        annotations:
+          summary: empty expression
+          runbook_url: https://runbooks.internal/empty-expr
+      - alert: TightBraces
+        source: otel_traces
+        expr: "SELECT 1 AS value FROM t WHERE ts >= {{.From}} AND ts < {{- .To }}"
+        labels:
+          team: payments
+          severity: warning
+        annotations:
+          summary: valid template actions without surrounding spaces
+          runbook_url: https://runbooks.internal/tight-braces
+      - alert: MissingTo
+        source: otel_traces
+        expr: "SELECT 1 AS value FROM t WHERE ts >= {{ .From }}"
+        labels:
+          team: payments
+          severity: warning
+        annotations:
+          summary: query has no upper time bound
+          runbook_url: https://runbooks.internal/missing-to

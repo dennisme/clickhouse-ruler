@@ -1,0 +1,37 @@
+# Local dev stack. ClickHouse only for now; the OpenTelemetry collector,
+# Alertmanager and the webhook sink arrive with the notifier (spec section 9).
+#
+# The data directory is a named volume rather than an anonymous one so that
+# `just compose-down` can actually remove it. Anonymous volumes survive a
+# plain `docker compose down` and pile up across rebuilds.
+#
+# It matters here more than usual: the init scripts below only run when the
+# data directory is empty, so editing the schema and restarting does nothing
+# unless the volume is destroyed first.
+services:
+  clickhouse:
+    image: clickhouse/clickhouse-server:25.8.2.29-alpine
+    container_name: ruler-clickhouse
+    ports:
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:8123:8123"
+    environment:
+      CLICKHOUSE_DB: otel
+      CLICKHOUSE_USER: ruler
+      CLICKHOUSE_PASSWORD: ruler
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+    volumes:
+      - ./deploy/clickhouse/init:/docker-entrypoint-initdb.d:ro
+      - clickhouse-data:/var/lib/clickhouse
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    healthcheck:
+      test: ["CMD", "clickhouse-client", "--query", "SELECT 1"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+volumes:
+  clickhouse-data:

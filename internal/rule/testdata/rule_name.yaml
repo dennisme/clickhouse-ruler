@@ -1,0 +1,31 @@
+groups:
+  - name: api-latency
+    interval: 1m
+    rules:
+      - alert: ""
+        source: otel_traces
+        expr: "SELECT 1 AS value FROM t WHERE ts >= {{ .From }} AND ts < {{ .To }}"
+        labels:
+          team: payments
+          severity: warning
+        annotations:
+          summary: nameless
+          runbook_url: https://runbooks.internal/nameless
+      - alert: DuplicateName
+        source: otel_traces
+        expr: "SELECT 1 AS value FROM t WHERE ts >= {{ .From }} AND ts < {{ .To }}"
+        labels:
+          team: payments
+          severity: warning
+        annotations:
+          summary: first
+          runbook_url: https://runbooks.internal/first
+      - alert: DuplicateName
+        source: otel_traces
+        expr: "SELECT 1 AS value FROM t WHERE ts >= {{ .From }} AND ts < {{ .To }}"
+        labels:
+          team: payments
+          severity: warning
+        annotations:
+          summary: second
+          runbook_url: https://runbooks.internal/second

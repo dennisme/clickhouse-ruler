@@ -1,0 +1,18 @@
+groups:
+  - name: api-latency
+    interval: 1m
+    rules:
+      - alert: NoAnnotations
+        source: otel_traces
+        expr: "SELECT 1 AS value FROM t WHERE ts >= {{ .From }} AND ts < {{ .To }}"
+        labels:
+          team: payments
+          severity: warning
+      - alert: MissingRunbook
+        source: otel_traces
+        expr: "SELECT 1 AS value FROM t WHERE ts >= {{ .From }} AND ts < {{ .To }}"
+        labels:
+          team: payments
+          severity: warning
+        annotations:
+          summary: has a summary but no runbook

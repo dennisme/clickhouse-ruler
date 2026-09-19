@@ -1,0 +1,16 @@
+groups:
+  - name: api-latency
+    interval: 1m
+    labels:
+      team: payments
+    rules:
+      - alert: TypoField
+        source: otel_traces
+        expr: "SELECT 1 AS value FROM t WHERE ts >= {{ .From }} AND ts < {{ .To }}"
+        sevrity: warning
+        labels:
+          team: payments
+          severity: warning
+        annotations:
+          summary: a misspelled field must not be ignored
+          runbook_url: https://runbooks.internal/typo

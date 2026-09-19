@@ -1,0 +1,33 @@
+groups:
+  - name: api-latency
+    interval: 1m
+    rules:
+      - alert: NegativeWindow
+        source: otel_traces
+        expr: "SELECT 1 AS value FROM t WHERE ts >= {{ .From }} AND ts < {{ .To }}"
+        window: -5m
+        labels:
+          team: payments
+          severity: warning
+        annotations:
+          summary: window is negative
+          runbook_url: https://runbooks.internal/negative-window
+      - alert: ShortWindow
+        source: otel_traces
+        expr: "SELECT 1 AS value FROM t WHERE ts >= {{ .From }} AND ts < {{ .To }}"
+        window: 30s
+        labels:
+          team: payments
+          severity: warning
+        annotations:
+          summary: window is shorter than the group interval
+          runbook_url: https://runbooks.internal/short-window
+      - alert: DefaultWindow
+        source: otel_traces
+        expr: "SELECT 1 AS value FROM t WHERE ts >= {{ .From }} AND ts < {{ .To }}"
+        labels:
+          team: payments
+          severity: warning
+        annotations:
+          summary: window defaults to the group interval
+          runbook_url: https://runbooks.internal/default-window

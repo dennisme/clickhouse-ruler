@@ -1,0 +1,27 @@
+groups:
+  - name: api-latency
+    interval: 1m
+    rules:
+      - alert: NoLabels
+        source: otel_traces
+        expr: "SELECT 1 AS value FROM t WHERE ts >= {{ .From }} AND ts < {{ .To }}"
+        annotations:
+          summary: no labels block at all
+          runbook_url: https://runbooks.internal/no-labels
+      - alert: EmptyTeam
+        source: otel_traces
+        expr: "SELECT 1 AS value FROM t WHERE ts >= {{ .From }} AND ts < {{ .To }}"
+        labels:
+          team: ""
+          severity: warning
+        annotations:
+          summary: team is blank
+          runbook_url: https://runbooks.internal/empty-team
+      - alert: MissingSeverity
+        source: otel_traces
+        expr: "SELECT 1 AS value FROM t WHERE ts >= {{ .From }} AND ts < {{ .To }}"
+        labels:
+          team: payments
+        annotations:
+          summary: severity absent
+          runbook_url: https://runbooks.internal/missing-severity

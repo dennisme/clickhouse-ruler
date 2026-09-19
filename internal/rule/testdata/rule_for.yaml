@@ -1,0 +1,43 @@
+groups:
+  - name: api-latency
+    interval: 1m
+    rules:
+      - alert: NegativeFor
+        source: otel_traces
+        expr: "SELECT 1 AS value FROM t WHERE ts >= {{ .From }} AND ts < {{ .To }}"
+        for: -5m
+        labels:
+          team: payments
+          severity: warning
+        annotations:
+          summary: for is negative
+          runbook_url: https://runbooks.internal/negative-for
+      - alert: ShortFor
+        source: otel_traces
+        expr: "SELECT 1 AS value FROM t WHERE ts >= {{ .From }} AND ts < {{ .To }}"
+        for: 30s
+        labels:
+          team: payments
+          severity: warning
+        annotations:
+          summary: for is shorter than the group interval
+          runbook_url: https://runbooks.internal/short-for
+      - alert: NoFor
+        source: otel_traces
+        expr: "SELECT 1 AS value FROM t WHERE ts >= {{ .From }} AND ts < {{ .To }}"
+        labels:
+          team: payments
+          severity: warning
+        annotations:
+          summary: no for at all, so the alert fires on first evaluation
+          runbook_url: https://runbooks.internal/no-for
+      - alert: ExplicitZeroFor
+        source: otel_traces
+        expr: "SELECT 1 AS value FROM t WHERE ts >= {{ .From }} AND ts < {{ .To }}"
+        for: 0s
+        labels:
+          team: payments
+          severity: warning
+        annotations:
+          summary: deliberately immediate
+          runbook_url: https://runbooks.internal/zero-for
