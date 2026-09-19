@@ -1,0 +1,21 @@
+groups:
+  - name: api-latency
+    interval: 1m
+    rules:
+      - alert: HighP99Latency
+        source: otel_traces
+        expr: |
+          SELECT
+            ServiceName,
+            quantile(0.99)(Duration) / 1e6 AS value
+          FROM otel_traces
+          WHERE Timestamp >= {{ .From }} AND Timestamp < {{ .To }}
+          GROUP BY ServiceName
+          HAVING value > 1000
+        for: 5m
+        labels:
+          team: payments
+          severity: warning
+        annotations:
+          summary: "{{ .ServiceName }} p99 is {{ .value }}ms"
+          runbook_url: https://runbooks.internal/high-p99-latency

@@ -1,0 +1,62 @@
+sources:
+  - name: ""
+    address: clickhouse:9000
+    database: otel
+    username: ruler
+    table: otel_traces
+    timestamp_column: Timestamp
+  - name: both_secrets
+    address: clickhouse:9000
+    database: otel
+    username: ruler
+    password_file: testdata/secrets/traces
+    password_env: RULER_PASSWORD_LOGS
+    table: otel_traces
+    timestamp_column: Timestamp
+  - name: missing_password_file
+    address: clickhouse:9000
+    database: otel
+    username: ruler
+    password_file: testdata/secrets/nowhere
+    table: otel_traces
+    timestamp_column: Timestamp
+  - name: empty_password_file
+    address: clickhouse:9000
+    database: otel
+    username: ruler
+    password_file: testdata/secrets/empty
+    table: otel_traces
+    timestamp_column: Timestamp
+  - name: missing_password_env
+    address: clickhouse:9000
+    database: otel
+    username: ruler
+    password_env: RULER_PASSWORD_NOWHERE
+    table: otel_traces
+    timestamp_column: Timestamp
+  - name: empty_bits
+    address: ""
+    database: ""
+    username: ""
+    table: ""
+    timestamp_column: ""
+  - name: bad_numbers
+    address: clickhouse:9000
+    database: otel
+    username: ruler
+    table: otel_traces
+    timestamp_column: Timestamp
+    evaluation_delay: -1m
+    max_rows: -5
+  - name: otel_traces
+    address: clickhouse:9000
+    database: otel
+    username: ruler
+    table: otel_traces
+    timestamp_column: Timestamp
+  - name: otel_traces
+    address: clickhouse:9000
+    database: otel
+    username: ruler
+    table: otel_traces
+    timestamp_column: Timestamp

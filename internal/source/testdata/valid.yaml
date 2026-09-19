@@ -1,0 +1,23 @@
+sources:
+  - name: otel_traces
+    address: clickhouse:9000
+    database: otel
+    username: ruler_payments
+    password_file: testdata/secrets/traces
+    table: otel_traces
+    timestamp_column: Timestamp
+    evaluation_delay: 30s
+    max_rows: 500
+  - name: otel_logs
+    address: clickhouse:9000
+    database: otel_logs
+    username: ruler_search
+    password_env: RULER_PASSWORD_LOGS
+    table: otel_logs
+    timestamp_column: TimestampTime
+  - name: otel_local
+    address: 127.0.0.1:9000
+    database: otel
+    username: default
+    table: otel_traces
+    timestamp_column: Timestamp
