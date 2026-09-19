@@ -1,6 +1,6 @@
 module github.com/dennisme/clickhouse-ruler
 
-go 1.26.5
+go 1.26.8
 
 require gopkg.in/yaml.v3 v3.0.1
 

@@ -398,6 +398,55 @@ Default is 1m. Sources with slow batching need more. This is a production
 requirement, not a test convenience, and it also makes the end to end tests
 deterministic.
 
+### 6.9 Sharded clusters
+
+Not addressed yet. Everything below is a known gap, written down now because
+one of the items is a silent correctness bug rather than a missing feature.
+
+The query path itself needs no change. The author writes their own `FROM`, so
+on a sharded cluster they name the Distributed table and the ruler never has
+to know the difference. What needs work is the connection and the settings.
+
+**`skip_unavailable_shards` must be pinned to `0`.** This is the one that
+matters. The ClickHouse default is already `0`, meaning an unreachable shard
+fails the query, but it is settable on a user or a profile. If it is ever `1`,
+a distributed query with a dead shard *succeeds* and returns only the rows the
+surviving shards held. Missing rows are indistinguishable from a recovered
+condition: instances disappear from the state machine, their alerts resolve,
+and the page that should have fired never does. It goes wrong silently, and
+only during an outage, which is exactly when the alerts matter. The ruler
+should send it explicitly with the other settings in 6.7 rather than inherit
+whatever the profile says. Failing an evaluation loudly is always better than
+evaluating a partial result.
+
+**`address` must become a list.** The source schema takes one address and
+`query.Open` passes `[]string{src.Address}` to a driver that already accepts
+many. Against a sharded cluster that single node is both a point of failure
+and the coordinator for every distributed query. Wants an `addresses:` list
+and a connection open strategy.
+
+**The cost caps are per node.** `max_execution_time` and `max_memory_usage`
+are enforced by each node independently, so on a sharded cluster the real
+ceiling is per shard, not per query. 6.2 and 6.7 describe them as a cluster
+cap, which is loose. Fanout also means the coordinator merges results, so
+`max_result_rows` is the only cap applying to the query as a whole.
+
+**`evaluation_delay` must cover the slowest shard.** Insert lag is per shard,
+and the delay has to clear the worst one, not the average. This is a larger
+number rather than new configuration.
+
+**What `table:` refers to becomes ambiguous.** It is parsed and validated but
+never read by the querier today; it exists for the tier 1 checks in 7.3. On a
+sharded cluster it could mean the local table or the Distributed one, and
+those have different rows in `system.tables`. Decide this before tier 1 uses
+it, not after.
+
+Testing this needs a second ClickHouse node in the compose stack, a
+`Distributed` table over both, and a test that stops one node and asserts the
+evaluation fails rather than silently returning half the rows. Single-node
+testing cannot catch the `skip_unavailable_shards` bug at all, which is the
+argument for adding the node rather than reasoning about it on paper.
+
 ---
 
 ## 7. Validation
@@ -416,6 +465,36 @@ Validation is a single package called from both:
 
 A rule that fails validation fails to load, which fails the deploy. A rule that
 dodges CI still cannot run. `pint` can only advise; we can enforce.
+
+**A consumable GitHub Action is the third entry point.** Teams keep rules in
+their own repositories, and telling each of them to write the download-and-run
+YAML themselves guarantees a dozen slightly different versions, some pinned to
+a stale release. Ship one:
+
+```yaml
+- uses: dennisme/clickhouse-ruler/action@v1
+  with:
+    path: rules/
+```
+
+It lives in this repository under `action/`, not in a repository of its own.
+For a linter the action version *should* equal the tool version, and splitting
+them makes users pin two things and gives us version skew to debug.
+`golangci-lint-action` is separate only because it carries heavy caching and
+version-resolution logic; a composite action that fetches a release binary and
+runs `ruler check` does not.
+
+The part that belongs in the binary rather than the action is the output
+format. `ruler check --format=github` should emit workflow commands:
+
+```text
+::error file=rules/payments.yaml,line=12,title=rule/expr::expr must contain {{ .To }}
+```
+
+GitHub then renders each finding inline on the diff, which is the whole point
+of carrying a file and line on every `Problem` (7.3). With that flag the action
+is a few lines of YAML; without it the action has to parse our human-readable
+output, which breaks every time the wording changes.
 
 ### 7.2 Do not write a SQL parser
 
@@ -641,10 +720,17 @@ stubbed collector.
 
 ### 9.1 Compose stack
 
-`docker-compose.e2e.yml`, all image versions pinned:
+`compose.yaml`, all image versions pinned:
 
-1. **ClickHouse**, single node. Schema in `deploy/clickhouse/init`, a trimmed
-   version of the ClickStack OTel trace layout.
+1. **ClickHouse**, single node today. Schema in `deploy/clickhouse/init`, the
+   OpenTelemetry Collector ClickHouse exporter trace table reproduced verbatim
+   from `exporter/clickhouseexporter` in `opentelemetry-collector-contrib`:
+   same columns, types, codecs, skip indexes, `PARTITION BY` and `ORDER BY`.
+   Copying it rather than trimming it means a rule that works in the tests
+   works against real collector output, and it keeps `ResourceAttributes`
+   available, which is where `deployment.environment`, `service.namespace` and
+   the `k8s.*` keys live. Only the engine and the TTL differ, and both are
+   local-development concerns. A second node arrives with 6.9.
 2. **OpenTelemetry collector**, ClickHouse exporter, batch timeout set low so
    data lands in seconds rather than tens of seconds.
 3. **Telemetry generators.** Two of them, see 9.2.
@@ -774,6 +860,11 @@ one so that watch mode is a caller, not a rewrite.
    thousands of engineers page off means high availability, missed evaluation
    handling, clock skew, ClickHouse restarts mid window, and backfill after an
    outage. Revisit before anyone depends on it in production.
+5. **Sharded clusters.** See 6.9 for the full list. Pinning
+   `skip_unavailable_shards` to `0` is a correctness fix and should not wait
+   for the rest; a dead shard currently risks resolving alerts instead of
+   failing the evaluation. Proving it needs a second ClickHouse node in the
+   compose stack, since a single node cannot reproduce the failure.
 
 ---
 

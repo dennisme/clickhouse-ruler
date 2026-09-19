@@ -64,6 +64,10 @@ type span struct {
 	at       time.Time
 	service  string
 	duration uint64
+
+	// env lands in ResourceAttributes under deployment.environment, the way
+	// the collector writes resource-level context. Empty means "prod".
+	env string
 }
 
 func seed(t *testing.T, q *Querier, spans []span) {
@@ -77,13 +81,18 @@ func seed(t *testing.T, q *Querier, spans []span) {
 	}
 
 	batch, err := q.conn.PrepareBatch(ctx,
-		"INSERT INTO otel.otel_traces (Timestamp, TraceId, SpanId, ServiceName, SpanName, Duration, StatusCode, SpanAttributes)")
+		"INSERT INTO otel.otel_traces (Timestamp, TraceId, SpanId, ServiceName, SpanName, Duration, StatusCode, ResourceAttributes, SpanAttributes)")
 	if err != nil {
 		t.Fatalf("prepare batch: %v", err)
 	}
 	for i, s := range spans {
+		env := s.env
+		if env == "" {
+			env = "prod"
+		}
 		err := batch.Append(
 			s.at, "trace", "span", s.service, "GET /", s.duration, "Ok",
+			map[string]string{"deployment.environment": env},
 			map[string]string{"index": string(rune('a' + i))},
 		)
 		if err != nil {
@@ -271,5 +280,56 @@ func TestRunRejectsMapColumnAsLabel(t *testing.T) {
 
 	if _, err := q.Run(ctx, r, anchor); err == nil {
 		t.Fatal("expected an error for a map column used as a label")
+	}
+}
+
+// Resource attributes are where deployment.environment, service.namespace and
+// the k8s keys live, so grouping by one is the common real rule shape. The map
+// itself cannot be a label (see above), so the rule extracts a key from it and
+// the extracted String becomes the label.
+func TestRunGroupsByResourceAttribute(t *testing.T) {
+	src := testSource(t)
+	q := openQuerier(t, src)
+
+	seed(t, q, []span{
+		{at: anchor.Add(-time.Minute), service: "checkout", duration: 10, env: "prod"},
+		{at: anchor.Add(-time.Minute), service: "checkout", duration: 30, env: "prod"},
+		{at: anchor.Add(-time.Minute), service: "checkout", duration: 99, env: "staging"},
+	})
+
+	r := rule.Rule{
+		Alert:  "LatencyByEnv",
+		Source: "otel_traces",
+		Expr: `SELECT ResourceAttributes['deployment.environment'] AS environment,
+		              max(Duration) AS value
+		       FROM otel.otel_traces
+		       WHERE Timestamp >= {{ .From }} AND Timestamp < {{ .To }}
+		       GROUP BY environment ORDER BY environment`,
+		Window: 5 * time.Minute,
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	got, err := q.Run(ctx, r, anchor)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	want := []struct {
+		env   string
+		value float64
+	}{
+		{"prod", 30},
+		{"staging", 99},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("got %d samples, want %d: %+v", len(got), len(want), got)
+	}
+	for i, w := range want {
+		if got[i].Labels["environment"] != w.env || got[i].Value != w.value {
+			t.Errorf("sample %d = %+v, want environment=%s value=%v",
+				i, got[i], w.env, w.value)
+		}
 	}
 }
