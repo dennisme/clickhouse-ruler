@@ -3,7 +3,6 @@ groups:
     interval: 1m
     rules:
       - alert: PointsAtNothing
-        source: does_not_exist
         expr: |
           SELECT ServiceName, max(Duration) AS value
           FROM otel.otel_traces

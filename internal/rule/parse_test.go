@@ -44,9 +44,6 @@ func TestParseValidFile(t *testing.T) {
 	if r.Alert != "HighP99Latency" {
 		t.Errorf("alert = %q, want %q", r.Alert, "HighP99Latency")
 	}
-	if r.Source != "otel_traces" {
-		t.Errorf("source = %q, want %q", r.Source, "otel_traces")
-	}
 	if r.For != 5*time.Minute {
 		t.Errorf("for = %v, want %v", r.For, 5*time.Minute)
 	}
@@ -88,7 +85,7 @@ func TestParseRejectsUnknownFields(t *testing.T) {
 		},
 		{
 			File:     "testdata/unknown_field.yaml",
-			Line:     9,
+			Line:     10,
 			Subject:  "TypoField",
 			Check:    "yaml/unknown-field",
 			Severity: lint.SeverityError,
@@ -149,15 +146,15 @@ func TestParseRecordsLineNumbers(t *testing.T) {
 		want int
 	}{
 		{"alert", 5},
-		{"source", 6},
-		{"expr", 7},
-		{"for", 15},
-		{"labels", 16},
-		{"labels.team", 17},
-		{"labels.severity", 18},
-		{"annotations", 19},
-		{"annotations.summary", 20},
-		{"annotations.runbook_url", 21},
+		{"sources", 6},
+		{"expr", 8},
+		{"for", 16},
+		{"labels", 17},
+		{"labels.team", 18},
+		{"labels.severity", 19},
+		{"annotations", 20},
+		{"annotations.summary", 21},
+		{"annotations.runbook_url", 22},
 	} {
 		if got := r.LineOf(tc.key); got != tc.want {
 			t.Errorf("lineOf(%q) = %d, want %d", tc.key, got, tc.want)

@@ -1,6 +1,7 @@
 sources:
-  - name: otel_traces
-    labels: {team: payments}
+  - name: otel_traces_prod
+    labels:
+      env: prod
     address: localhost:9000
     database: otel
     username: ruler

@@ -148,7 +148,7 @@ func TestRunSelectsOnlyTheWindow(t *testing.T) {
 		{at: anchor.Add(time.Minute), service: "future", duration: 5},
 	})
 
-	r := rule.Rule{Alert: "MaxLatency", Source: "otel_traces", Expr: latencyExpr, Window: 5 * time.Minute}
+	r := rule.Rule{Alert: "MaxLatency", Expr: latencyExpr, Window: 5 * time.Minute}
 	got := run(t, q, r, anchor)
 
 	want := []alertSample{
@@ -178,7 +178,7 @@ func TestRunEvaluationDelayExcludesFreshestRows(t *testing.T) {
 		{at: anchor.Add(-1 * time.Minute), service: "still-arriving", duration: 20},
 	})
 
-	r := rule.Rule{Alert: "MaxLatency", Source: "otel_traces", Expr: latencyExpr, Window: 5 * time.Minute}
+	r := rule.Rule{Alert: "MaxLatency", Expr: latencyExpr, Window: 5 * time.Minute}
 	got := run(t, q, r, anchor)
 
 	if len(got) != 1 {
@@ -199,7 +199,7 @@ func TestRunBindsParametersRatherThanInterpolating(t *testing.T) {
 		{at: anchor.Add(-time.Minute), service: "o'brien', 1) --", duration: 7},
 	})
 
-	r := rule.Rule{Alert: "MaxLatency", Source: "otel_traces", Expr: latencyExpr, Window: 5 * time.Minute}
+	r := rule.Rule{Alert: "MaxLatency", Expr: latencyExpr, Window: 5 * time.Minute}
 	got := run(t, q, r, anchor)
 
 	if len(got) != 1 {
@@ -217,7 +217,6 @@ func TestRunRequiresValueColumn(t *testing.T) {
 
 	r := rule.Rule{
 		Alert:  "NoValue",
-		Source: "otel_traces",
 		Expr:   "SELECT ServiceName FROM otel.otel_traces WHERE Timestamp >= {{ .From }} AND Timestamp < {{ .To }}",
 		Window: 5 * time.Minute,
 	}
@@ -250,7 +249,7 @@ func TestRunEnforcesMaxRows(t *testing.T) {
 	}
 	seed(t, q, spans)
 
-	r := rule.Rule{Alert: "TooMany", Source: "otel_traces", Expr: latencyExpr, Window: 5 * time.Minute}
+	r := rule.Rule{Alert: "TooMany", Expr: latencyExpr, Window: 5 * time.Minute}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -269,7 +268,6 @@ func TestRunRejectsMapColumnAsLabel(t *testing.T) {
 
 	r := rule.Rule{
 		Alert:  "MapLabel",
-		Source: "otel_traces",
 		Expr: `SELECT SpanAttributes, max(Duration) AS value FROM otel.otel_traces
 		       WHERE Timestamp >= {{ .From }} AND Timestamp < {{ .To }} GROUP BY SpanAttributes`,
 		Window: 5 * time.Minute,
@@ -299,7 +297,6 @@ func TestRunGroupsByResourceAttribute(t *testing.T) {
 
 	r := rule.Rule{
 		Alert:  "LatencyByEnv",
-		Source: "otel_traces",
 		Expr: `SELECT ResourceAttributes['deployment.environment'] AS environment,
 		              max(Duration) AS value
 		       FROM otel.otel_traces

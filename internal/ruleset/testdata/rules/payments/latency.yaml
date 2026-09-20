@@ -3,7 +3,8 @@ groups:
     interval: 1m
     rules:
       - alert: HighP99Latency
-        source: otel_traces
+        sources:
+          team: payments
         expr: |
           SELECT ServiceName, max(Duration) AS value
           FROM otel.otel_traces

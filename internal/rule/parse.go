@@ -29,9 +29,15 @@ type Group struct {
 
 // Rule is a single alerting rule.
 type Rule struct {
-	Alert  string
-	Source string
-	Expr   string
+	Alert string
+	Expr  string
+
+	// Sources selects the sources this rule runs against, by matching every
+	// term against a source's labels (spec 6.10). It is the only thing
+	// deciding which clusters the query reaches; Labels are for routing and
+	// nothing else. Empty matches nothing, deliberately: selecting a source
+	// picks the ClickHouse user the query runs as.
+	Sources map[string]string
 
 	// Window is how much time the query examines. It defaults to the group's
 	// interval, which is the data produced since the previous evaluation.
@@ -169,8 +175,8 @@ func parseRule(r *lint.Reader, n *yaml.Node) Rule {
 		switch e.Key.Value {
 		case "alert":
 			rl.Alert, _ = r.Scalar(e.Value, "alert")
-		case "source":
-			rl.Source, _ = r.Scalar(e.Value, "source")
+		case "sources":
+			rl.Sources = r.StringMap(e.Value, "sources", "sources", rl.lines.Keys())
 		case "expr":
 			rl.Expr, _ = r.Scalar(e.Value, "expr")
 		case "window":

@@ -24,7 +24,7 @@ import (
 // Check names are namespaced like pint, as in slices 1 and 3.
 const (
 	checkDirectory   = "ruleset/directory"
-	checkSourceFound = "rule/source-exists"
+	checkSourceMatch = "rule/source-match"
 	checkProtected   = "rule/protected-label"
 )
 
@@ -34,15 +34,18 @@ type Rule struct {
 	rule.Rule
 
 	File  string
-	Team  string
 	Group rule.Group
 
 	// Labels is the rule's file-level label set, group labels overlaid with
-	// the rule's own (spec 6.3.1 levels 1 and 2) after the derived team has
-	// been applied. Result columns overlay this per instance at evaluation.
+	// the rule's own (spec 6.3.1 levels 1 and 2). Result columns and the
+	// source's labels overlay this per instance at evaluation.
 	Labels map[string]string
 
-	Source source.Source
+	// Sources is every source the rule's labels matched, sorted by name. A
+	// rule evaluates once per source, and may match none: on a ruler holding
+	// one data centre's sources, most rules in a shared repository will
+	// (spec 6.10, 10.2).
+	Sources []source.Source
 }
 
 // Set is every rule found under a directory.
@@ -73,7 +76,7 @@ func Load(dir string, sources *source.File, root *policy.Policy) (*Set, []lint.P
 	}
 
 	for _, path := range files {
-		loaded, found := loadFile(dir, path, sources, root)
+		loaded, found := loadFile(path, sources, root)
 		set.Rules = append(set.Rules, loaded...)
 		problems = append(problems, found...)
 	}
@@ -104,7 +107,7 @@ func ruleFiles(dir string) ([]string, error) {
 	return out, nil
 }
 
-func loadFile(dir, path string, sources *source.File, root *policy.Policy) ([]Rule, []lint.Problem) {
+func loadFile(path string, sources *source.File, root *policy.Policy) ([]Rule, []lint.Problem) {
 	// The path comes from walking the directory the operator pointed us at.
 	// Reading rule files by path is the entire job of this package, so G304
 	// has nothing to warn about here.
@@ -123,30 +126,15 @@ func loadFile(dir, path string, sources *source.File, root *policy.Policy) ([]Ru
 		return nil, problems
 	}
 
-	// The derived team is applied as a group label before validation, not
-	// after. labels/required checks the labels a rule actually ends up with,
-	// so injecting afterwards would report a missing team that the loader was
-	// about to supply. A group that names its own team keeps it.
-	team := teamOf(dir, path)
-	for i := range parsed.Groups {
-		if team == "" {
-			break
-		}
-		if parsed.Groups[i].Labels == nil {
-			parsed.Groups[i].Labels = map[string]string{}
-		}
-		if parsed.Groups[i].Labels["team"] == "" {
-			parsed.Groups[i].Labels["team"] = team
-		}
-	}
-
-	// Policy is resolved per rule because each names its own source, and a
-	// source can tighten a check for the rules that read it.
+	// Policy is resolved per rule because a rule's labels decide which sources
+	// it reaches, and each of those can tighten a check. A rule matching
+	// several gets the strictest any of them asks for.
 	policyFor := func(r rule.Rule) *policy.Policy {
-		if src, ok := sources.ByName(r.Source); ok {
-			return policy.Merge(root, src.Policy)
+		scopes := []*policy.Policy{root}
+		for _, src := range sources.Match(r.Sources) {
+			scopes = append(scopes, src.Policy)
 		}
-		return policy.Merge(root)
+		return policy.Merge(scopes...)
 	}
 	problems = append(problems, rule.Validate(parsed, policyFor)...)
 
@@ -155,52 +143,54 @@ func loadFile(dir, path string, sources *source.File, root *policy.Policy) ([]Ru
 		for _, r := range g.Rules {
 			labels := g.EffectiveLabels(r)
 
-			loaded := Rule{
-				Rule:   r,
-				File:   path,
-				Team:   labels["team"],
-				Group:  g,
-				Labels: labels,
-			}
-			problems = append(problems, protectedLabels(path, r)...)
+			matched := sources.Match(r.Sources)
 
-			if src, ok := sources.ByName(r.Source); ok {
-				loaded.Source = src
-			} else if r.Source != "" {
-				problems = append(problems, lint.Problem{
-					File:     path,
-					Line:     r.Line(),
-					Subject:  r.Alert,
-					Check:    checkSourceFound,
-					Severity: lint.SeverityError,
-					Text:     "source " + r.Source + " is not defined in the sources file",
-				})
+			loaded := Rule{
+				Rule:    r,
+				File:    path,
+				Group:   g,
+				Labels:  labels,
+				Sources: matched,
 			}
+			problems = append(problems, protectedLabels(path, r, matched)...)
+			problems = append(problems, sourceMatch(path, r, matched, policyFor(r))...)
+
 			out = append(out, loaded)
 		}
 	}
 	return out, problems
 }
 
-// teamOf derives the owning team from the first path segment under dir.
+// sourceMatch reports a rule that no source accepts.
 //
-// The directory name is used exactly as written. Nothing is stripped from it,
-// so rules/payments gives "payments" and rules/team-payments gives
-// "team-payments". Rewriting part of the path would make the mapping from
-// directory to team something a reader has to know rather than something they
-// can see.
-//
-// A rule sitting directly in dir has no team to derive.
-func teamOf(dir, path string) string {
-	rel, err := filepath.Rel(dir, path)
-	if err != nil {
-		return ""
+// This is a warning rather than an error, and it is the one check where "the
+// rule cannot run" is not automatically wrong. Deployments are distributed, so
+// a ruler in one data centre legitimately holds its own sources and nothing
+// else, and most rules in a shared repository will match nothing on it. A
+// rollout has an order too: rules can land before the source for a new cluster
+// does, and failing hard would block every unrelated change until someone
+// fixed the sequence (spec 6.10).
+func sourceMatch(file string, r rule.Rule, matched []source.Source, p *policy.Policy) []lint.Problem {
+	if len(matched) > 0 {
+		return nil
 	}
-	segments := strings.Split(filepath.ToSlash(rel), "/")
-	if len(segments) < 2 {
-		return ""
+	setting := p.For(checkSourceMatch)
+	if setting.Severity == lint.SeverityOff {
+		return nil
 	}
-	return segments[0]
+	return []lint.Problem{{
+		File:     file,
+		Line:     r.LineOf("labels"),
+		Subject:  r.Alert,
+		Check:    checkSourceMatch,
+		Severity: setting.Severity,
+		Text: "the sources selector matches no source, so this ruler will never " +
+			"evaluate the rule. That is expected when the sources for its cluster live " +
+			"on a different ruler, or when a cluster is being added and its source has " +
+			"not landed yet. An empty selector matches nothing on purpose",
+		PolicyFile: setting.File,
+		PolicyLine: setting.Line,
+	}}
 }
 
 // aliasPattern matches a SQL column alias, as in `'platform' AS team`.
@@ -218,7 +208,7 @@ var aliasPattern = regexp.MustCompile(`(?i)\bAS\s+` + "[`\"]?" + `(\w+)` + "[`\"
 // example through SELECT *, a subquery alias, or a CTE. Catching those needs
 // the real output column names from DESCRIBE, which is tier 1 (spec 7.3).
 // This check is a cheap first line, not a complete one.
-func protectedLabels(file string, r rule.Rule) []lint.Problem {
+func protectedLabels(file string, r rule.Rule, matched []source.Source) []lint.Problem {
 	var out []lint.Problem
 
 	add := func(line int, format string, args ...any) {
@@ -232,14 +222,27 @@ func protectedLabels(file string, r rule.Rule) []lint.Problem {
 		})
 	}
 
-	if _, ok := r.Labels["alertname"]; ok {
-		add(r.LineOf("labels.alertname", "labels"),
-			"labels may not set %q: an alert's identity comes from its name", "alertname")
+	// Keys the alert's identity depends on. alertname and source are always
+	// protected; a matched source's alert_labels are protected for the rules
+	// that reach it, because a query cannot know better than the ruler which
+	// cluster it ran on (spec 6.3.1).
+	protected := map[string]bool{"alertname": true, "source": true, "team": true}
+	for _, src := range matched {
+		for k := range src.Labels {
+			protected[k] = true
+		}
+	}
+
+	for _, key := range []string{"alertname", "source"} {
+		if _, ok := r.Labels[key]; ok {
+			add(r.LineOf("labels."+key, "labels"),
+				"labels may not set %q: an alert's identity comes from its name and its source", key)
+		}
 	}
 
 	for _, m := range aliasPattern.FindAllStringSubmatch(r.Expr, -1) {
 		alias := strings.ToLower(m[1])
-		if alias != "team" && alias != "alertname" {
+		if !protected[alias] {
 			continue
 		}
 		add(r.LineOf("expr"),

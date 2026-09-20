@@ -3,7 +3,8 @@ groups:
     interval: 1m
     rules:
       - alert: RelativeRunbook
-        source: otel_traces
+        sources:
+          team: payments
         expr: "SELECT 1 AS value FROM t WHERE ts >= {{ .From }} AND ts < {{ .To }}"
         labels:
           team: payments
@@ -12,7 +13,8 @@ groups:
           summary: runbook is a relative path
           runbook_url: /runbooks/relative
       - alert: NoScheme
-        source: otel_traces
+        sources:
+          team: payments
         expr: "SELECT 1 AS value FROM t WHERE ts >= {{ .From }} AND ts < {{ .To }}"
         labels:
           team: payments
@@ -21,7 +23,8 @@ groups:
           summary: runbook is a bare host
           runbook_url: runbooks.internal/no-scheme
       - alert: TemplatedRunbook
-        source: otel_traces
+        sources:
+          team: payments
         expr: "SELECT 1 AS value FROM t WHERE ts >= {{ .From }} AND ts < {{ .To }}"
         labels:
           team: payments

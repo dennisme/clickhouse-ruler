@@ -1,16 +1,16 @@
 groups:
-  - name: search-ops
+  - name: g
     interval: 1m
     rules:
-      - alert: SearchLatency
-        source: otel_traces
+      - alert: ClaimsAnotherSource
+        sources:
+          team: payments
         expr: |
-          SELECT ServiceName, max(Duration) AS value
+          SELECT ServiceName, 'elsewhere' AS source, 'dc9' AS cluster, max(Duration) AS value
           FROM otel.otel_traces
           WHERE Timestamp >= {{ .From }} AND Timestamp < {{ .To }}
           GROUP BY ServiceName
         labels:
-          team: search
           severity: warning
         annotations:
           summary: "{{ .ServiceName }} is slow"

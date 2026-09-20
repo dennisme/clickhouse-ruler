@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/dennisme/clickhouse-ruler/internal/rule"
+	"github.com/dennisme/clickhouse-ruler/internal/source"
 )
 
 // Sample is one row returned by a rule query. Every result column except
@@ -57,16 +58,27 @@ type instance struct {
 	lastSeen time.Time
 }
 
-// State tracks the alert instances of a single rule across evaluations.
+// LabelSource names the source an alert came from. It is what keeps two
+// clusters' alerts apart when one rule evaluates against both.
+const LabelSource = "source"
+
+// State tracks the alert instances of a single rule against a single source.
+//
+// A rule matching several sources gets a State per source. They share nothing:
+// a rule that recovers on one cluster and not another must resolve one alert
+// and leave the other firing, which only works if each source counts its
+// instances separately (spec 6.10.1).
 type State struct {
 	rule   rule.Rule
+	src    source.Source
 	base   map[string]string
 	active map[uint64]*instance
 }
 
-// New builds the state for one rule. Group labels are the weakest, then the
-// rule's own labels.
-func New(r rule.Rule, groupLabels map[string]string) *State {
+// New builds the state for one rule against one source. Group labels are the
+// weakest, then the rule's own labels; the source's are applied per evaluation
+// because they outrank the query's own columns.
+func New(r rule.Rule, groupLabels map[string]string, src source.Source) *State {
 	base := make(map[string]string, len(groupLabels)+len(r.Labels)+1)
 	for k, v := range groupLabels {
 		base[k] = v
@@ -77,6 +89,7 @@ func New(r rule.Rule, groupLabels map[string]string) *State {
 
 	return &State{
 		rule:   r,
+		src:    src,
 		base:   base,
 		active: map[uint64]*instance{},
 	}
@@ -145,15 +158,27 @@ func (s *State) expire(now time.Time, present map[uint64]bool) []Alert {
 // labelsFor builds an instance's final label set. A result column overrides a
 // rule label of the same name, but alertname is set last because an alert
 // whose name could be changed by query data would be a routing hazard.
+// labelsFor composes an instance's labels in the precedence order of spec
+// 6.3.1: group, rule, result columns, then the source.
+//
+// The source wins over the query on purpose. Its labels state where the
+// evaluation actually happened, and a result column claiming otherwise is
+// reporting something untrue. alertname and source are written last because
+// they are the alert's identity, and an identity query data can set is a
+// routing hazard.
 func (s *State) labelsFor(smpl Sample) map[string]string {
-	labels := make(map[string]string, len(s.base)+len(smpl.Labels)+1)
+	labels := make(map[string]string, len(s.base)+len(smpl.Labels)+len(s.src.Labels)+2)
 	for k, v := range s.base {
 		labels[k] = v
 	}
 	for k, v := range smpl.Labels {
 		labels[k] = v
 	}
+	for k, v := range s.src.Labels {
+		labels[k] = v
+	}
 	labels["alertname"] = s.rule.Alert
+	labels[LabelSource] = s.src.Name
 	return labels
 }
 

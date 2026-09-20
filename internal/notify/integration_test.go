@@ -124,28 +124,15 @@ func TestEndToEndFiringAlertReachesAlertmanager(t *testing.T) {
 	}
 	r := set.Rules[0]
 
-	if r.Team != "payments" {
-		t.Fatalf("team = %q, want payments derived from the directory", r.Team)
+	// The rule names no source: its team label matches both (spec 6.10).
+	if len(r.Sources) != 2 {
+		t.Fatalf("matched %d sources, want 2: %v", len(r.Sources), r.Sources)
 	}
 
-	q, err := query.Open(r.Source)
-	if err != nil {
-		t.Fatalf("opening querier: %v", err)
-	}
-	defer func() { _ = q.Close() }()
-
-	now := seed(t, r.Source)
+	now := seed(t, r.Sources[0])
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-
-	samples, err := q.Run(ctx, r.Rule, now)
-	if err != nil {
-		t.Fatalf("running rule: %v", err)
-	}
-	if len(samples) == 0 {
-		t.Fatal("query returned no rows, the rule would never fire")
-	}
 
 	// Alertmanager suppresses a repeat of a group it has already notified
 	// about, so every run carries a label no previous run used. With
@@ -159,11 +146,37 @@ func TestEndToEndFiringAlertReachesAlertmanager(t *testing.T) {
 	}
 	labels["run_id"] = runID
 
-	// for is 0 in the fixture, so the first evaluation fires immediately.
-	state := alert.New(r.Rule, labels)
-	fired := state.Eval(now, samples)
-	if len(fired) == 0 {
-		t.Fatal("state machine produced no alerts")
+	// One evaluation per matched source, each with its own state. This is the
+	// loop a scheduler will run.
+	var fired []alert.Alert
+	for _, src := range r.Sources {
+		q, err := query.Open(src)
+		if err != nil {
+			t.Fatalf("opening querier for %s: %v", src.Name, err)
+		}
+		defer func() { _ = q.Close() }()
+
+		samples, err := q.Run(ctx, r.Rule, now)
+		if err != nil {
+			t.Fatalf("running rule against %s: %v", src.Name, err)
+		}
+		if len(samples) == 0 {
+			t.Fatalf("%s returned no rows, the rule would never fire", src.Name)
+		}
+
+		// for is 0 in the fixture, so the first evaluation fires immediately.
+		got := alert.New(r.Rule, labels, src).Eval(now, samples)
+		if len(got) == 0 {
+			t.Fatalf("state machine produced no alerts for %s", src.Name)
+		}
+		fired = append(fired, got...)
+	}
+
+	if len(fired) != 2 {
+		t.Fatalf("got %d alerts, want one per source", len(fired))
+	}
+	if fired[0].Fingerprint == fired[1].Fingerprint {
+		t.Fatal("same fingerprint from two sources: one would resolve the other")
 	}
 
 	client := notify.NewClient(amURL)
@@ -171,17 +184,21 @@ func TestEndToEndFiringAlertReachesAlertmanager(t *testing.T) {
 		t.Fatalf("sending to alertmanager: %v", err)
 	}
 
+	// Both sources have to arrive, not just the first: the point of the run is
+	// that one rule produced two alerts that Alertmanager kept apart.
 	got := s.waitFor(t, 30*time.Second, func(ds []delivery) bool {
+		seen := map[string]bool{}
 		for _, d := range ds {
 			for _, a := range d.Alerts {
 				if a.Labels["run_id"] == runID {
-					return true
+					seen[a.Labels["source"]] = true
 				}
 			}
 		}
-		return false
+		return len(seen) == 2
 	})
 
+	clusters := map[string]string{}
 	var found bool
 	for _, d := range got {
 		for _, a := range d.Alerts {
@@ -189,6 +206,7 @@ func TestEndToEndFiringAlertReachesAlertmanager(t *testing.T) {
 				continue
 			}
 			found = true
+			clusters[a.Labels["source"]] = a.Labels["cluster"]
 
 			if a.Labels["alertname"] != "CheckoutIsSlow" {
 				t.Errorf("delivered alertname = %q, want CheckoutIsSlow", a.Labels["alertname"])
@@ -213,6 +231,18 @@ func TestEndToEndFiringAlertReachesAlertmanager(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("no alert for run %s delivered: %+v", runID, got)
+	}
+
+	// The source label is what kept them apart, and each carried its own
+	// cluster from the source's alert_labels (spec 6.10.1).
+	want := map[string]string{"otel_traces_dc1": "dc1", "otel_traces_dc2": "dc2"}
+	if len(clusters) != len(want) {
+		t.Fatalf("delivered sources = %v, want one alert per source %v", clusters, want)
+	}
+	for src, cluster := range want {
+		if clusters[src] != cluster {
+			t.Errorf("source %s delivered cluster %q, want %q", src, clusters[src], cluster)
+		}
 	}
 }
 
@@ -247,7 +277,9 @@ func loadSet(t *testing.T, chAddr string) *ruleset.Set {
 	// Only address is overridden, and only so the justfile can point the test
 	// at a different host. Everything else comes from the fixture.
 	for i := range set.Rules {
-		set.Rules[i].Source.Address = chAddr
+		for j := range set.Rules[i].Sources {
+			set.Rules[i].Sources[j].Address = chAddr
+		}
 	}
 	return set
 }

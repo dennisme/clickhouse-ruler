@@ -11,7 +11,6 @@ import (
 
 const (
 	checkRuleName            = "rule/name"
-	checkRuleSource          = "rule/source"
 	checkRuleExpr            = "rule/expr"
 	checkLabelsRequired      = "labels/required"
 	checkAnnotationsRequired = "annotations/required"
@@ -96,7 +95,6 @@ func (v *validator) group(g Group) {
 
 	for _, r := range g.Rules {
 		v.ruleName(g, r, namedAt)
-		v.ruleSource(r)
 		v.ruleExpr(r)
 		v.requiredKeys(r, "labels", "label", checkLabelsRequired, g.EffectiveLabels(r))
 		v.requiredKeys(r, "annotations", "annotation", checkAnnotationsRequired, r.Annotations)
@@ -120,12 +118,6 @@ func (v *validator) ruleName(g Group, r Rule, namedAt map[string]int) {
 		return
 	}
 	namedAt[r.Alert] = line
-}
-
-func (v *validator) ruleSource(r Rule) {
-	if r.Source == "" {
-		v.add(r, r.LineOf("source"), checkRuleSource, "source is empty")
-	}
 }
 
 // ruleExpr enforces the lint half of the time bound decision: the ruler

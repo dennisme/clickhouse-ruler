@@ -16,6 +16,12 @@ const (
 	CheckAnnotationsRunbook  = "annotations/runbook"
 	CheckRuleFor             = "rule/for"
 	CheckRuleWindow          = "rule/window"
+
+	// CheckSourceMatch is configurable for a different reason than the rest.
+	// Whether a rule can run depends on which ruler is asking: one holding a
+	// single data centre's sources will legitimately match nothing for most of
+	// a shared repository (spec 6.10, 10.2).
+	CheckSourceMatch = "rule/source-match"
 )
 
 // fixed lists the checks whose severity nobody may change. A rule failing one
@@ -32,8 +38,6 @@ var fixed = map[string]bool{
 	lint.CheckYAMLUnknownField: true,
 	lint.CheckYAMLType:         true,
 	"rule/name":                true,
-	"rule/source":              true,
-	"rule/source-exists":       true,
 	"rule/expr":                true,
 	"rule/protected-label":     true,
 	checkPolicyUnknown:         true,
@@ -58,6 +62,7 @@ var defaults = map[string]Setting{
 		Keys:     []string{"runbook_url", "summary"},
 	},
 	CheckAnnotationsRunbook: {Severity: lint.SeverityWarning},
+	CheckSourceMatch:        {Severity: lint.SeverityWarning},
 	CheckRuleFor:            {Severity: lint.SeverityWarning},
 	CheckRuleWindow:         {Severity: lint.SeverityWarning},
 }

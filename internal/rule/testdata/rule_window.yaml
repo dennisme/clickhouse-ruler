@@ -3,7 +3,8 @@ groups:
     interval: 1m
     rules:
       - alert: NegativeWindow
-        source: otel_traces
+        sources:
+          team: payments
         expr: "SELECT 1 AS value FROM t WHERE ts >= {{ .From }} AND ts < {{ .To }}"
         window: -5m
         labels:
@@ -13,7 +14,8 @@ groups:
           summary: window is negative
           runbook_url: https://runbooks.internal/negative-window
       - alert: ShortWindow
-        source: otel_traces
+        sources:
+          team: payments
         expr: "SELECT 1 AS value FROM t WHERE ts >= {{ .From }} AND ts < {{ .To }}"
         window: 30s
         labels:
@@ -23,7 +25,8 @@ groups:
           summary: window is shorter than the group interval
           runbook_url: https://runbooks.internal/short-window
       - alert: DefaultWindow
-        source: otel_traces
+        sources:
+          team: payments
         expr: "SELECT 1 AS value FROM t WHERE ts >= {{ .From }} AND ts < {{ .To }}"
         labels:
           team: payments

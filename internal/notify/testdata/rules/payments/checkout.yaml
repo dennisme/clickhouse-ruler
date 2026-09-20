@@ -1,11 +1,13 @@
-# No team label anywhere: it is derived from the payments directory, and
-# the end to end test asserts Alertmanager received it.
+# The team label is written here, not inferred from the directory: nothing
+# about the path reaches an alert. The end to end test asserts Alertmanager
+# received it.
 groups:
   - name: checkout
     interval: 1m
     rules:
       - alert: CheckoutIsSlow
-        source: otel_traces
+        sources:
+          team: payments
         expr: |
           SELECT ServiceName, max(Duration) / 1e6 AS value
           FROM otel.otel_traces
@@ -14,6 +16,7 @@ groups:
           HAVING value > 1000
         window: 5m
         labels:
+          team: payments
           severity: warning
         annotations:
           summary: "{{ .ServiceName }} is slow"

@@ -79,6 +79,16 @@ type Source struct {
 	MaxExecutionTime time.Duration
 	MaxMemoryUsage   int
 
+	// Labels describe what this source is. They do two jobs that do not
+	// conflict: a rule's Sources selector matches against them, and they are
+	// written onto every alert the source produces (spec 6.10, 6.10.1).
+	//
+	// One map is enough because both jobs read the same fact. That only works
+	// because the rule holds the selector: were these requirements on the
+	// rule instead, they would already be present on anything that matched
+	// and adding them to the alert would change nothing.
+	Labels map[string]string
+
 	// Policy tightens checks for rules that read this source. A source that
 	// pages on-call can demand a runbook without every rule in the repository
 	// having to (spec 7.7). It can only tighten: the merge takes the
@@ -197,6 +207,8 @@ func parseSource(r *lint.Reader, n *yaml.Node, env func(string) (string, bool), 
 			s.MaxExecutionTime, _ = r.Duration(e.Value, "max_execution_time")
 		case "max_memory_usage":
 			s.MaxMemoryUsage, _ = r.Int(e.Value, "max_memory_usage")
+		case "labels":
+			s.Labels = r.StringMap(e.Value, "labels", "labels", s.lines.Keys())
 		case "checks":
 			s.Policy = policy.ParseNode(r, e.Value)
 		default:

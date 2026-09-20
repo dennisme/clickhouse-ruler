@@ -4,7 +4,8 @@ groups:
     intrval: 30s
     rules:
       - alert: TypoField
-        source: otel_traces
+        sources:
+          team: payments
         expr: "SELECT 1 AS value FROM t WHERE ts >= {{ .From }} AND ts < {{ .To }}"
         sevrity: warning
         labels:
