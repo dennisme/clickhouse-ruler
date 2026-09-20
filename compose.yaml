@@ -1,5 +1,9 @@
-# Local dev stack. ClickHouse only for now; the OpenTelemetry collector,
-# Alertmanager and the webhook sink arrive with the notifier (spec section 9).
+# Local dev stack: ClickHouse and Alertmanager. The OpenTelemetry collector and
+# the telemetry generators arrive with the scheduler (spec section 9).
+#
+# The webhook sink is not a container. It runs inside the integration test so
+# assertions can read delivered payloads directly, which is why Alertmanager
+# routes to host.docker.internal on a fixed port.
 #
 # The data directory is a named volume rather than an anonymous one so that
 # `just compose-down` can actually remove it. Anonymous volumes survive a
@@ -29,6 +33,28 @@ services:
         hard: 262144
     healthcheck:
       test: ["CMD", "clickhouse-client", "--query", "SELECT 1"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  alertmanager:
+    image: prom/alertmanager:v0.28.1
+    container_name: ruler-alertmanager
+    ports:
+      - "127.0.0.1:9093:9093"
+    volumes:
+      - ./deploy/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+    # host-gateway is what lets the container reach the sink running on the
+    # host. Docker Desktop defines host.docker.internal already; plain Linux
+    # docker, which is what CI runs, does not.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+      - --storage.path=/alertmanager
+      - --log.level=warn
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:9093/-/ready"]
       interval: 2s
       timeout: 2s
       retries: 30

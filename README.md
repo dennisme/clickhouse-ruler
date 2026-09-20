@@ -22,21 +22,33 @@ authorization by deleting the write path, not by building a permission system.
 
 ClickHouse-backed observability stacks do not work this way. Alerts live in an
 application database and are created by clicking around a web interface. There
-is a REST API, so you can script it, but the file is a client of the API
-rather than the source of truth. Anyone with a token can add an alert that
+is a REST API and a Terraform provider, so you can keep definitions in git,
+but they write to that same database: the file is a client of the API rather
+than the source of truth. Anyone with a token can still add an alert that
 pages your on-call, and no diff ever shows it.
 
-This project is the Prometheus model on top of ClickHouse.
+The bigger cost is what you have to run to get even that far. Every one of
+those providers comes attached to a platform, so alerts as code means adopting
+Grafana Alerting, or running SigNoz. That is a lot of machinery for one job
+when your data is already in ClickHouse and your routing already goes through
+an Alertmanager you operate. The missing piece is the thing in between, and it
+should not cost a platform migration.
+
+This project is the Prometheus model on top of ClickHouse, as one service
+rather than a stack.
 
 ## What the alternatives are missing
 
-|                                      | Rules in git | ClickHouse SQL | Alertmanager | File is the only way to create a rule |
-| ------------------------------------ | ------------ | -------------- | ------------ | ------------------------------------- |
-| SigNoz                               | no           | yes            | no           | no                                    |
-| ClickStack / HyperDX                 | no           | yes            | no           | no                                    |
-| Grafana OSS + ClickHouse datasource  | yes          | yes            | yes          | **no**                                |
-| sql_exporter + Prometheus            | yes          | metrics only   | yes          | yes                                   |
-| clickhouse-ruler                     | yes          | yes            | yes          | yes                                   |
+|                                     | Rules in git   | ClickHouse SQL | Alertmanager | File is the only way to create a rule |
+| ----------------------------------- | -------------- | -------------- | ------------ | ------------------------------------- |
+| SigNoz                              | Terraform only | yes            | no           | **no**                                |
+| ClickStack / HyperDX                | Terraform only | yes            | no           | **no**                                |
+| Grafana OSS + ClickHouse datasource | yes            | yes            | yes          | **no**                                |
+| sql_exporter + Prometheus           | yes            | metrics only   | yes          | yes                                   |
+| clickhouse-ruler                    | yes            | yes            | yes          | yes                                   |
+
+The last column is the one nobody else offers, and it is the reason to build
+rather than adopt.
 
 ### SigNoz and ClickStack
 
@@ -45,9 +57,23 @@ expect you to create them in the UI. Neither has a rule file format, and
 neither sends to an external Alertmanager. SigNoz vendors its own Alertmanager
 fork internally.
 
-There are Terraform and Crossplane providers for ClickStack, but they are
-ClickHouse Cloud only and they write to the same mutable database. Your file
-describes a rule; it does not own it.
+Both have a Terraform provider, and SigNoz's alert docs point at theirs as the
+infrastructure as code answer, so HCL in git is genuinely possible. What it
+does not give you is ownership. The provider calls the same API and writes the
+same mutable rows, so anyone with a token can still edit the rule out from
+under your file, and no diff records it. Your file describes a rule; it does
+not own it. The ClickStack providers are ClickHouse Cloud only on top of that.
+
+Locking the API down does not rescue it either. SigNoz's fine-grained access
+control requires "an active SigNoz license" and is Cloud and Self-Hosted
+Enterprise only, currently in beta. Same bind as Grafana OSS below: the escape
+hatch is real, and it is not in the free edition.
+
+The larger cost is that adopting either one for alerting means adopting the
+whole platform. Running SigNoz because it is the only thing that will evaluate
+a scheduled SQL query and page someone is a lot of machinery for one job, when
+your data is already in ClickHouse and your routing already goes through an
+Alertmanager you run.
 
 ### Grafana OSS plus the ClickHouse datasource
 
@@ -66,6 +92,32 @@ end up with alerts that page on-call which no pull request ever saw. Closing
 the hole means default-Viewer plus per-team folder permissions, which breaks
 ordinary dashboard work.
 
+Git Sync, the newer Observability as Code work, does not close it either. It
+is the closest thing Grafana has to the Prometheus model, and it is in OSS
+rather than behind a licence, but it "only supports dashboards and folders".
+Alerts are not supported yet, and the migration guide tells you to move alert
+rules out of a folder before syncing it. There is an open request
+(grafana/grafana#129913) for a mode where the repository is the only write
+path, exactly the property this project is built on, but it is unanswered and
+scoped to dashboards and folders.
+
+Its sharding guidance points away from the ownership model too, which would
+still matter if alert support shipped tomorrow. Git Sync recommends about
+1,000 resources per repository connection and allows 10 connections per stack,
+a hard limit on Cloud. That cap is a sync cost rather than a query cost: past
+it, "the sync workflow puts noticeable load on Grafana itself". The guidance
+is titled "Shard by capacity, not by team" and says to avoid one connection
+per team because "it consumes connections quickly, doesn't scale as teams
+grow". So repo layout follows capacity, not who owns what. That is the
+opposite of the model here, where the directory is the ownership boundary and
+one path decides both the `CODEOWNERS` reviewer and the `team` label. Nothing is synced into a database, so there is no connection to
+run out of and no cap on team directories.
+
+If managing rules this way is the plan, the wider tooling is uneven: the
+Terraform provider is the mature path, the Ansible collection is Cloud only,
+the Operator does not list alerting among its resources, and the Crossplane
+provider "is in an alpha stage, so it has not reached a stable state yet".
+
 ### sql_exporter plus Prometheus
 
 Runs SQL on a schedule, turns the result into Prometheus metrics, then normal
@@ -75,6 +127,20 @@ simple cases.
 The cost is that every alert needs a metric. High cardinality log and trace
 queries blow up metric cardinality, and you lose alerting on the rows
 themselves, so per-instance alerts get awkward.
+
+## When you should not use this
+
+If you already run OSS Grafana well, already keep its config in git, and your
+team already thinks in Prometheus rules, the delta here is small. File
+provisioning already makes rules read only, the ClickHouse datasource already
+runs real SQL, and Grafana already forwards to an external Alertmanager. Three
+of the four properties are yours, and the fourth is a policy problem inside an
+install you have already tuned. Use what you have.
+
+The case for a separate service gets stronger the further you are from that:
+when Grafana is not in the path at all, when the install is large enough that
+folder permissions stop being a workable control, or when adding a whole
+observability platform is a bigger change than adding one service.
 
 ## How it works
 
@@ -106,7 +172,7 @@ cap rather than the ruler.
 
 Only the password lives outside the file. The username is not a secret and is
 deliberately in plain sight: it is the tenancy boundary, so a reviewer has to
-be able to see that `team-payments` connects as `ruler_payments` and not as
+be able to see that `payments` connects as `ruler_payments` and not as
 something with wider grants.
 
 Use `password_env: SOME_VAR` instead if a file does not suit. Setting both is
@@ -118,7 +184,7 @@ local development and for mTLS.
 **Rules** are author owned, and reference a source by name.
 
 ```yaml
-# rules/team-payments/latency.yaml
+# rules/payments/latency.yaml
 groups:
   - name: api-latency
     interval: 1m
@@ -147,10 +213,18 @@ groups:
 
 ```text
 /rules/sources.yaml    @platform-team
-/rules/team-payments/  @payments
+/rules/payments/       @payments
 ```
 
-Three things to notice.
+Four things to notice.
+
+**The directory owns the page.** `team` comes from the rule file's path, so
+`rules/payments/` pages payments without anyone writing it down. A rule
+may override it with
+an explicit `team:` label, because one team running operations for another
+team's service is a real arrangement. What a rule may not do is produce `team`
+from a result column: the Alertmanager route tree is generated from the files,
+and a value that only exists at query time has no route.
 
 **One returned row is one alert instance.** Columns become labels, the `value`
 column becomes the value. A query returning one row per service produces one
@@ -168,9 +242,9 @@ overlap. Setting it shorter than the interval is a warning: the query still
 runs, but the gap between one window and the next is never examined by any
 evaluation.
 
-**Validation runs at load, not just in CI.** The same checks run in
-`ruler check` and inside the ruler itself, so a rule that gets past CI still
-cannot run. This is modelled on Cloudflare's `pint`, with one difference:
+**Validation runs at load, not just in CI.** The same checks are meant to run
+in `ruler check` and inside the ruler itself, so a rule that gets past CI
+still cannot run. The package is shared already; the binary is not built yet. This is modelled on Cloudflare's `pint`, with one difference:
 `pint` can only advise, because Cloudflare does not own Prometheus. We do, so
 we can enforce.
 
@@ -182,28 +256,39 @@ Working:
 
 - Rule file parsing, with line numbers on every finding and strict unknown
   field rejection
-- Eight offline rule checks
+- Ten offline checks: eight on a rule file, plus the two that need the whole
+  directory (the source exists, and the query does not set a protected label)
 - Sources file parsing, with secrets read from a file or the environment, and
   eleven checks
 - The alert state machine: pending, firing, resolved, `for`, `keep_firing_for`,
   per-instance identity
 - Running a rule against real ClickHouse and getting alert samples back
-- A ClickHouse compose stack and integration tests that use it
+- Loading a rules directory, deriving each rule's owning team from its path,
+  and resolving its source by name
+- Annotation templating, and sending to Alertmanager
+- A ClickHouse and Alertmanager compose stack, with an end to end test that
+  takes a rule from a file all the way to a delivered notification
 
 Not built yet:
 
 - No command line tool. There is no `ruler` binary to run.
-- No scheduler. Nothing calls the querier on an interval.
-- No Alertmanager client. Nothing is ever sent anywhere.
-- No annotation templating.
+- No scheduler. Nothing calls the querier on an interval, so evaluation has to
+  be driven by hand.
+- No resend cadence, so a firing alert is not refreshed and will expire.
 - No `/metrics` endpoint.
-- Nothing resolves a rule's `source:` name to a real source, and nothing
-  checks that the name exists.
+- No Alertmanager route tree generation.
 
 Known gaps that will change:
 
-- Result columns currently override rule labels, including `team`, which means
-  a query could redirect its own page.
+- Validation is stricter than it should be, and not configurable. `team`,
+  `severity`, `summary` and `runbook_url` are all required at error severity,
+  so a rule that would run perfectly fails to load if it omits one. Pointing
+  the loader at a flat directory of rule files fails for the same reason,
+  because `team` is derived from a subdirectory. Spec 7.6 and 7.7 decide how
+  this becomes operator-configurable, defaulting to warnings.
+- Sharded clusters are not handled. `skip_unavailable_shards` is not pinned,
+  so a dead shard can silently resolve alerts instead of failing the
+  evaluation. See spec 6.9.
 
 ## Development
 

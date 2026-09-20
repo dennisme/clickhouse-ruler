@@ -1,0 +1,12 @@
+sources:
+  - name: otel_traces
+    # Matches compose.yaml. The test overrides it from RULER_CLICKHOUSE_ADDR:
+    # there is deliberately no ${VAR} expansion for address, only for the
+    # password, so the connection target stays reviewable in the file.
+    address: 127.0.0.1:9000
+    database: otel
+    username: ruler
+    password_env: RULER_CLICKHOUSE_PASSWORD
+    table: otel_traces
+    timestamp_column: Timestamp
+    evaluation_delay: 0s

@@ -84,11 +84,11 @@ func TestParseRejectsUnknownFields(t *testing.T) {
 			Subject:  "",
 			Check:    "yaml/unknown-field",
 			Severity: lint.SeverityError,
-			Text:     `unknown field "labels" in group`,
+			Text:     `unknown field "intrval" in group`,
 		},
 		{
 			File:     "testdata/unknown_field.yaml",
-			Line:     10,
+			Line:     9,
 			Subject:  "TypoField",
 			Check:    "yaml/unknown-field",
 			Severity: lint.SeverityError,
@@ -159,7 +159,7 @@ func TestParseRecordsLineNumbers(t *testing.T) {
 		{"annotations.summary", 20},
 		{"annotations.runbook_url", 21},
 	} {
-		if got := r.lineOf(tc.key); got != tc.want {
+		if got := r.LineOf(tc.key); got != tc.want {
 			t.Errorf("lineOf(%q) = %d, want %d", tc.key, got, tc.want)
 		}
 	}
@@ -169,5 +169,26 @@ func TestParseRecordsLineNumbers(t *testing.T) {
 	}
 	if r.Line() != 5 {
 		t.Errorf("rule Line = %d, want 5", r.Line())
+	}
+}
+
+// Group labels are level 1 of the precedence in spec 6.3.1. They exist so a
+// team or a tier can be set once for a whole group instead of repeated on
+// every rule.
+func TestParseGroupLabels(t *testing.T) {
+	f, problems := Parse("testdata/group_labels.yaml", readFixture(t, "group_labels.yaml"))
+
+	if len(problems) != 0 {
+		t.Fatalf("expected no problems, got %d: %v", len(problems), problems)
+	}
+	g := f.Groups[0]
+	want := map[string]string{"team": "payments", "tier": "1"}
+	if len(g.Labels) != len(want) {
+		t.Fatalf("group labels = %v, want %v", g.Labels, want)
+	}
+	for k, v := range want {
+		if g.Labels[k] != v {
+			t.Errorf("group label %q = %q, want %q", k, g.Labels[k], v)
+		}
 	}
 }

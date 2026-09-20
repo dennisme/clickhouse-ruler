@@ -75,7 +75,7 @@ func (v *validator) group(g Group) {
 		v.ruleName(g, r, namedAt)
 		v.ruleSource(r)
 		v.ruleExpr(r)
-		v.requiredKeys(r, "labels", "label", checkLabelsRequired, r.Labels, requiredLabels)
+		v.requiredKeys(r, "labels", "label", checkLabelsRequired, g.EffectiveLabels(r), requiredLabels)
 		v.requiredKeys(r, "annotations", "annotation", checkAnnotationsRequired, r.Annotations, requiredAnnotations)
 		v.annotationsRunbook(r)
 		v.ruleFor(g, r)
@@ -84,7 +84,7 @@ func (v *validator) group(g Group) {
 }
 
 func (v *validator) ruleName(g Group, r Rule, namedAt map[string]int) {
-	line := r.lineOf("alert")
+	line := r.LineOf("alert")
 
 	if r.Alert == "" {
 		v.add(r, line, checkRuleName, lint.SeverityError, "alert name is empty")
@@ -101,7 +101,7 @@ func (v *validator) ruleName(g Group, r Rule, namedAt map[string]int) {
 
 func (v *validator) ruleSource(r Rule) {
 	if r.Source == "" {
-		v.add(r, r.lineOf("source"), checkRuleSource, lint.SeverityError, "source is empty")
+		v.add(r, r.LineOf("source"), checkRuleSource, lint.SeverityError, "source is empty")
 	}
 }
 
@@ -109,7 +109,7 @@ func (v *validator) ruleSource(r Rule) {
 // supplies the evaluation window through template variables, and a query that
 // omits them would scan without bound on every evaluation.
 func (v *validator) ruleExpr(r Rule) {
-	line := r.lineOf("expr")
+	line := r.LineOf("expr")
 
 	if r.Expr == "" {
 		v.add(r, line, checkRuleExpr, lint.SeverityError, "expr is empty")
@@ -128,7 +128,7 @@ func (v *validator) ruleExpr(r Rule) {
 // when the whole block is absent.
 func (v *validator) requiredKeys(r Rule, block, noun, check string, have map[string]string, required []string) {
 	for _, key := range required {
-		line := r.lineOf(block+"."+key, block)
+		line := r.LineOf(block+"."+key, block)
 
 		value, present := have[key]
 		switch {
@@ -153,7 +153,7 @@ func (v *validator) annotationsRunbook(r Rule) {
 	if err == nil && (u.Scheme == "http" || u.Scheme == "https") && u.Host != "" {
 		return
 	}
-	v.add(r, r.lineOf("annotations.runbook_url", "annotations"), checkAnnotationsRunbook,
+	v.add(r, r.LineOf("annotations.runbook_url", "annotations"), checkAnnotationsRunbook,
 		lint.SeverityError, "runbook_url must be an absolute http or https URL, got %q", raw)
 }
 
@@ -164,7 +164,7 @@ func (v *validator) ruleFor(g Group, r Rule) {
 	if !r.has("for") {
 		return
 	}
-	line := r.lineOf("for")
+	line := r.LineOf("for")
 
 	if r.For < 0 {
 		v.add(r, line, checkRuleFor, lint.SeverityError, "for must not be negative, got %s", r.For)
@@ -181,7 +181,7 @@ func (v *validator) ruleFor(g Group, r Rule) {
 // the interval leaves the data between evaluations unread by any evaluation,
 // which is a silent blind spot rather than a visible failure.
 func (v *validator) ruleWindow(g Group, r Rule) {
-	line := r.lineOf("window")
+	line := r.LineOf("window")
 
 	if r.Window < 0 {
 		v.add(r, line, checkRuleWindow, lint.SeverityError, "window must not be negative, got %s", r.Window)

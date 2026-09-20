@@ -235,3 +235,17 @@ func assertProblems(t *testing.T, got, want []lint.Problem) {
 		}
 	}
 }
+
+// A rule may take team from its group rather than repeating it (spec 6.3.1).
+// labels/required has to check the labels the alert actually ends up with, not
+// just the ones written on the rule, or group labels are useless.
+func TestValidateRequiredLabelsSatisfiedByGroup(t *testing.T) {
+	f, problems := Parse("testdata/group_labels.yaml", readFixture(t, "group_labels.yaml"))
+	if len(problems) != 0 {
+		t.Fatalf("parse problems: %v", problems)
+	}
+
+	if got := Validate(f); len(got) != 0 {
+		t.Fatalf("expected no problems, got %d: %v", len(got), got)
+	}
+}

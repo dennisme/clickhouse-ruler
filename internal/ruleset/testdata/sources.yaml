@@ -1,0 +1,7 @@
+sources:
+  - name: otel_traces
+    address: localhost:9000
+    database: otel
+    username: ruler
+    table: otel_traces
+    timestamp_column: Timestamp

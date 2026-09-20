@@ -17,7 +17,12 @@ type RuleFile struct {
 type Group struct {
 	Name     string
 	Interval time.Duration
-	Rules    []Rule
+
+	// Labels apply to every rule in the group and are the weakest of the
+	// three label sources in spec 6.3.1. A rule's own labels override them.
+	Labels map[string]string
+
+	Rules []Rule
 
 	lines lint.Lines
 }
@@ -42,10 +47,29 @@ type Rule struct {
 // Line is the line the rule starts on.
 func (r Rule) Line() int { return r.lines.Start }
 
+// EffectiveLabels is the group's labels overlaid with the rule's own, which is
+// levels 1 and 2 of the precedence in spec 6.3.1. Level 3, the result columns,
+// is applied per instance at evaluation time and is not known here.
+//
+// Validation and evaluation must agree on this, otherwise a rule taking its
+// team from the group passes one and fails the other.
+func (g Group) EffectiveLabels(r Rule) map[string]string {
+	out := make(map[string]string, len(g.Labels)+len(r.Labels))
+	for k, v := range g.Labels {
+		out[k] = v
+	}
+	for k, v := range r.Labels {
+		out[k] = v
+	}
+	return out
+}
+
 // lineOf returns the line the given yaml key appeared on. See lint.Lines.
 func (g Group) lineOf(keys ...string) int { return g.lines.Of(keys...) }
 
-func (r Rule) lineOf(keys ...string) int { return r.lines.Of(keys...) }
+// LineOf is the line a key appeared on. Exported because checks outside this
+// package still have to point at a line of the diff.
+func (r Rule) LineOf(keys ...string) int { return r.lines.Of(keys...) }
 
 // has reports whether a yaml key was present in the file. It separates a
 // field that was left out from one explicitly set to a zero value, which for
@@ -102,6 +126,8 @@ func parseGroup(r *lint.Reader, n *yaml.Node) Group {
 			g.Name, _ = r.Scalar(e.Value, "group name")
 		case "interval":
 			g.Interval, _ = r.Duration(e.Value, "group interval")
+		case "labels":
+			g.Labels = r.StringMap(e.Value, "labels", "group labels", g.lines.Keys())
 		case "rules":
 			g.Rules = parseRules(r, e.Value)
 		default:

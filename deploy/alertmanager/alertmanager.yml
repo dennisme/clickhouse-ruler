@@ -1,0 +1,30 @@
+# Routes everything to a single webhook so the end to end test can assert on
+# what Alertmanager actually delivered, rather than on what the ruler sent.
+#
+# The receiver points at the host, not at another container: the sink runs in
+# the test process so assertions can read the payloads directly. Port 9099 is
+# fixed because this file is read at startup, before a test could pick one.
+#
+# Dispatch is interval based: Alertmanager holds an aggregation group, flushes
+# it on a ticker, and then repeat_interval suppresses that same group until it
+# expires. A test that re-sends an identical alert therefore gets nothing.
+#
+# group_by: ['...'] means group by every label, so a run that carries a unique
+# label is always a brand new group and flushes after group_wait rather than
+# waiting for the next tick or being suppressed as a repeat. The short waits
+# then only have to cover the flush itself.
+global:
+  resolve_timeout: 1m
+
+route:
+  receiver: sink
+  group_by: ["..."]
+  group_wait: 0s
+  group_interval: 1s
+  repeat_interval: 1h
+
+receivers:
+  - name: sink
+    webhook_configs:
+      - url: http://host.docker.internal:9099/
+        send_resolved: true

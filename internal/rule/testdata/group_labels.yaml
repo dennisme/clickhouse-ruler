@@ -1,0 +1,20 @@
+groups:
+  - name: api-latency
+    interval: 1m
+    labels:
+      team: payments
+      tier: "1"
+    rules:
+      - alert: HighP99Latency
+        source: otel_traces
+        expr: |
+          SELECT ServiceName, max(Duration) AS value
+          FROM otel_traces
+          WHERE Timestamp >= {{ .From }} AND Timestamp < {{ .To }}
+          GROUP BY ServiceName
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ .ServiceName }} is slow"
+          runbook_url: https://runbooks.internal/slow
