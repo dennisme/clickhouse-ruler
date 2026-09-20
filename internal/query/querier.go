@@ -44,6 +44,27 @@ func (q *Querier) Close() error { return q.conn.Close() }
 
 func (q *Querier) Ping(ctx context.Context) error { return q.conn.Ping(ctx) }
 
+// settings are the server side limits sent with every rule query.
+func settings(src source.Source) clickhouse.Settings {
+	return clickhouse.Settings{
+		"max_execution_time": int(src.MaxExecutionTime.Seconds()),
+		"max_memory_usage":   src.MaxMemoryUsage,
+		// The client side cap in toSamples protects the ruler's memory. This
+		// one makes the server stop producing rows in the first place, so a
+		// runaway rule costs the cluster nothing either.
+		"max_result_rows":      src.MaxRows + 1,
+		"result_overflow_mode": "throw",
+		// Sent explicitly rather than inherited. ClickHouse defaults this to
+		// 0, but a user or profile can set it to 1, and then a distributed
+		// query with an unreachable shard succeeds and returns only the rows
+		// the surviving shards held. Those missing rows look exactly like a
+		// recovered condition: instances leave the state machine and their
+		// alerts resolve, during an outage, silently. Failing the evaluation
+		// is always better than evaluating a partial result (spec 6.9).
+		"skip_unavailable_shards": 0,
+	}
+}
+
 // Run evaluates one rule and returns a sample per returned row.
 func (q *Querier) Run(ctx context.Context, r rule.Rule, now time.Time) ([]alert.Sample, error) {
 	sql, err := render(r.Expr)
@@ -57,15 +78,7 @@ func (q *Querier) Run(ctx context.Context, r rule.Rule, now time.Time) ([]alert.
 			"from": from.UTC().Format("2006-01-02 15:04:05.000"),
 			"to":   to.UTC().Format("2006-01-02 15:04:05.000"),
 		}),
-		clickhouse.WithSettings(clickhouse.Settings{
-			"max_execution_time": int(q.src.MaxExecutionTime.Seconds()),
-			"max_memory_usage":   q.src.MaxMemoryUsage,
-			// The client side cap in toSamples protects the ruler's memory.
-			// This one makes the server stop producing rows in the first
-			// place, so a runaway rule costs the cluster nothing either.
-			"max_result_rows":      q.src.MaxRows + 1,
-			"result_overflow_mode": "throw",
-		}),
+		clickhouse.WithSettings(settings(q.src)),
 	)
 
 	rows, err := q.conn.Query(ctx, sql)

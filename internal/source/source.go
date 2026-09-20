@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/dennisme/clickhouse-ruler/internal/lint"
+	"github.com/dennisme/clickhouse-ruler/internal/policy"
 	"gopkg.in/yaml.v3"
 )
 
@@ -77,6 +78,12 @@ type Source struct {
 	// settings so the cluster enforces them, not the ruler.
 	MaxExecutionTime time.Duration
 	MaxMemoryUsage   int
+
+	// Policy tightens checks for rules that read this source. A source that
+	// pages on-call can demand a runbook without every rule in the repository
+	// having to (spec 7.7). It can only tighten: the merge takes the
+	// strictest setting across scopes.
+	Policy *policy.Policy
 
 	lines lint.Lines
 }
@@ -190,6 +197,8 @@ func parseSource(r *lint.Reader, n *yaml.Node, env func(string) (string, bool), 
 			s.MaxExecutionTime, _ = r.Duration(e.Value, "max_execution_time")
 		case "max_memory_usage":
 			s.MaxMemoryUsage, _ = r.Int(e.Value, "max_memory_usage")
+		case "checks":
+			s.Policy = policy.ParseNode(r, e.Value)
 		default:
 			r.UnknownField(e.Key, "source")
 		}

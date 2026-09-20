@@ -16,6 +16,7 @@ import (
 	"strings"
 
 	"github.com/dennisme/clickhouse-ruler/internal/lint"
+	"github.com/dennisme/clickhouse-ruler/internal/policy"
 	"github.com/dennisme/clickhouse-ruler/internal/rule"
 	"github.com/dennisme/clickhouse-ruler/internal/source"
 )
@@ -52,7 +53,12 @@ type Set struct {
 
 // Load reads every *.yaml under dir, resolves each rule against sources, and
 // returns all problems rather than stopping at the first.
-func Load(dir string, sources *source.File) (*Set, []lint.Problem) {
+//
+// root is the instance-wide policy. Each rule is validated against root merged
+// with its own source's policy, so a source that pages on-call can demand more
+// than the baseline without every rule in the repository having to (spec 7.7).
+// A nil root means the shipped defaults.
+func Load(dir string, sources *source.File, root *policy.Policy) (*Set, []lint.Problem) {
 	set := &Set{Dir: dir}
 	var problems []lint.Problem
 
@@ -67,7 +73,7 @@ func Load(dir string, sources *source.File) (*Set, []lint.Problem) {
 	}
 
 	for _, path := range files {
-		loaded, found := loadFile(dir, path, sources)
+		loaded, found := loadFile(dir, path, sources, root)
 		set.Rules = append(set.Rules, loaded...)
 		problems = append(problems, found...)
 	}
@@ -98,7 +104,7 @@ func ruleFiles(dir string) ([]string, error) {
 	return out, nil
 }
 
-func loadFile(dir, path string, sources *source.File) ([]Rule, []lint.Problem) {
+func loadFile(dir, path string, sources *source.File, root *policy.Policy) ([]Rule, []lint.Problem) {
 	// The path comes from walking the directory the operator pointed us at.
 	// Reading rule files by path is the entire job of this package, so G304
 	// has nothing to warn about here.
@@ -134,7 +140,15 @@ func loadFile(dir, path string, sources *source.File) ([]Rule, []lint.Problem) {
 		}
 	}
 
-	problems = append(problems, rule.Validate(parsed)...)
+	// Policy is resolved per rule because each names its own source, and a
+	// source can tighten a check for the rules that read it.
+	policyFor := func(r rule.Rule) *policy.Policy {
+		if src, ok := sources.ByName(r.Source); ok {
+			return policy.Merge(root, src.Policy)
+		}
+		return policy.Merge(root)
+	}
+	problems = append(problems, rule.Validate(parsed, policyFor)...)
 
 	var out []Rule
 	for _, g := range parsed.Groups {

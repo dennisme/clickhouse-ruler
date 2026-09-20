@@ -80,23 +80,23 @@ func TestValidate(t *testing.T) {
 					Line:     5,
 					Subject:  "NoLabels",
 					Check:    "labels/required",
-					Severity: lint.SeverityError,
-					Text:     `required label "team" is missing`,
+					Severity: lint.SeverityWarning,
+					Text:     `required label "severity" is missing`,
 				},
 				{
 					File:     "testdata/labels_required.yaml",
 					Line:     5,
 					Subject:  "NoLabels",
 					Check:    "labels/required",
-					Severity: lint.SeverityError,
-					Text:     `required label "severity" is missing`,
+					Severity: lint.SeverityWarning,
+					Text:     `required label "team" is missing`,
 				},
 				{
 					File:     "testdata/labels_required.yaml",
 					Line:     15,
 					Subject:  "EmptyTeam",
 					Check:    "labels/required",
-					Severity: lint.SeverityError,
+					Severity: lint.SeverityWarning,
 					Text:     `required label "team" is empty`,
 				},
 				{
@@ -104,7 +104,7 @@ func TestValidate(t *testing.T) {
 					Line:     23,
 					Subject:  "MissingSeverity",
 					Check:    "labels/required",
-					Severity: lint.SeverityError,
+					Severity: lint.SeverityWarning,
 					Text:     `required label "severity" is missing`,
 				},
 			},
@@ -117,23 +117,23 @@ func TestValidate(t *testing.T) {
 					Line:     5,
 					Subject:  "NoAnnotations",
 					Check:    "annotations/required",
-					Severity: lint.SeverityError,
-					Text:     `required annotation "summary" is missing`,
+					Severity: lint.SeverityWarning,
+					Text:     `required annotation "runbook_url" is missing`,
 				},
 				{
 					File:     "testdata/annotations_required.yaml",
 					Line:     5,
 					Subject:  "NoAnnotations",
 					Check:    "annotations/required",
-					Severity: lint.SeverityError,
-					Text:     `required annotation "runbook_url" is missing`,
+					Severity: lint.SeverityWarning,
+					Text:     `required annotation "summary" is missing`,
 				},
 				{
 					File:     "testdata/annotations_required.yaml",
 					Line:     17,
 					Subject:  "MissingRunbook",
 					Check:    "annotations/required",
-					Severity: lint.SeverityError,
+					Severity: lint.SeverityWarning,
 					Text:     `required annotation "runbook_url" is missing`,
 				},
 			},
@@ -148,7 +148,7 @@ func TestValidate(t *testing.T) {
 					Line:     13,
 					Subject:  "RelativeRunbook",
 					Check:    "annotations/runbook",
-					Severity: lint.SeverityError,
+					Severity: lint.SeverityWarning,
 					Text:     `runbook_url must be an absolute http or https URL, got "/runbooks/relative"`,
 				},
 				{
@@ -156,7 +156,7 @@ func TestValidate(t *testing.T) {
 					Line:     22,
 					Subject:  "NoScheme",
 					Check:    "annotations/runbook",
-					Severity: lint.SeverityError,
+					Severity: lint.SeverityWarning,
 					Text:     `runbook_url must be an absolute http or https URL, got "runbooks.internal/no-scheme"`,
 				},
 			},
@@ -218,7 +218,7 @@ func TestValidate(t *testing.T) {
 				t.Fatalf("fixture should parse cleanly, got %v", parseProblems)
 			}
 
-			got := Validate(f)
+			got := Validate(f, nil)
 			assertProblems(t, got, tc.want)
 		})
 	}
@@ -245,7 +245,7 @@ func TestValidateRequiredLabelsSatisfiedByGroup(t *testing.T) {
 		t.Fatalf("parse problems: %v", problems)
 	}
 
-	if got := Validate(f); len(got) != 0 {
+	if got := Validate(f, nil); len(got) != 0 {
 		t.Fatalf("expected no problems, got %d: %v", len(got), got)
 	}
 }

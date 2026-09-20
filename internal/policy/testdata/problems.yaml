@@ -1,0 +1,9 @@
+checks:
+  rule/expr:
+    severity: warn
+  nope/not-a-check:
+    severity: error
+  labels/required:
+    severity: loud
+  annotations/required:
+    sevrity: warn

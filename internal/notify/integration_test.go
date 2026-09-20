@@ -239,7 +239,7 @@ func loadSet(t *testing.T, chAddr string) *ruleset.Set {
 		t.Fatalf("sources fixture problems: %v", problems)
 	}
 
-	set, problems := ruleset.Load(filepath.Join("testdata", "rules"), sources)
+	set, problems := ruleset.Load(filepath.Join("testdata", "rules"), sources, nil)
 	if len(problems) != 0 {
 		t.Fatalf("rules fixture problems: %v", problems)
 	}
