@@ -3,7 +3,8 @@ groups:
     interval: 1m
     rules:
       - alert: ""
-        source: otel_traces
+        sources:
+          team: payments
         expr: "SELECT 1 AS value FROM t WHERE ts >= {{ .From }} AND ts < {{ .To }}"
         labels:
           team: payments
@@ -12,7 +13,8 @@ groups:
           summary: nameless
           runbook_url: https://runbooks.internal/nameless
       - alert: DuplicateName
-        source: otel_traces
+        sources:
+          team: payments
         expr: "SELECT 1 AS value FROM t WHERE ts >= {{ .From }} AND ts < {{ .To }}"
         labels:
           team: payments
@@ -21,7 +23,8 @@ groups:
           summary: first
           runbook_url: https://runbooks.internal/first
       - alert: DuplicateName
-        source: otel_traces
+        sources:
+          team: payments
         expr: "SELECT 1 AS value FROM t WHERE ts >= {{ .From }} AND ts < {{ .To }}"
         labels:
           team: payments

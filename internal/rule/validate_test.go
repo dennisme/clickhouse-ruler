@@ -30,24 +30,11 @@ func TestValidate(t *testing.T) {
 				},
 				{
 					File:     "testdata/rule_name.yaml",
-					Line:     23,
+					Line:     25,
 					Subject:  "DuplicateName",
 					Check:    "rule/name",
 					Severity: lint.SeverityError,
-					Text:     `duplicate alert name "DuplicateName" in group "api-latency", first defined on line 14`,
-				},
-			},
-		},
-		{
-			fixture: "rule_source.yaml",
-			want: []lint.Problem{
-				{
-					File:     "testdata/rule_source.yaml",
-					Line:     6,
-					Subject:  "NoSource",
-					Check:    "rule/source",
-					Severity: lint.SeverityError,
-					Text:     "source is empty",
+					Text:     `duplicate alert name "DuplicateName" in group "api-latency", first defined on line 15`,
 				},
 			},
 		},
@@ -56,7 +43,7 @@ func TestValidate(t *testing.T) {
 			want: []lint.Problem{
 				{
 					File:     "testdata/rule_expr.yaml",
-					Line:     7,
+					Line:     8,
 					Subject:  "EmptyExpr",
 					Check:    "rule/expr",
 					Severity: lint.SeverityError,
@@ -64,7 +51,7 @@ func TestValidate(t *testing.T) {
 				},
 				{
 					File:     "testdata/rule_expr.yaml",
-					Line:     25,
+					Line:     28,
 					Subject:  "MissingTo",
 					Check:    "rule/expr",
 					Severity: lint.SeverityError,
@@ -93,7 +80,7 @@ func TestValidate(t *testing.T) {
 				},
 				{
 					File:     "testdata/labels_required.yaml",
-					Line:     15,
+					Line:     17,
 					Subject:  "EmptyTeam",
 					Check:    "labels/required",
 					Severity: lint.SeverityWarning,
@@ -101,7 +88,7 @@ func TestValidate(t *testing.T) {
 				},
 				{
 					File:     "testdata/labels_required.yaml",
-					Line:     23,
+					Line:     26,
 					Subject:  "MissingSeverity",
 					Check:    "labels/required",
 					Severity: lint.SeverityWarning,
@@ -130,7 +117,7 @@ func TestValidate(t *testing.T) {
 				},
 				{
 					File:     "testdata/annotations_required.yaml",
-					Line:     17,
+					Line:     19,
 					Subject:  "MissingRunbook",
 					Check:    "annotations/required",
 					Severity: lint.SeverityWarning,
@@ -145,7 +132,7 @@ func TestValidate(t *testing.T) {
 			want: []lint.Problem{
 				{
 					File:     "testdata/annotations_runbook.yaml",
-					Line:     13,
+					Line:     14,
 					Subject:  "RelativeRunbook",
 					Check:    "annotations/runbook",
 					Severity: lint.SeverityWarning,
@@ -153,7 +140,7 @@ func TestValidate(t *testing.T) {
 				},
 				{
 					File:     "testdata/annotations_runbook.yaml",
-					Line:     22,
+					Line:     24,
 					Subject:  "NoScheme",
 					Check:    "annotations/runbook",
 					Severity: lint.SeverityWarning,
@@ -169,7 +156,7 @@ func TestValidate(t *testing.T) {
 			want: []lint.Problem{
 				{
 					File:     "testdata/rule_for.yaml",
-					Line:     8,
+					Line:     9,
 					Subject:  "NegativeFor",
 					Check:    "rule/for",
 					Severity: lint.SeverityError,
@@ -177,7 +164,7 @@ func TestValidate(t *testing.T) {
 				},
 				{
 					File:     "testdata/rule_for.yaml",
-					Line:     18,
+					Line:     20,
 					Subject:  "ShortFor",
 					Check:    "rule/for",
 					Severity: lint.SeverityWarning,
@@ -192,7 +179,7 @@ func TestValidate(t *testing.T) {
 			want: []lint.Problem{
 				{
 					File:     "testdata/rule_window.yaml",
-					Line:     8,
+					Line:     9,
 					Subject:  "NegativeWindow",
 					Check:    "rule/window",
 					Severity: lint.SeverityError,
@@ -200,7 +187,7 @@ func TestValidate(t *testing.T) {
 				},
 				{
 					File:     "testdata/rule_window.yaml",
-					Line:     18,
+					Line:     20,
 					Subject:  "ShortWindow",
 					Check:    "rule/window",
 					Severity: lint.SeverityWarning,

@@ -1,8 +1,21 @@
+# Two sources over the same ClickHouse, distinguished only by their identity
+# labels. One rule matches both and must produce one alert per source.
 sources:
-  - name: otel_traces
+  - name: otel_traces_dc1
+    labels: {team: payments, cluster: dc1}
     # Matches compose.yaml. The test overrides it from RULER_CLICKHOUSE_ADDR:
     # there is deliberately no ${VAR} expansion for address, only for the
     # password, so the connection target stays reviewable in the file.
+    address: 127.0.0.1:9000
+    database: otel
+    username: ruler
+    password_env: RULER_CLICKHOUSE_PASSWORD
+    table: otel_traces
+    timestamp_column: Timestamp
+    evaluation_delay: 0s
+
+  - name: otel_traces_dc2
+    labels: {team: payments, cluster: dc2}
     address: 127.0.0.1:9000
     database: otel
     username: ruler

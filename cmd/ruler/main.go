@@ -148,11 +148,25 @@ func loadPolicy(path, dir string) (*policy.Policy, []lint.Problem, error) {
 // guessing which of several files is responsible (spec 7.8).
 func explainSet(w io.Writer, set *ruleset.Set, root *policy.Policy) {
 	for _, r := range set.Rules {
-		// The source is already resolved on a loaded rule, so this is the
-		// same merge the loader validated against.
-		merged := policy.Merge(root, r.Source.Policy)
+		// The matched sources are already resolved on a loaded rule, so this
+		// is the same merge the loader validated against.
+		scopes := []*policy.Policy{root}
+		for _, src := range r.Sources {
+			scopes = append(scopes, src.Policy)
+		}
+		merged := policy.Merge(scopes...)
 
-		printf(w, "\n%s: %s (team %s, source %s)\n", r.File, r.Alert, r.Team, r.Source.Name)
+		printf(w, "\n%s: %s\n", r.File, r.Alert)
+
+		// Which clusters a rule runs against is no longer readable from the
+		// rule itself: labels decide it and the answer can be more than one.
+		if len(r.Sources) == 0 {
+			printf(w, "  sources: none matched, this ruler will not evaluate it\n")
+		} else {
+			for _, src := range r.Sources {
+				printf(w, "  source   %s (%s)\n", src.Name, src.Address)
+			}
+		}
 
 		names := make([]string, 0, len(merged.Checks))
 		for name := range merged.Checks {

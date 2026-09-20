@@ -3,7 +3,8 @@ groups:
     interval: 1m
     rules:
       - alert: EmptyExpr
-        source: otel_traces
+        sources:
+          team: payments
         expr: ""
         labels:
           team: payments
@@ -12,7 +13,8 @@ groups:
           summary: empty expression
           runbook_url: https://runbooks.internal/empty-expr
       - alert: TightBraces
-        source: otel_traces
+        sources:
+          team: payments
         expr: "SELECT 1 AS value FROM t WHERE ts >= {{.From}} AND ts < {{- .To }}"
         labels:
           team: payments
@@ -21,7 +23,8 @@ groups:
           summary: valid template actions without surrounding spaces
           runbook_url: https://runbooks.internal/tight-braces
       - alert: MissingTo
-        source: otel_traces
+        sources:
+          team: payments
         expr: "SELECT 1 AS value FROM t WHERE ts >= {{ .From }}"
         labels:
           team: payments

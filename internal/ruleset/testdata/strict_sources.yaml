@@ -1,5 +1,6 @@
 sources:
   - name: otel_traces
+    labels: {team: payments}
     address: 127.0.0.1:9000
     database: otel
     username: ruler

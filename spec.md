@@ -430,7 +430,8 @@ groups:
     interval: 1m
     rules:
       - alert: HighP99Latency
-        source: otel_traces
+        sources:
+          team: payments
         expr: |
           SELECT
             ServiceName,
@@ -448,6 +449,15 @@ groups:
           summary: "{{ .ServiceName }} p99 is {{ .value }}ms"
           runbook_url: https://runbooks.internal/high-p99-latency
 ```
+
+`sources` is a selector over the labels a source carries, and it is the only
+thing deciding which clusters the query runs against. It may match several, in
+which case the rule evaluates once per source (6.10). An absent or empty
+selector matches nothing.
+
+`labels` are for routing and nothing else. They reach Alertmanager and play no
+part in choosing a cluster, which is the separation that keeps a key like
+`team` from meaning three things at once.
 
 `window` is how much time the query examines: the distance between
 `{{ .From }}` and `{{ .To }}`. It is the one field with no Prometheus
@@ -468,7 +478,9 @@ it is linted.
 ### 6.2 Sources
 
 A `source` names a table, its time column, and how to reach ClickHouse. Rules
-reference a source by name. Borrowed from the ClickStack sources concept.
+do not reference one by name: a source declares which rules it accepts, and
+they find each other by label (6.10). Borrowed from the ClickStack sources
+concept.
 
 Sources live in their own file, never inline in a rule file. Credentials, the
 evaluation delay and the cost caps are operator concerns, and a separate file
@@ -476,7 +488,10 @@ is what lets CODEOWNERS stop rule authors editing them. See 6.6.
 
 ```yaml
 sources:
-  - name: otel_traces
+  - name: otel_traces_dc1
+    labels:
+      team: payments
+      cluster: dc1
     address: clickhouse:9000
     database: otel
     username: ruler_payments
@@ -489,17 +504,46 @@ sources:
     max_memory_usage: 1073741824
 ```
 
-Every field below `timestamp_column` has a default, so the shortest usable
-source is name, address, database, username, table and timestamp column.
-`evaluation_delay` defaults to 1m (see 6.8), `max_rows` to 1000,
-`max_execution_time` to 30s and `max_memory_usage` to 1GiB.
+| Field | Type | Default | Purpose |
+|---|---|---|---|
+| `name` | string | required | Identifies the source. Unique within the file, and it becomes the alert's `source` label (6.10.1). |
+| `labels` | map | `{}` | What this source is. Rules select on them (6.10), and they are added to every alert it produces (6.10.1). |
+| `address` | string | required | `host:port` of the ClickHouse to query. |
+| `database` | string | required | Database to connect to. |
+| `username` | string | required | The ClickHouse user, and therefore the tenancy boundary (6.6). |
+| `password_file` | path | none | Reads the password from a file. Mutually exclusive with `password_env`. |
+| `password_env` | string | none | Reads the password from an environment variable. |
+| `table` | string | required | The table rules against this source read. |
+| `timestamp_column` | string | required | The column the evaluation window is applied to. |
+| `evaluation_delay` | duration | `1m` | How far behind live to evaluate (6.8). |
+| `max_rows` | int | `1000` | Alert instances one evaluation may produce. |
+| `max_execution_time` | duration | `30s` | ClickHouse query setting (6.7). |
+| `max_memory_usage` | bytes | `1GiB` | ClickHouse query setting (6.7). |
+| `checks` | map | none | Tightens check severity for rules using this source (7.7). |
 
-`max_rows` is enforced by the ruler and caps how many alert instances one
-evaluation may produce. The other two are sent to ClickHouse as query settings
-so the cluster does the enforcing, which is the client side half of 6.7. They
-are per source rather than global because a trace source and a log source do
-not cost the same, and they sit in the operator's file rather than the author's
-for the reason the rest of this section exists.
+So the shortest usable source is `name`, `address`, `database`, `username`,
+`table` and `timestamp_column`. Everything else has a default or is optional.
+
+**`labels` describe what the source is**, and they do two jobs that do not
+conflict: a rule's `sources` selector matches against them (6.10), and they
+are written onto every alert the source produces (6.10.1). One map is enough
+because both jobs read the same fact. They are protected on the alert: a query
+may not contradict where it ran (6.3.1 level 4).
+
+```yaml
+labels: {team: payments, cluster: dc1, env: prod}
+```
+
+Nothing here is interpreted. `team`, `cluster` and `env` are conventions, not
+keywords; the tool compares strings.
+
+**The cost caps are per source.** `max_rows` is enforced by the ruler and caps how many alert instances one
+evaluation may produce. `max_execution_time` and `max_memory_usage` are sent
+to ClickHouse as query settings so the cluster does the enforcing, which is
+the client side half of 6.7. They are per source rather than global because a
+trace source and a log source do not cost the same, and they sit in the
+operator's file rather than the author's for the reason the rest of this
+section exists.
 
 **Only the password comes from outside the file.** Everything else, the
 username included, is written down and reviewable.
@@ -552,28 +596,36 @@ there would silently merge two different alerts into one instance.
 
 ### 6.3.1 Label precedence
 
-Three sources contribute labels to an alert, weakest first:
+Four sources contribute labels to an alert, weakest first:
 
 1. **Group labels.** Set once for a whole group.
 2. **Rule labels.** The rule's own `labels` block. Overrides group labels.
 3. **Result columns.** Every returned column except `value`. Overrides both.
+4. **Source labels.** The matched source's `labels` (6.10.1). These win, and
+   they are protected.
 
-`alertname` is written last and always comes from the rule name. A query that
-returns an `alertname` column cannot rename its own alert, because an
-identity that query data can set is a routing hazard.
+Level 4 is above the query on purpose. A source's labels state a fact about
+where the evaluation happened, and the query is in no position to know it
+better: a result column setting `cluster` would be reporting something that is
+simply not true. The same reasoning as `alertname`, applied to provenance
+rather than identity.
 
-**`team` is special.** It defaults to the rule file's directory name, the same
-derivation 6.6 intends for the ClickHouse user, so `rules/payments/`
-gives `team: payments` without anyone writing it down. The default is applied
-as a group label, which means the ordering above still holds and a rule can
-override it.
+`alertname` and `source` are written last and always come from the rule name
+and the source name. A query returning either as a column cannot rename its
+own alert or merge two clusters' alerts, because an identity that query data
+can set is a routing hazard.
 
-The directory name is used exactly as written, with nothing stripped from it.
-`rules/payments/` gives `payments` and `rules/team-payments/` gives
-`team-payments`. Rewriting part of a path would make the mapping from
-directory to team something a reader has to know rather than something they
-can read, and it would mean two differently named directories producing the
-same label.
+**Nothing is inferred from the directory.** An alert's labels are what the
+rule file writes down, and a path never becomes one. A rules tree can be laid
+out per team, per service, or flat, and the layout changes only who
+`CODEOWNERS` sends the review to.
+
+Deriving `team` from a directory was tried and removed. It reads well in the
+common case and then behaves surprisingly everywhere else: a rule at the root
+of the tree has no directory to derive from, a rule moved between directories
+silently changes which team gets paged, and a label that appears in no file is
+one nobody can grep for. Routing is too important to depend on where a file
+happens to sit, so a rule that wants `team: payments` writes it.
 
 A rule *may* override `team` with an explicit label. One team running
 operations for another team's service is a real arrangement, not an abuse to
@@ -581,15 +633,19 @@ design out, and a tool that forbids it just gets worked around. The override
 sits in the file, so it appears in a diff and `CODEOWNERS` gates who can write
 it.
 
-**Result columns may never set `team` or `alertname`.** This is not about the
+**Result columns may never set `team`, `alertname` or `source`.** This is not
+about the
 override above, which is deliberately allowed. It is about where the value
 comes from. The Alertmanager route tree is generated from this repository
 (6.5), so every `team` value that can ever be produced has to be readable from
 the files. A `team` that arrives from a result column is runtime data: the
 generator cannot enumerate it, no route matches it, and the alert lands in the
-catch-all or nowhere. That failure shows up during an incident, which is the
+receiver on the root route, which is whatever the operator left there. That
+failure shows up during an incident, which is the
 worst time to discover a routing gap. `alertname` is protected for the same
 reason it always was: an identity that query data can set is a routing hazard.
+`source` is protected because it is what keeps two clusters' alerts apart
+(6.10.1), and a query that could set it could merge them.
 
 **`severity` stays overridable by a result column.** Lumping it in with `team`
 would prevent no abuse, because the rule author already sets `severity`
@@ -627,28 +683,43 @@ not.
 Generate the Alertmanager route tree from the same repository, keyed on the
 `team` label, so eval and routing share one source of truth.
 
+Keep `source` and `cluster` out of `group_by` unless per-cluster paging is
+wanted. A rule spanning an estate produces one alert per cluster (6.10.1), and
+grouping is where that becomes one notification instead of N.
+
+**The route tree needs a deliberate catch-all.** Teams are free to invent
+labels on their rules and operators are free to invent them on sources
+(6.10.1), so a label combination nobody wrote a route for is a matter of time
+rather than a mistake. Alertmanager will still deliver it: the root route has
+a receiver and everything unmatched falls through to it. The question is
+whether that receiver is one somebody reads. A low-priority channel that
+collects unrouted alerts turns a silent misroute into a visible backlog;
+leaving the root pointing at a real on-call rotation turns it into pages for
+the wrong people, and leaving it pointing at a receiver nobody watches turns
+it into nothing at all.
+
 Skip high availability and deduplication in v1. Alertmanager already dedupes
 identical alerts, so running two ruler replicas is mostly safe already.
 
 ### 6.6 Tenancy and isolation
 
-Not built, and it contradicts 6.2 as written. See open question 5.
+A rule runs as the ClickHouse user on the source it matched. Nothing is
+derived from the directory path: nothing is (6.3.1), and 6.10 already decides
+which rules reach which source.
 
-The intent: derive a ClickHouse user from the rule file's directory path, so
-`rules/payments/*.yaml` runs as the `ruler_payments` user.
+Per-team isolation is therefore a source per team. Two sources can name the
+same cluster and the same table with different users, and their labels decide
+who may use which:
 
-What actually happens today is different. A rule names a source, the source
-carries a `username`, and that is the user it connects as. The directory
-decides the `team` label and nothing else. Two consequences follow, and both
-need settling before any of the isolation below can be relied on:
-
-- 6.2 requires `username` in the sources file precisely so a reviewer can see
-  it. That is a different mechanism from deriving it from a path, and only one
-  of them can be the answer.
-- A source names one user, so two teams referencing the same source connect as
-  the same user. Row policies cannot separate them, which is exactly what the
-  paragraph below claims they do. Per-team isolation would need either a
-  source per team or a source-plus-team to user mapping.
+```yaml
+sources:
+  - name: traces_payments
+    username: ruler_payments
+    labels: {team: payments}
+  - name: traces_search
+    username: ruler_search
+    labels: {team: search}
+```
 
 Row policies and grants then do the isolation inside ClickHouse. The tool does
 not implement authorization, the database does.
@@ -659,8 +730,13 @@ depends on those being refused: see the table function check in 7.3 and the
 profile in 6.7. A tenancy claim that a table function can walk around is not a
 tenancy claim.
 
-`CODEOWNERS` maps the same directories to the same teams, so the git permission
-and the database permission come from one fact.
+`CODEOWNERS` gates the two halves separately, which is the split in 6.10. The
+sources file is an admin path: adding a cluster, a user or a source is
+reviewed by whoever operates ClickHouse, because it grants database access.
+Rule directories are team paths, and a team writing an alert only has to carry
+the labels its source requires. The database permission and the git permission
+are not the same fact, and tying them to a directory convention would make
+both worse.
 
 ### 6.7 Guard rails
 
@@ -799,6 +875,155 @@ argument for adding the node rather than reasoning about it on paper.
 
 ---
 
+### 6.10 Source selection
+
+A source is a cluster, a user and a table. Deciding which alerts run against
+which source is therefore a cluster-to-alerts mapping, and it is done with
+labels and a selector rather than names, so that neither side has to know
+about the other.
+
+**A rule does not name a source. It selects them.** A source carries `labels`
+describing what it is; a rule carries a `sources` selector describing what it
+wants. A source matches when every term in the selector is present and equal
+in its labels.
+
+```yaml
+# sources.yaml, operator owned
+sources:
+  - name: payments_main
+    username: ruler_payments
+    labels: {team: payments, cluster: main}
+
+  - name: payments_prod
+    username: ruler_prod
+    labels: {team: payments, cluster: prod, env: prod}
+```
+
+```yaml
+# rules/payments/latency.yaml, author owned
+- alert: HighP99Latency
+  sources: {team: payments}           # both clusters
+  labels:  {severity: warning}        # routing only
+```
+
+`sources: {team: payments, env: prod}` narrows to the prod cluster. **Adding
+terms narrows**, which is the ordinary selector intuition and the reason this
+direction was chosen over its inverse.
+
+Naming a source would have been the obvious schema, and it is the wrong one
+here. A name picks exactly one, so an estate of five clusters means five
+copies of a rule differing only in that line, and adding a sixth means editing
+every rule rather than adding one source. A selector lets the rule say what it
+wants and the source say what it is, and neither has to be edited when the
+other changes.
+
+**`sources` decides which clusters run the query. `labels` decide nothing but
+routing.** Keeping those separate is what stops a single key doing three jobs
+at once: before this split, `team` was simultaneously a routing label, a
+tenancy gate and a directory-derived default, which is why the question of
+whether one team could reach another's cluster had no clean answer.
+
+Nothing in the tool interprets any of these words. `team`, `cluster` and `env`
+are conventions; the tool compares strings.
+
+**An absent or empty selector matches nothing.** The usual selector convention
+is that empty matches everything, and it is wrong for this field, because this
+field grants access to a database user. Failing closed means a rule can never
+reach a cluster by omission, and the cost is one line per rule. When a rule
+genuinely should run everywhere, the operator puts a common label on every
+source and the rule selects it, which makes "everywhere" an explicit statement
+rather than the consequence of leaving a field out.
+
+**A rule can match more than one source, and runs against all of them.** That
+is what makes one rule definition work across an estate: the same latency rule
+evaluates on every cluster whose source it matches.
+
+**Matched sources have to be schema-compatible, and nothing enforces it.** The
+author writes `FROM otel.otel_traces` in the SQL, so every source a rule
+matches must expose that table with those columns. Labelling sources such that
+a rule only matches compatible ones is an operator's job, and getting it wrong
+surfaces as a tier 1 failure against one source and not another (7.3), which
+is a confusing way to find out. A check that matched sources agree on table
+and column types is worth considering once tier 1 exists.
+
+### 6.10.1 Identity when a rule matches several sources
+
+A rule matching N sources evaluates N times, and each evaluation has to be a
+separate alert. Without that, two clusters returning the same `ServiceName`
+produce the same fingerprint (6.3), the second evaluation overwrites the
+first, and one cluster recovering resolves the other's alert while it is still
+broken.
+
+**The source name is added to every alert as a `source` label**, and it is
+protected the way `alertname` is (6.3.1): a result column may not set it. The
+name is unique within the sources file by definition, which is exactly the
+uniqueness the fingerprint needs.
+
+**One map does both jobs.** A source's `labels` are what a rule's selector
+matches against and what lands on the alert, because both read the same fact
+about the source. That only works because the rule holds the selector: if the
+source held requirements instead, its keys would already be on every rule that
+matched and putting them on the alert would add nothing, so identity would
+need a second field.
+
+```yaml
+sources:
+  - name: traces_payments_dc1
+    labels: {team: payments, cluster: dc1}
+```
+
+A rule selecting `{team: payments}` reaches it and its alerts carry both
+`team: payments` and `cluster: dc1`, without the rule having named a cluster.
+
+**Labels beyond `source` are free-form.** A source may carry whatever
+an operator finds useful, `cluster`, `region`, `env`, `dc`, and they land on
+every alert from that source. The tool assigns no meaning to any of them.
+`cluster` is the common case and it is worth saying why it is not sufficient
+on its own: 6.6 puts two sources with different users on the same cluster, so
+both report the same `cluster` value, and a rule matching both would be back
+to one fingerprint for two evaluations. `source` guarantees the split;
+everything else makes the result legible.
+
+Free-form labels move work to the route tree, and that is the right place for
+it but it is not free. Every label a team invents on a rule and every label an
+operator invents on a source is a dimension the routing has to account for.
+6.5 covers what happens when it does not.
+
+Source labels cannot come from group labels (6.3.1) instead, because one rule
+spans several sources and a group label is one value for the whole group.
+
+Notification volume is Alertmanager's problem, not ours. Two clusters firing
+produce two alerts with different `source` labels; a route whose `group_by`
+omits them collapses that into one notification, and a route that includes
+them pages per cluster. Both are legitimate, and the choice belongs in the
+route tree rather than in the fingerprint. Note that the compose stack for
+tests uses `group_by: ['...']`, which groups by every label and therefore
+notifies per source; that is a test convenience, not a recommendation.
+
+**Setup is an admin action, authoring is not.** Adding a cluster, a user or a
+source is a change to the operator-owned file and needs its `CODEOWNERS`
+review. After that, a team writing an alert only has to carry the right
+labels, and no further admin involvement is needed. That split is the reason
+this is worth doing with labels rather than an allowlist of rule paths.
+
+**Matching nothing is a warning, not an error.** A rule that matches no source
+cannot run here, and the instinct is to fail. That instinct is wrong for two
+reasons. Deployments are distributed (10.2), so a ruler in one data centre
+legitimately holds sources for its own clusters and nothing else; most rules
+in a shared repository will match nothing on most rulers, and that is normal
+rather than broken. And rollout has an order: when a cluster is added, rules
+referencing it may land before the source does, and hard failure would block
+every unrelated change in the repository until the ordering was fixed. The
+check reports it, 8.2 exports a count of unmatched rules so the condition is
+visible and alertable, and an operator who wants it blocking raises the
+severity through 7.6.
+
+This moves source matching from correctness to convention in 7.6. It is the
+one place where "the rule cannot run" is not automatically an error, because
+whether it can run depends on which ruler is asking.
+
+---
+
 ## 7. Validation
 
 Modelled on Cloudflare `pint`, adapted for SQL.
@@ -890,19 +1115,18 @@ with the finding so it can be silenced or grepped:
 | Check | What it rejects |
 |---|---|
 | `rule/name` | empty alert name, or a duplicate within its group |
-| `rule/source` | empty `source` |
+| `rule/source-match` | a rule whose labels match no source (warns, see 6.10) |
 | `rule/expr` | empty `expr`, or one missing `{{ .From }}` or `{{ .To }}` |
 | `rule/for` | negative `for`; warns when `for` is under the group interval |
 | `rule/window` | negative `window`; warns when it is under the group interval |
 | `labels/required` | missing or empty `team` or `severity` |
 | `annotations/required` | missing `summary` or `runbook_url` |
 | `annotations/runbook` | a `runbook_url` that is not an absolute http or https URL |
-| `rule/source-exists` | a `source` that no sources file defines |
-| `rule/protected-label` | a query aliasing `team` or `alertname`, or a `labels` block setting `alertname` |
+| `rule/protected-label` | a query aliasing `team`, `alertname`, `source` or a source identity label, or a `labels` block setting `alertname` or `source` |
 
-The last two need the whole directory rather than one file, so they run in the
-loader rather than the rule parser, but they read nothing and are tier 0 all
-the same.
+`rule/source-match` and `rule/protected-label` need the sources file as well
+as the rule, so they run in the loader rather than the rule parser. They still
+read no data and are tier 0 all the same.
 
 Severities are not fixed here. 7.6 splits these into correctness, which always
 error, and convention, which take a configurable severity defaulting to
@@ -1052,7 +1276,7 @@ its job:
 - `yaml/syntax`, `yaml/unknown-field`. A typo silently drops configuration, so
   the rule does not do what it says.
 - `rule/name`, empty or duplicate. No identity.
-- `rule/source`, `rule/source-exists`. Nothing to query.
+
 - `rule/expr`, empty or missing `{{ .From }}` or `{{ .To }}`. Cannot run, or
   scans unbounded on every evaluation.
 - `rule/for`, `rule/window`, negative values. Nonsense.
@@ -1065,6 +1289,11 @@ and where they take a list of keys that list is configurable too:
 - `annotations/required`, and which annotations
 - `annotations/runbook`
 - `rule/for` and `rule/window` shorter than the group interval
+- `rule/source-match`, a rule whose labels match no source. Unlike everything
+  else in this list it is not a matter of taste: it is here because whether a
+  rule can run depends on which ruler is asking, so the same repository is
+  legitimately unmatched on one ruler and fine on another (6.10, 10.2).
+  Default `warn`.
 
 **Severity is an escalation path, not a noise level.** This is the part that
 decides everything else:
@@ -1188,6 +1417,12 @@ origin of every setting, so an author can see that `labels/required` is
 `error` because `sources.yaml:12` raised it, not because of anything in their
 own directory.
 
+It also prints the sources a rule matched, because with 6.10 that is no
+longer obvious from reading the rule: labels decide it, the match can be more
+than one, and "which clusters will this actually run against" is the first
+question an author asks. A rule matching nothing prints so explicitly rather
+than printing an empty list.
+
 The documentation link means each check needs a stable page or anchor to point
 at, written when the check is. That is a real deliverable rather than a free
 one, and it is the difference between a finding a contributor can act on alone
@@ -1255,6 +1490,13 @@ per team chargeback.
 Validation and config, used by watch mode:
 
 - `ruler_problem` gauge, by `rule`, `check`, `severity`. The `pint` analog.
+- `ruler_rules_unmatched` gauge, by `rule_group`. Rules this ruler loaded that
+  match no source it holds, so it will never evaluate them (6.10). Expected to
+  be non-zero on a per-data-centre ruler reading a shared repository, and
+  expected to return to zero after a cluster rollout finishes. Alerting on it
+  staying raised is how the soft failure in 6.10 stops being ignored: the
+  check warns at authoring time, this catches the case where nobody read the
+  warning.
 - `ruler_config_last_reload_successful` gauge
 - `ruler_config_last_reload_timestamp_seconds` gauge
 
@@ -1416,6 +1658,32 @@ before a fourth caller makes it expensive.
 None of this is scheduled. It is written down so the interface does not drift
 somewhere that makes it impossible.
 
+### 10.2 Deployment topologies
+
+The label mapping in 6.10 exists so that these are all the same binary with a
+different sources file, rather than four products.
+
+- **One ruler, one cluster.** Sources need no labels at all.
+- **Ruler per data centre.** Each holds sources for its own clusters, so data
+  is queried locally rather than across a link. A shared rules repository is
+  read by all of them, and each evaluates the subset matching its sources.
+  This is the topology that makes an unmatched rule normal rather than broken.
+- **Central rulers, highly available.** Several rulers with the same sources
+  file. Alertmanager already deduplicates identical alerts (6.5), so running
+  more than one is mostly safe, and 12.3 is where the remaining sharp edges
+  live.
+- **Ruler per team.** A team runs its own, points it at its own sources, and
+  consumes the central rules repository for the safety checks in section 7.
+- **Ruler as a service.** The team operating ClickHouse owns the sources file
+  and the clusters, and other teams contribute only rules. This is the split
+  in 6.10: adding a cluster or a user is an admin change, writing an alert
+  against one is not.
+
+None of these need code that does not already exist, with one exception: a
+rule matching several sources has to evaluate once per source, and its alert
+instances must stay distinct per source. That is a fingerprint question
+(6.3), and it is open, see 12.6.
+
 ---
 
 ## 11. Decisions made
@@ -1434,9 +1702,39 @@ somewhere that makes it impossible.
 - **Credentials.** No DSN. Address, database and username are written in the
   file; only the password comes from `password_file` or `password_env`, and
   setting both is an error. See 6.2.
-- **Label precedence.** `team` defaults to the rule's directory, an explicit
-  `team:` label may override it, and a result column may never set `team` or
-  `alertname`. See 6.3.1.
+- **Label precedence.** Four levels, weakest first: group labels, rule labels,
+  result columns, then the matched source's labels. The source wins over the
+  query because it states where the evaluation happened and the query is in no
+  position to know better. `alertname` and `source` are written last and are
+  protected: an identity query data can set is a routing hazard. See 6.3.1.
+- **Source selection is a selector on the rule.** A source carries `labels`
+  saying what it is; a rule carries a `sources` selector saying what it wants.
+  Adding terms narrows. The reverse, sources declaring requirements on rules,
+  was tried and removed: it meant adding labels could only ever widen a rule's
+  reach, so targeting one cluster out of several was inexpressible. See 6.10.
+- **An empty selector matches nothing.** Selectors conventionally treat empty
+  as "everything", and that is wrong for a field which picks the database user
+  a query runs as. A rule must never reach a cluster by omission. Running
+  everywhere is an operator putting a shared label on every source and a rule
+  selecting it, which states the intent instead of inheriting it. See 6.10.
+- **Nothing is inferred from the directory.** Labels come from the rule file,
+  never from a path. Layout decides who reviews a change and nothing else.
+  Deriving `team` from a directory was tried and removed: a rule at the tree
+  root has no directory, moving a file silently repoints who gets paged, and a
+  label in no file is one nobody can grep for. See 6.3.1.
+- **Identity across sources.** A rule matching several sources produces one
+  alert per source, kept apart by a protected `source` label. A source's other
+  labels are free-form, travel onto its alerts, and are the operator's to
+  route, which means a catch-all worth reading. Collapsing alerts into one
+  notification is Alertmanager's `group_by`, not the fingerprint's job. See
+  6.5 and 6.10.1.
+- **How a rule gets its ClickHouse user.** From the source it matched. 6.6's
+  directory derivation is dropped: per-team isolation is a source per team,
+  which needs no directory convention.
+- **Matching nothing is a warning.** Whether a rule can run depends on which
+  ruler is asking, so a shared repository is legitimately unmatched on a ruler
+  holding another data centre's sources, and a rollout may land rules before
+  the source for a new cluster. See 6.10 and 10.2.
 - **What this project is for.** Keeping ClickHouse alerts in git is a solved
   problem, by operators and Terraform providers. The two gaps left are running
   one service instead of a platform, and checking the query itself. See 1, 3
@@ -1446,8 +1744,8 @@ somewhere that makes it impossible.
   at `warn`. Rigid defaults narrow who can use the tool. Severity decides who
   is on the critical path to unblock a contributor, so errors stay rare.
   See 7.6.
-- **Team derivation.** The directory name is the team, used verbatim. No
-  prefix is stripped, so the label always matches what the path says.
+- **Nothing is inferred from the directory.** Labels come from the rule file,
+  never from a path. Layout decides who reviews a change and nothing else.
   See 6.3.1.
 - **Policy scoping.** Policy is set at instance, datasource and team scope,
   and a rule gets the strictest setting that applies to it. The merge is a
@@ -1465,18 +1763,26 @@ somewhere that makes it impossible.
    thousands of engineers page off means high availability, missed evaluation
    handling, clock skew, ClickHouse restarts mid window, and backfill after an
    outage. Revisit before anyone depends on it in production.
-4. **Sharded clusters.** See 6.9 for the full list. Pinning
-   `skip_unavailable_shards` to `0` is a correctness fix and should not wait
-   for the rest; a dead shard currently risks resolving alerts instead of
-   failing the evaluation. Proving it needs a second ClickHouse node in the
-   compose stack, since a single node cannot reproduce the failure.
-5. **How a rule gets its ClickHouse user.** 6.6 derives it from the directory
-   path; 6.2 requires it in the sources file so a reviewer can see it. Those
-   are different mechanisms and the code implements the second, so the
-   isolation story in 6.6 does not hold today: two teams referencing the same
-   source connect as the same user, and row policies cannot tell them apart.
-   Either sources become per-team, or a source-plus-team to user mapping is
-   added. Settle before anything depends on per-team isolation.
+4. **Sharded clusters.** `skip_unavailable_shards` is now pinned to `0`, so a
+   dead shard fails the evaluation rather than silently resolving alerts. The
+   rest of 6.9 is outstanding: `address` takes a single node, the cost caps
+   are per shard rather than per query, and `evaluation_delay` has to cover
+   the slowest shard. Proving any of it needs a second ClickHouse node in the
+   compose stack, since one node cannot reproduce the failure.
+5. **Generating the route tree with free-form labels.** 6.5 says the tree is
+   generated from the repository, keyed on `team`. With teams inventing rule
+   labels and operators inventing source `labels` (6.10.1), what the generator
+   should do with a combination no route covers is unsettled: emit a catch-all
+   branch, refuse to generate, or report it and continue. Not urgent, because
+   nothing generates a route tree yet.
+
+6. **Matched sources have to be schema-compatible.** A rule writes
+   `FROM otel.otel_traces` in its SQL, so every source its selector matches
+   must expose that table with those columns. Nothing checks it, and getting
+   it wrong surfaces as a tier 1 failure against one source and not another,
+   which is a confusing way to find out. A check comparing matched sources'
+   tables and column types is the obvious fix and needs tier 1 first. See
+   6.10.
 
 ---
 

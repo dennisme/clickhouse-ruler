@@ -1,6 +1,6 @@
 sources:
-  - name: otel_traces
-    labels: {team: payments}
+  - name: traces_payments
+    labels: {team: payments, cluster: dc1}
     address: localhost:9000
     database: otel
     username: ruler

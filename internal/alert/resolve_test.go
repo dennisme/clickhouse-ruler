@@ -8,7 +8,7 @@ import (
 // A pending instance has never been notified, so its disappearance must not
 // produce a resolve for something nobody was told about.
 func TestPendingInstanceDisappearsSilently(t *testing.T) {
-	s := New(testRule(5*time.Minute, 0), nil)
+	s := New(testRule(5*time.Minute, 0), nil, testSource())
 
 	assertAlerts(t, s.Eval(t0, []Sample{sample("checkout", 1200)}), []want{
 		{service: "checkout", phase: PhasePending, value: 1200, activeAt: t0},
@@ -19,7 +19,7 @@ func TestPendingInstanceDisappearsSilently(t *testing.T) {
 }
 
 func TestFiringResolvesWhenSampleDisappears(t *testing.T) {
-	s := New(testRule(0, 0), nil)
+	s := New(testRule(0, 0), nil, testSource())
 
 	assertAlerts(t, s.Eval(t0, []Sample{sample("checkout", 1200)}), []want{
 		{service: "checkout", phase: PhaseFiring, value: 1200, activeAt: t0, firedAt: t0},
@@ -42,7 +42,7 @@ func TestFiringResolvesWhenSampleDisappears(t *testing.T) {
 }
 
 func TestKeepFiringForDelaysResolve(t *testing.T) {
-	s := New(testRule(0, 5*time.Minute), nil)
+	s := New(testRule(0, 5*time.Minute), nil, testSource())
 
 	assertAlerts(t, s.Eval(t0, []Sample{sample("checkout", 1200)}), []want{
 		{service: "checkout", phase: PhaseFiring, value: 1200, activeAt: t0, firedAt: t0},
@@ -71,7 +71,7 @@ func TestKeepFiringForDelaysResolve(t *testing.T) {
 // A flapping condition is what keep_firing_for exists to absorb: the sample
 // returning inside the window must restart it, not resolve on the old clock.
 func TestKeepFiringForRestartsWhenSampleReturns(t *testing.T) {
-	s := New(testRule(0, 5*time.Minute), nil)
+	s := New(testRule(0, 5*time.Minute), nil, testSource())
 
 	s.Eval(t0, []Sample{sample("checkout", 1200)})
 	s.Eval(t0.Add(2*time.Minute), nil)

@@ -37,7 +37,8 @@ const bareRule = `groups:
     interval: 1m
     rules:
       - alert: HighLatency
-        source: otel_traces
+        sources:
+          team: payments
         expr: |
           SELECT ServiceName, max(Duration) AS value
           FROM otel.otel_traces
@@ -50,12 +51,14 @@ const brokenRule = `groups:
     interval: 1m
     rules:
       - alert: HighLatency
-        source: otel_traces
+        sources:
+          team: payments
         expr: "SELECT 1 AS value FROM t"
 `
 
 const sourcesYAML = `sources:
   - name: otel_traces
+    labels: {team: payments}
     address: 127.0.0.1:9000
     database: otel
     username: ruler

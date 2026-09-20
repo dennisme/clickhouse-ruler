@@ -48,13 +48,15 @@ stack, with the query itself checked before it ever runs.
 
 Two kinds of file, owned by different people.
 
-**Sources** are operator owned. Where to connect, which ClickHouse user to
-connect as, how far behind live data to evaluate, and the cost caps.
+**Sources** are operator owned. What a cluster is, where to connect, which
+ClickHouse user to connect as, how far behind live data to evaluate, and the
+cost caps.
 
 ```yaml
 # rules/sources.yaml
 sources:
-  - name: otel_traces
+  - name: payments_prod
+    labels: {team: payments, cluster: prod, env: prod}
     address: clickhouse:9000
     database: otel
     username: ruler_payments
@@ -72,6 +74,10 @@ Everything from `evaluation_delay` down has a default and can be left out.
 two are sent to ClickHouse as query settings, so the cluster enforces the cost
 cap rather than the ruler.
 
+`labels` describe what this source is. Rules select on them, and they are
+added to every alert the source produces, so an alert always says which
+cluster it came from without the rule having named one.
+
 Only the password lives outside the file. The username is not a secret and is
 deliberately in plain sight: it is the tenancy boundary, so a reviewer has to
 be able to see that `payments` connects as `ruler_payments` and not as
@@ -83,7 +89,9 @@ them is stale and quietly picking either can authenticate with a credential
 that was supposed to have been rotated away. No password at all is fine for
 local development and for mTLS.
 
-**Rules** are author owned, and reference a source by name.
+**Rules** are author owned. A rule names no source; it carries a `sources`
+selector over source labels, and runs against every source that matches. One
+rule definition covers an estate instead of being copied per cluster.
 
 ```yaml
 # rules/payments/latency.yaml
@@ -92,7 +100,8 @@ groups:
     interval: 1m
     rules:
       - alert: HighP99Latency
-        source: otel_traces
+        sources:
+          team: payments
         expr: |
           SELECT
             ServiceName,
@@ -111,6 +120,20 @@ groups:
           runbook_url: https://runbooks.internal/high-p99-latency
 ```
 
+`sources` is the only thing deciding which clusters the query runs against.
+`labels` are for Alertmanager routing and nothing else. Adding a term to the
+selector narrows it, so `{team: payments, env: prod}` would run on the prod
+cluster alone.
+
+An empty or missing selector matches nothing, deliberately: choosing a source
+chooses the ClickHouse user the query runs as, so a rule should never reach a
+cluster by leaving a field out. A rule that really should run everywhere
+selects a label the operator put on every source.
+
+Nothing is inferred from the directory. A path decides who reviews the file,
+not what the alert is labelled, so an alert that wants `team: payments` says
+so in its own labels.
+
 `CODEOWNERS` then does the rest:
 
 ```text
@@ -120,13 +143,12 @@ groups:
 
 Four things to notice.
 
-**The directory owns the page.** `team` comes from the rule file's path, so
-`rules/payments/` pages payments without anyone writing it down. A rule
-may override it with
-an explicit `team:` label, because one team running operations for another
-team's service is a real arrangement. What a rule may not do is produce `team`
-from a result column: the Alertmanager route tree is generated from the files,
-and a value that only exists at query time has no route.
+**One rule, many clusters.** The `sources` selector matches every source
+carrying its labels, and the rule evaluates against each one. The alerts stay
+separate: every alert carries a protected `source` label naming where it ran,
+so one cluster recovering never resolves another's alert. Collapsing them into
+a single notification is Alertmanager's `group_by`, not something baked into
+the alert's identity.
 
 **One returned row is one alert instance.** Columns become labels, the `value`
 column becomes the value. A query returning one row per service produces one
@@ -159,7 +181,8 @@ advise, because Cloudflare does not own Prometheus. We do, so we can enforce.
 **Strictness is the operator's call.** A rule that omits a runbook still runs,
 so by default that is a warning, and a warning is the contributor's to act on.
 Raising it to an error means a repo owner has to be involved to unblock
-someone, which is worth reserving for cases that deserve it. This is modelled on Cloudflare's `pint`, with one difference:
+someone, which is worth reserving for cases that deserve it. This is modelled
+on Cloudflare's `pint`, with one difference:
 `pint` can only advise, because Cloudflare does not own Prometheus. We do, so
 we can enforce.
 
@@ -171,7 +194,7 @@ we can enforce.
 | ClickStack / HyperDX                | Terraform only | yes            | no                | no                          | **no**              |
 | Grafana OSS + ClickHouse datasource | yes            | yes            | yes               | with external controls      | **no**              |
 | sql_exporter + Prometheus           | yes            | metrics only   | yes               | yes                         | **no**              |
-| clickhouse-ruler                    | yes            | yes            | yes               | yes                         | yes                 |
+| clickhouse-ruler                    | yes            | yes            | yes               | yes                         | file checks today   |
 
 "With external controls" is doing real work in that table. Both operators can
 be pushed most of the way there: alert custom resources in a Helm repo laid
@@ -188,6 +211,16 @@ preventing it.
 
 The last column is the one nobody offers at any price, and it is the part that
 does not have a workaround.
+
+Be clear about where that column stands here: today the checks read the rule
+file, not the database. The time bound is enforced by requiring
+`{{ .From }}` and `{{ .To }}` in the text, which catches the common mistake
+but is not the same as asking ClickHouse what the query does. The checks that
+need a connection, `EXPLAIN` for cost and plan, `system.columns` for whether
+the table still has the column, `DESCRIBE` for whether an annotation
+references a label the query actually returns, are specified in
+[spec 7.3](spec.md) and are not built. That is the next piece of work, and
+until it lands this column reads "file checks today" rather than yes.
 
 ### SigNoz and ClickStack
 
@@ -270,9 +303,9 @@ it, "the sync workflow puts noticeable load on Grafana itself". The guidance
 is titled "Shard by capacity, not by team" and says to avoid one connection
 per team because "it consumes connections quickly, doesn't scale as teams
 grow". So repo layout follows capacity, not who owns what. That is the
-opposite of the model here, where the directory is the ownership boundary and
-one path decides both the `CODEOWNERS` reviewer and the `team` label. Nothing is synced into a database, so there is no connection to
-run out of and no cap on team directories.
+opposite of the model here, where a directory is an ownership boundary for
+review and a source is selected by label. Nothing is synced into a database,
+so there is no connection to run out of and no cap on team directories.
 
 If managing rules this way is the plan, the wider tooling is uneven: the
 Terraform provider is the mature path, the Ansible collection is Cloud only,
@@ -329,21 +362,25 @@ Working:
   per source. `--explain` names the file that set each one
 - Rule file parsing, with line numbers on every finding and strict unknown
   field rejection
-- Ten offline checks: eight on a rule file, plus the two that need the whole
-  directory (the source exists, and the query does not set a protected label)
+- Nine offline checks: seven on a rule file, plus the two needing the sources
+  file (which sources the labels match, and whether the query sets a protected
+  label)
 - Sources file parsing, with secrets read from a file or the environment, and
   eleven checks
 - The alert state machine: pending, firing, resolved, `for`, `keep_firing_for`,
   per-instance identity
 - Running a rule against real ClickHouse and getting alert samples back
-- Loading a rules directory, deriving each rule's owning team from its path,
-  and resolving its source by name
+- Loading a rules directory and selecting each rule's sources by label, so one
+  rule evaluates against every cluster it matches
 - Annotation templating, and sending to Alertmanager
 - A ClickHouse and Alertmanager compose stack, with an end to end test that
   takes a rule from a file all the way to a delivered notification
 
 Not built yet:
 
+- No checks that read the database. Every check today reads the rule file, so
+  a query that references a dropped column, scans a terabyte, or returns
+  nothing at all still passes. Spec 7.3 tiers 1 and 2.
 - No `ruler run`. The binary can check rules, not evaluate them.
 - No scheduler. Nothing calls the querier on an interval, so evaluation has to
   be driven by hand.

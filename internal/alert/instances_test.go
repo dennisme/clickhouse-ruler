@@ -47,7 +47,7 @@ func assertAlertSet(t *testing.T, got []Alert, wants map[string]want) {
 // resolves on its own. This is the behaviour the row-per-instance model exists
 // for and that a single scalar threshold cannot express.
 func TestInstancesAdvanceIndependently(t *testing.T) {
-	s := New(testRule(5*time.Minute, 0), nil)
+	s := New(testRule(5*time.Minute, 0), nil, testSource())
 
 	assertAlertSet(t, s.Eval(t0, []Sample{sample("checkout", 1200)}), map[string]want{
 		"checkout": {phase: PhasePending, value: 1200, activeAt: t0},
@@ -94,7 +94,7 @@ func TestInstancesAdvanceIndependently(t *testing.T) {
 }
 
 func TestReturnOrderIsSortedByFingerprint(t *testing.T) {
-	s := New(testRule(0, 0), nil)
+	s := New(testRule(0, 0), nil, testSource())
 
 	got := s.Eval(t0, []Sample{
 		sample("checkout", 1),
@@ -125,8 +125,8 @@ func TestEvalIsDeterministicAcrossStates(t *testing.T) {
 	}
 	reversed := []Sample{samples[2], samples[1], samples[0]}
 
-	first := New(testRule(0, 0), nil).Eval(t0, samples)
-	second := New(testRule(0, 0), nil).Eval(t0, reversed)
+	first := New(testRule(0, 0), nil, testSource()).Eval(t0, samples)
+	second := New(testRule(0, 0), nil, testSource()).Eval(t0, reversed)
 
 	if len(first) != len(second) {
 		t.Fatalf("lengths differ: %d vs %d", len(first), len(second))
@@ -149,7 +149,7 @@ func TestLabelPrecedence(t *testing.T) {
 	r.Labels["tier"] = "rule"
 	r.Labels["severity"] = "warning"
 
-	s := New(r, map[string]string{"tier": "group", "region": "us-east"})
+	s := New(r, map[string]string{"tier": "group", "region": "us-east"}, testSource())
 
 	got := s.Eval(t0, []Sample{{
 		Labels: map[string]string{"ServiceName": "checkout", "severity": "critical"},
