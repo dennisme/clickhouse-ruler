@@ -6,6 +6,7 @@ import (
 	"regexp"
 
 	"github.com/dennisme/clickhouse-ruler/internal/lint"
+	"github.com/dennisme/clickhouse-ruler/internal/policy"
 )
 
 const (
@@ -18,13 +19,6 @@ const (
 	checkRuleFor             = "rule/for"
 	checkRuleWindow          = "rule/window"
 )
-
-// requiredLabels route and triage every alert, so a rule without them cannot
-// be paged on correctly.
-var requiredLabels = []string{"team", "severity"}
-
-// requiredAnnotations are what the person woken up at 03:00 actually reads.
-var requiredAnnotations = []string{"summary", "runbook_url"}
 
 // timeBoundVars are the template actions a query must use to receive its
 // evaluation window. The pattern tolerates the whitespace and trim markers Go
@@ -42,8 +36,14 @@ var timeBoundVars = []struct {
 // Validate runs every offline check against a parsed rule file and returns all
 // findings. It never stops at the first, because a tool that surfaces one
 // error per CI run makes authors iterate once per problem.
-func Validate(f *RuleFile) []lint.Problem {
-	v := &validator{file: f.File}
+// policyFor resolves the effective policy for one rule. Rules in the same file
+// can name different sources, and a source carries its own policy, so this
+// cannot be a single value for the whole file (spec 7.7).
+func Validate(f *RuleFile, policyFor func(Rule) *policy.Policy) []lint.Problem {
+	if policyFor == nil {
+		policyFor = func(Rule) *policy.Policy { return policy.Defaults() }
+	}
+	v := &validator{file: f.File, policyFor: policyFor}
 	for _, g := range f.Groups {
 		v.group(g)
 	}
@@ -51,18 +51,41 @@ func Validate(f *RuleFile) []lint.Problem {
 }
 
 type validator struct {
-	file     string
-	problems []lint.Problem
+	file      string
+	policyFor func(Rule) *policy.Policy
+	problems  []lint.Problem
 }
 
-func (v *validator) add(r Rule, line int, check string, sev lint.Severity, format string, args ...any) {
+// add reports a correctness failure. These are always errors: the rule cannot
+// do its job, so there is no severity for an operator to choose (spec 7.6).
+func (v *validator) add(r Rule, line int, check string, format string, args ...any) {
 	v.problems = append(v.problems, lint.Problem{
 		File:     v.file,
 		Line:     line,
 		Subject:  r.Alert,
 		Check:    check,
-		Severity: sev,
+		Severity: lint.SeverityError,
 		Text:     fmt.Sprintf(format, args...),
+	})
+}
+
+// addPolicy reports a convention failure at whatever severity policy gives it,
+// and says nothing at all when the check is off. The finding carries where its
+// severity came from so `--explain` can answer "why is this an error".
+func (v *validator) addPolicy(r Rule, line int, check string, format string, args ...any) {
+	setting := v.policyFor(r).For(check)
+	if setting.Severity == lint.SeverityOff {
+		return
+	}
+	v.problems = append(v.problems, lint.Problem{
+		File:       v.file,
+		Line:       line,
+		Subject:    r.Alert,
+		Check:      check,
+		Severity:   setting.Severity,
+		Text:       fmt.Sprintf(format, args...),
+		PolicyFile: setting.File,
+		PolicyLine: setting.Line,
 	})
 }
 
@@ -75,8 +98,8 @@ func (v *validator) group(g Group) {
 		v.ruleName(g, r, namedAt)
 		v.ruleSource(r)
 		v.ruleExpr(r)
-		v.requiredKeys(r, "labels", "label", checkLabelsRequired, g.EffectiveLabels(r), requiredLabels)
-		v.requiredKeys(r, "annotations", "annotation", checkAnnotationsRequired, r.Annotations, requiredAnnotations)
+		v.requiredKeys(r, "labels", "label", checkLabelsRequired, g.EffectiveLabels(r))
+		v.requiredKeys(r, "annotations", "annotation", checkAnnotationsRequired, r.Annotations)
 		v.annotationsRunbook(r)
 		v.ruleFor(g, r)
 		v.ruleWindow(g, r)
@@ -87,11 +110,11 @@ func (v *validator) ruleName(g Group, r Rule, namedAt map[string]int) {
 	line := r.LineOf("alert")
 
 	if r.Alert == "" {
-		v.add(r, line, checkRuleName, lint.SeverityError, "alert name is empty")
+		v.add(r, line, checkRuleName, "alert name is empty")
 		return
 	}
 	if first, ok := namedAt[r.Alert]; ok {
-		v.add(r, line, checkRuleName, lint.SeverityError,
+		v.add(r, line, checkRuleName,
 			"duplicate alert name %q in group %q, first defined on line %d",
 			r.Alert, g.Name, first)
 		return
@@ -101,7 +124,7 @@ func (v *validator) ruleName(g Group, r Rule, namedAt map[string]int) {
 
 func (v *validator) ruleSource(r Rule) {
 	if r.Source == "" {
-		v.add(r, r.LineOf("source"), checkRuleSource, lint.SeverityError, "source is empty")
+		v.add(r, r.LineOf("source"), checkRuleSource, "source is empty")
 	}
 }
 
@@ -112,12 +135,12 @@ func (v *validator) ruleExpr(r Rule) {
 	line := r.LineOf("expr")
 
 	if r.Expr == "" {
-		v.add(r, line, checkRuleExpr, lint.SeverityError, "expr is empty")
+		v.add(r, line, checkRuleExpr, "expr is empty")
 		return
 	}
 	for _, tv := range timeBoundVars {
 		if !tv.pattern.MatchString(r.Expr) {
-			v.add(r, line, checkRuleExpr, lint.SeverityError,
+			v.add(r, line, checkRuleExpr,
 				"expr does not reference %s, so the query has no %s", tv.name, tv.reason)
 		}
 	}
@@ -126,16 +149,16 @@ func (v *validator) ruleExpr(r Rule) {
 // requiredKeys reports keys a block must carry. A finding points at the key
 // itself when it exists, at the block when the key is absent, and at the rule
 // when the whole block is absent.
-func (v *validator) requiredKeys(r Rule, block, noun, check string, have map[string]string, required []string) {
-	for _, key := range required {
+func (v *validator) requiredKeys(r Rule, block, noun, check string, have map[string]string) {
+	for _, key := range v.policyFor(r).For(check).Keys {
 		line := r.LineOf(block+"."+key, block)
 
 		value, present := have[key]
 		switch {
 		case !present:
-			v.add(r, line, check, lint.SeverityError, "required %s %q is missing", noun, key)
+			v.addPolicy(r, line, check, "required %s %q is missing", noun, key)
 		case value == "":
-			v.add(r, line, check, lint.SeverityError, "required %s %q is empty", noun, key)
+			v.addPolicy(r, line, check, "required %s %q is empty", noun, key)
 		}
 	}
 }
@@ -153,8 +176,8 @@ func (v *validator) annotationsRunbook(r Rule) {
 	if err == nil && (u.Scheme == "http" || u.Scheme == "https") && u.Host != "" {
 		return
 	}
-	v.add(r, r.LineOf("annotations.runbook_url", "annotations"), checkAnnotationsRunbook,
-		lint.SeverityError, "runbook_url must be an absolute http or https URL, got %q", raw)
+	v.addPolicy(r, r.LineOf("annotations.runbook_url", "annotations"), checkAnnotationsRunbook,
+		"runbook_url must be an absolute http or https URL, got %q", raw)
 }
 
 // ruleFor checks the pending duration against the interval it is measured in.
@@ -167,11 +190,11 @@ func (v *validator) ruleFor(g Group, r Rule) {
 	line := r.LineOf("for")
 
 	if r.For < 0 {
-		v.add(r, line, checkRuleFor, lint.SeverityError, "for must not be negative, got %s", r.For)
+		v.add(r, line, checkRuleFor, "for must not be negative, got %s", r.For)
 		return
 	}
 	if r.For > 0 && g.Interval > 0 && r.For < g.Interval {
-		v.add(r, line, checkRuleFor, lint.SeverityWarning,
+		v.addPolicy(r, line, checkRuleFor,
 			"for (%s) is shorter than the group interval (%s), so it rounds up to one interval",
 			r.For, g.Interval)
 	}
@@ -184,11 +207,11 @@ func (v *validator) ruleWindow(g Group, r Rule) {
 	line := r.LineOf("window")
 
 	if r.Window < 0 {
-		v.add(r, line, checkRuleWindow, lint.SeverityError, "window must not be negative, got %s", r.Window)
+		v.add(r, line, checkRuleWindow, "window must not be negative, got %s", r.Window)
 		return
 	}
 	if r.Window > 0 && g.Interval > 0 && r.Window < g.Interval {
-		v.add(r, line, checkRuleWindow, lint.SeverityWarning,
+		v.addPolicy(r, line, checkRuleWindow,
 			"window (%s) is shorter than the group interval (%s), so data between evaluations is never examined",
 			r.Window, g.Interval)
 	}

@@ -5,13 +5,19 @@ import "fmt"
 // Severity decides whether a problem blocks a deploy or only annotates it.
 type Severity int
 
+// Ordered from least to most severe. Policy merging takes the maximum across
+// every scope that applies to a rule, so the numeric order is meaningful and
+// must not be rearranged (spec 7.7).
 const (
-	SeverityWarning Severity = iota
+	SeverityOff Severity = iota
+	SeverityWarning
 	SeverityError
 )
 
 func (s Severity) String() string {
 	switch s {
+	case SeverityOff:
+		return "off"
 	case SeverityWarning:
 		return "warning"
 	case SeverityError:
@@ -41,6 +47,13 @@ type Problem struct {
 	Check    string
 	Severity Severity
 	Text     string
+
+	// PolicyFile and PolicyLine are where this finding's severity was set.
+	// Empty when it came from the shipped default. `ruler check --explain`
+	// reads them so an author can see which policy file raised a check
+	// instead of guessing (spec 7.8).
+	PolicyFile string
+	PolicyLine int
 }
 
 func (p Problem) String() string {

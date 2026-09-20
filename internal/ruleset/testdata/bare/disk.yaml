@@ -1,0 +1,13 @@
+# No team, no severity, no annotations, and not in a team directory. This is
+# the smallest rule someone can write, and it has to load.
+groups:
+  - name: disk
+    interval: 1m
+    rules:
+      - alert: DiskFillingUp
+        source: otel_traces
+        expr: |
+          SELECT ServiceName, max(Duration) AS value
+          FROM otel.otel_traces
+          WHERE Timestamp >= {{ .From }} AND Timestamp < {{ .To }}
+          GROUP BY ServiceName

@@ -179,3 +179,21 @@ func TestToSamplesAcceptsNumericValueTypes(t *testing.T) {
 		}
 	}
 }
+
+// A distributed query against a cluster with an unreachable shard succeeds by
+// default on some configurations, returning only the rows the surviving shards
+// held. Missing rows are indistinguishable from a recovered condition, so
+// instances vanish from the state machine and their alerts resolve. Pinning
+// this means the evaluation fails loudly instead (spec 6.9).
+func TestSettingsPinSkipUnavailableShards(t *testing.T) {
+	got := settings(source.Source{
+		MaxExecutionTime: 30 * time.Second,
+		MaxMemoryUsage:   1 << 30,
+		MaxRows:          1000,
+	})
+
+	if got["skip_unavailable_shards"] != 0 {
+		t.Errorf("skip_unavailable_shards = %v, want 0 so a dead shard fails the query",
+			got["skip_unavailable_shards"])
+	}
+}

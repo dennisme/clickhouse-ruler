@@ -1,0 +1,10 @@
+sources:
+  - name: otel_traces
+    address: 127.0.0.1:9000
+    database: otel
+    username: ruler
+    table: otel_traces
+    timestamp_column: Timestamp
+    checks:
+      labels/required:
+        severity: error

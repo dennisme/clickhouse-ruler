@@ -1,0 +1,8 @@
+checks:
+  labels/required:
+    severity: error
+    keys: [team, severity, tier]
+  annotations/required:
+    severity: warn
+  annotations/runbook:
+    severity: "off"
