@@ -1,8 +1,7 @@
 groups:
   - name: api-latency
     interval: 1m
-    labels:
-      team: payments
+    intrval: 30s
     rules:
       - alert: TypoField
         source: otel_traces

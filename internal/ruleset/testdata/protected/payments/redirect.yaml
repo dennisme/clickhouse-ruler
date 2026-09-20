@@ -1,0 +1,29 @@
+groups:
+  - name: api-latency
+    interval: 1m
+    rules:
+      - alert: RedirectsItsOwnPage
+        source: otel_traces
+        expr: |
+          SELECT ServiceName, 'platform' AS team, max(Duration) AS value
+          FROM otel.otel_traces
+          WHERE Timestamp >= {{ .From }} AND Timestamp < {{ .To }}
+          GROUP BY ServiceName
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ .ServiceName }} is slow"
+          runbook_url: https://runbooks.internal/slow
+      - alert: RenamesItself
+        source: otel_traces
+        expr: |
+          SELECT ServiceName, 'Other' AS alertname, max(Duration) AS value
+          FROM otel.otel_traces
+          WHERE Timestamp >= {{ .From }} AND Timestamp < {{ .To }}
+          GROUP BY ServiceName
+        labels:
+          severity: warning
+          alertname: AlsoNotAllowed
+        annotations:
+          summary: "{{ .ServiceName }} is slow"
+          runbook_url: https://runbooks.internal/slow

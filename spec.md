@@ -18,10 +18,12 @@ standards enforceable at scale.
 
 ClickHouse-backed observability stacks do not have this. SigNoz and ClickStack
 both store alerts in an application database and expect users to create them in
-a web UI. There is no file format, and no way to make the file the only source
-of truth.
+a web UI. Terraform providers exist and do put definitions in git, but they
+write to that same database through the same API, so the file never becomes
+the only source of truth. Getting even that much means running their platform.
 
-We want the Prometheus model on top of ClickHouse.
+We want the Prometheus model on top of ClickHouse, as one service rather than
+a stack.
 
 ---
 
@@ -29,12 +31,26 @@ We want the Prometheus model on top of ClickHouse.
 
 ### 2.1 SigNoz
 
-Alerts are created in the UI or through the REST API. They are stored in the
-SigNoz application database. There is no rule file format.
+Alerts are created in the UI or through the REST API, `GET /api/v1/rules` and
+`POST /api/v1/rules`. They are stored in the SigNoz application database.
+There is no rule file format.
+
+There is an official Terraform provider, and the alerts documentation points
+at it as the infrastructure as code answer. It is a real one, so HCL in git is
+genuinely possible. What it does not change is ownership: the provider calls
+the same API and writes the same mutable rows, so the file describes a rule
+without owning it, and anything with a token can still edit the rule out from
+under the file. That is the same gap as 2.3.
 
 SigNoz vendors its own Alertmanager fork internally, alongside its own ruler
 package. It does not accept Prometheus rule YAML for ClickHouse-backed queries
 and does not route to an external Alertmanager.
+
+Fine-grained access control does not close the gap either, because it is not
+in the open source edition. The roles documentation lists its prerequisite as
+"an active SigNoz license" and marks the feature as SigNoz Cloud and
+Self-Hosted Enterprise only, currently in beta. So the same bind as Grafana
+OSS in 2.4: the escape hatch exists, behind a paywall.
 
 ### 2.2 ClickStack / HyperDX
 
@@ -75,6 +91,15 @@ Infrastructure as code wrappers, all Cloud only:
 All of these write to the same mutable application database. The file is a
 client of the API, not the source of truth.
 
+The other cost is adoption. Terraform providers exist for SigNoz, ClickStack
+and Grafana, so "alerts as code" is available in all three, but only by taking
+their whole stack with it. Using Grafana's provider means using Grafana
+Alerting; using SigNoz's means running SigNoz. Running an entire observability
+platform because it is the only thing that will evaluate a scheduled SQL query
+and page someone is a large amount of machinery for one job, especially for a
+team whose data already lives in ClickHouse and whose routing already goes
+through an Alertmanager they run.
+
 ### 2.4 Grafana plus ClickHouse datasource
 
 The closest existing thing to what we want.
@@ -85,6 +110,14 @@ Grafana unified alerting supports file-provisioned alert rules
 Grafana can forward firing alerts to an external Alertmanager.
 `grafana-operator` exposes a `GrafanaAlertRuleGroup` CRD for the Kubernetes
 flavour of the same thing.
+
+The wider infrastructure as code story is uneven, which matters if the plan is
+to manage rules this way. The Terraform provider covers all major resources
+and is the mature path. The Ansible collection is Grafana Cloud only. The
+Operator's own comparison lists dashboards, data sources and folders, not
+alerting. The Crossplane provider covers all major resources but the
+documentation states it "is in an alpha stage, so it has not reached a stable
+state yet".
 
 What it gets right: file-provisioned rules are stamped `provenance: file` and
 become read only in both the UI and the API. Rules shipped from git cannot
@@ -106,6 +139,66 @@ never reviewed. Closing that hole means setting the default org role to Viewer
 and managing folder permissions for every team, which breaks normal dashboard
 work.
 
+### 2.4.1 Git Sync
+
+Grafana's newer Observability as Code work adds Git Sync, which syncs a
+Grafana instance against a Git repository rather than pushing through an API.
+That is much closer to the Prometheus model than Terraform is, so it is worth
+being precise about why it does not close this gap.
+
+It does not reach alerts. The usage limits page states "Git Sync only supports
+dashboards and folders", and that alerts, data sources, panels and other
+resources are not supported yet. The migration guidance is blunter still: move
+alert rules and other unsupported resources out of a folder before syncing it,
+because Git Sync recreates dashboards and folders but does not recreate
+alerts.
+
+This is a scope limit, not a licensing one, which makes it different from the
+RBAC story in 2.4 and 2.1. Git Sync is available in OSS, Cloud and Enterprise.
+Full-instance sync is marked experimental. So there is no paywall to complain
+about here; the feature simply does not cover the resource we care about.
+
+A second limit is structural rather than a missing feature, and it is the one
+that would still matter if alert support shipped tomorrow.
+
+Git Sync's usage limits recommend roughly 1,000 resources per repository
+connection, and allow 10 connections per stack: the default on-prem, and a
+hard limit on Grafana Cloud. The 1,000 is a sync cost, not a query cost.
+Beyond it "the sync workflow puts noticeable load on Grafana itself, which may
+result in slower syncs and increased database load". Nothing here is about the
+datasource.
+
+The guidance that follows is titled "Shard by capacity, not by team", and it
+says plainly: "When you have many teams or tenants, it's tempting to create
+one connection per team so each team maps to its own connection. Avoid this:
+it consumes connections quickly, doesn't scale as teams grow, and on Grafana
+Cloud a single stack can't be granted the hundreds of connections this would
+require."
+
+That is the opposite of the model here. The directory *is* the ownership
+boundary: `rules/payments/` maps to `@payments` in `CODEOWNERS` and derives
+the `team` label in 6.3.1 from the same path. Git Sync asks for repo
+layout to follow capacity shards instead, so the structure stops encoding who
+owns what, and per-team review gates get harder rather than easier. With ten
+connections, one per team runs out at ten teams and the documentation tells
+you not to try.
+
+There is no equivalent limit here, because there is nothing to sync. The ruler
+reads files from disk; it does not import them into a database that then has
+to be kept consistent. There is no connection object to run out of, and the
+number of team directories is bounded by nothing.
+
+There is an open request, grafana/grafana#129913, for an enforcement mode that
+would make the repository the only write path and reject writes that do not
+come through provisioning. That is exactly the property section 4 is built on.
+It is unanswered, and it is scoped to dashboards and folders, so even if it
+ships it would not apply to alert rules.
+
+The conclusion is unchanged: alert sprawl outside of code is still ungoverned
+in Grafana OSS. Git Sync moves dashboards to the model we want and leaves
+alerts where they were, and its sharding guidance points away from the
+per-team ownership boundary that makes the model work in the first place.
+
 ### 2.5 sql_exporter plus Prometheus
 
 `burningalchemist/sql_exporter` runs SQL against ClickHouse on a schedule and
@@ -120,22 +213,56 @@ semantics, so multi-instance alerts are awkward.
 
 ## 3. The gap
 
-No tool gives all four of these at once:
+Alerts as code already exists. SigNoz, ClickStack and Grafana all ship a
+Terraform provider, and 2.1 through 2.4 show they work. The gap is not a
+missing file format.
+
+The gap is what you have to run to get one. Every provider above is attached
+to a platform, and taking the provider means taking the platform: Grafana's
+means running Grafana Alerting, SigNoz's means running SigNoz. Standing up an
+entire observability stack so that one scheduled SQL query can page someone is
+a large amount of machinery for a small job, and it is the main reason this
+exists. The data is already in ClickHouse. The routing already goes through an
+Alertmanager. The only missing piece is the thing in between, and it should
+not cost a platform migration.
+
+Underneath that, no tool gives all four of these at once:
 
 1. Rules defined as flat files in git.
 2. Raw ClickHouse SQL as the query language.
 3. Alertmanager as the notification path.
 4. No second write path, so the file is the only way a rule can exist.
 
-Item 4 is the one nobody offers, and it is the reason to build rather than
-adopt.
+Item 4 is the one nobody offers even after adopting their stack, because the
+provider writes to the same mutable database the UI does.
+
+### 3.1 When this is not worth it
+
+Worth being honest about, because it is a large part of the audience.
+
+If you already run OSS Grafana well, already keep its configuration in git,
+and your team already thinks in Prometheus rules, then the delta is small.
+Grafana file provisioning marks rules read only, the ClickHouse datasource
+runs real SQL, and Grafana forwards to an external Alertmanager. Three of the
+four properties are already yours, and the fourth is a policy problem inside
+an installation you have already tuned.
+
+The case for a separate tool gets stronger the further you are from that:
+when Grafana is not already in the path, when the installation is large enough
+that folder permissions are not a workable control (2.4), or when adding an
+observability platform is a bigger change than adding one service.
 
 ---
 
 ## 4. Why a new tool
 
-The argument is not "no YAML format exists". It is that **removing the UI makes
-enforcement free**.
+Two arguments, in order of weight.
+
+**One service instead of a platform.** See section 3. The scope of what has to
+be operated is the difference that survives every other comparison.
+
+**Removing the UI makes enforcement free.** The argument was never "no YAML
+format exists", because one does.
 
 Prometheus ruler needs no RBAC because it has no write API. The rule store is a
 directory. Git is the access control list. `CODEOWNERS` is the role model. Pull
@@ -305,26 +432,42 @@ Three sources contribute labels to an alert, weakest first:
 returns an `alertname` column cannot rename its own alert, because an
 identity that query data can set is a routing hazard.
 
-**Open risk.** Everything except `alertname` can be overridden by result
-columns, and that includes `team` and `severity`. Those two drive the
-Alertmanager route tree (6.5), so as written a query can redirect its own page
-by returning a `team` column. That undercuts the tenancy boundary in 6.6,
-where the whole point is that a team cannot reach outside its own lane.
+**`team` is special.** It defaults to the rule file's directory name, the same
+derivation 6.6 intends for the ClickHouse user, so `rules/payments/`
+gives `team: payments` without anyone writing it down. The default is applied
+as a group label, which means the ordering above still holds and a rule can
+override it.
 
-Three ways to close it, undecided:
+The directory name is used exactly as written, with nothing stripped from it.
+`rules/payments/` gives `payments` and `rules/team-payments/` gives
+`team-payments`. Rewriting part of a path would make the mapping from
+directory to team something a reader has to know rather than something they
+can read, and it would mean two differently named directories producing the
+same label.
 
-- Make the rule's `labels` block win over result columns, reversing 2 and 3.
-  Simple, but then a query can never add a dimension the rule did not
-  anticipate, which is the main reason result columns become labels at all.
-- Keep the overlay but reserve a protected set (`team`, `severity`,
-  `alertname`) that result columns may not touch. A tier 0 check rejects a
-  rule whose query aliases a protected name.
-- Derive `team` from the rule's directory path rather than from its labels, so
-  it is never author-supplied and matches the ClickHouse user already derived
-  the same way in 6.6.
+A rule *may* override `team` with an explicit label. One team running
+operations for another team's service is a real arrangement, not an abuse to
+design out, and a tool that forbids it just gets worked around. The override
+sits in the file, so it appears in a diff and `CODEOWNERS` gates who can write
+it.
 
-The third is the most consistent with 6.6 and is the current lean. Decide
-before the notifier is built, because after that the route tree depends on it.
+**Result columns may never set `team` or `alertname`.** This is not about the
+override above, which is deliberately allowed. It is about where the value
+comes from. The Alertmanager route tree is generated from this repository
+(6.5), so every `team` value that can ever be produced has to be readable from
+the files. A `team` that arrives from a result column is runtime data: the
+generator cannot enumerate it, no route matches it, and the alert lands in the
+catch-all or nowhere. That failure shows up during an incident, which is the
+worst time to discover a routing gap. `alertname` is protected for the same
+reason it always was: an identity that query data can set is a routing hazard.
+
+**`severity` stays overridable by a result column.** Lumping it in with `team`
+would prevent no abuse, because the rule author already sets `severity`
+freely through the labels block, so a query doing it grants no new power.
+Against that, `if(value > 1000, 'critical', 'warning') AS severity` is a
+genuinely useful pattern and banning it costs something real. If the route
+tree ever keys on `severity` the way it keys on `team`, revisit this: the
+enumerability argument above would then apply to it too.
 
 ### 6.4 Time window injection
 
@@ -359,8 +502,23 @@ identical alerts, so running two ruler replicas is mostly safe already.
 
 ### 6.6 Tenancy and isolation
 
-Derive a ClickHouse user from the rule file's directory path.
-`rules/team-payments/*.yaml` runs as the `ruler_payments` user.
+Not built, and it contradicts 6.2 as written. See open question 5.
+
+The intent: derive a ClickHouse user from the rule file's directory path, so
+`rules/payments/*.yaml` runs as the `ruler_payments` user.
+
+What actually happens today is different. A rule names a source, the source
+carries a `username`, and that is the user it connects as. The directory
+decides the `team` label and nothing else. Two consequences follow, and both
+need settling before any of the isolation below can be relied on:
+
+- 6.2 requires `username` in the sources file precisely so a reviewer can see
+  it. That is a different mechanism from deriving it from a path, and only one
+  of them can be the answer.
+- A source names one user, so two teams referencing the same source connect as
+  the same user. Row policies cannot separate them, which is exactly what the
+  paragraph below claims they do. Per-team isolation would need either a
+  source per team or a source-plus-team to user mapping.
 
 Row policies and grants then do the isolation inside ClickHouse. A team cannot
 query data it does not own, no matter what SQL it writes. The tool does not
@@ -531,6 +689,17 @@ with the finding so it can be silenced or grepped:
 | `labels/required` | missing or empty `team` or `severity` |
 | `annotations/required` | missing `summary` or `runbook_url` |
 | `annotations/runbook` | a `runbook_url` that is not an absolute http or https URL |
+| `rule/source-exists` | a `source` that no sources file defines |
+| `rule/protected-label` | a query aliasing `team` or `alertname`, or a `labels` block setting `alertname` |
+
+The last two need the whole directory rather than one file, so they run in the
+loader rather than the rule parser, but they read nothing and are tier 0 all
+the same.
+
+Every check here is currently an error except the two interval comparisons,
+which warn. That is not where it should end up: 7.6 splits these into
+correctness and convention, and moves the convention ones to a configurable
+severity defaulting to `warn`. Not built yet.
 
 YAML parsing is strict underneath all of them: an unknown field is an error,
 not a warning, because the file is the only way to create a rule and a typo
@@ -638,6 +807,170 @@ Running the same backfill weekly against already deployed rules produces an
 alert hygiene report for free: "these 5 rules fired 800 times and none were
 acknowledged". Same code path, no extra work.
 
+### 7.6 Check configuration
+
+Decided. Which checks are mandatory is the operator's policy, not ours.
+
+The tool currently hardcodes it: `team` and `severity` are required labels,
+`summary` and `runbook_url` are required annotations, all at error severity.
+That makes a rule which would run perfectly fail to load. A valid query with a
+resolved source and correct time bounds, in a flat directory, produces four
+errors and never evaluates. None of them is about whether the rule works.
+
+Rigid defaults narrow who can use the tool. "Point it at a directory and go"
+has to work on the simplest possible layout, or the only consumers left are
+organisations that already agree with every convention we happened to pick.
+
+**The line is correctness versus convention.**
+
+Correctness checks are not configurable, because a rule failing one cannot do
+its job:
+
+- `yaml/syntax`, `yaml/unknown-field`. A typo silently drops configuration, so
+  the rule does not do what it says.
+- `rule/name`, empty or duplicate. No identity.
+- `rule/source`, `rule/source-exists`. Nothing to query.
+- `rule/expr`, empty or missing `{{ .From }}` or `{{ .To }}`. Cannot run, or
+  scans unbounded on every evaluation.
+- `rule/for`, `rule/window`, negative values. Nonsense.
+- `rule/protected-label`. Breaks routing (6.3.1).
+
+Convention checks carry a configurable severity of `error`, `warn` or `off`,
+and where they take a list of keys that list is configurable too:
+
+- `labels/required`, and which labels
+- `annotations/required`, and which annotations
+- `annotations/runbook`
+- `rule/for` and `rule/window` shorter than the group interval
+
+**Severity is an escalation path, not a noise level.** This is the part that
+decides everything else:
+
+- `off`: nobody is asked.
+- `warn`: the contributor decides. They can fix it or ship anyway, and no one
+  else has to be involved.
+- `error`: blocked. Either the rule changes, or a repo owner changes policy,
+  which means a pull request against a file only the platform team can merge.
+
+So the severity of a check is really a statement about who is on the critical
+path when it fires. That is the argument for keeping errors rare. A check set
+to `error` spends platform team attention every time it trips, and a config
+where everything is an error makes the platform team a bottleneck on routine
+contributions. Reserve it for the cases that genuinely warrant stopping
+someone.
+
+**Defaults are the current lists at `warn`.** Not `off`: an author should see
+what good practice looks like on the first run, and an operator who wants it
+mandatory changes one line. Not `error`: nothing about a missing runbook stops
+a rule from evaluating correctly, and it does not deserve to pull a repo owner
+into the loop. Someone who reads the warning and ignores it has made a choice,
+and that is theirs to make.
+
+This is also the escape hatch, and it is deliberately a social one rather than
+a mechanism. There is no way to locally suppress a check that policy has set
+to `error`. Needing one means asking a repo owner to change the policy file,
+which is the CODEOWNERS workflow doing its job rather than being worked
+around.
+
+**Configuration lives in the operator's file**, `ruler.yaml`, alongside
+`sources.yaml` in the CODEOWNERS lane from 6.6. This is what preserves the
+argument in 7.1. Enforcement is not weakened by making policy configurable,
+because rule authors still cannot reach the policy; the platform team sets it
+and authors are still bound by it. What changes is that we stop guessing what
+that policy should be.
+
+```yaml
+# ruler.yaml
+checks:
+  labels/required:
+    severity: error
+    keys: [team, severity, tier]
+  annotations/required:
+    severity: warn
+  annotations/runbook:
+    severity: off
+```
+
+Two consequences worth stating before this is built.
+
+**Severity is runtime behaviour, not only CI output.** With hot reload, a check
+at `error` means the ruler refuses the file and keeps the previous version of
+it; `warn` means it loads and logs. Turning a check down does not just quiet
+CI, it changes what the running ruler will accept.
+
+**CI and the ruler must read the same `ruler.yaml`**, or a rule passes CI and
+then fails to load, which is the drift 7.1 exists to prevent. That is the
+reason the file belongs in the rules repository rather than in deployment
+configuration.
+
+Per-table policy is per-source policy today, because a `Source` names exactly
+one table. If a source ever covers more than one, this needs revisiting rather
+than being discovered by whoever tries it first.
+
+### 7.7 Policy scopes and merging
+
+Design, not yet built. Policy is set in more than one place, because a single
+instance serves teams and datasources with genuinely different needs.
+
+| Scope | Where | Owned by |
+|---|---|---|
+| instance | `ruler.yaml` at the rules root | platform |
+| datasource | a `checks:` block in `sources.yaml` | platform |
+| team | `ruler.yaml` in a team directory | that team |
+
+A rule's effective policy is the **strictest** setting across every scope that
+applies to it. Severity takes the maximum on `off < warn < error`. A required
+key list takes the union. Nothing can lower a severity or remove a key.
+
+**The merge is a maximum, so order does not matter.** There is no precedence
+question to answer, no "which file wins", and no rule anyone has to memorise.
+That is the whole reason for choosing this merge over last-one-loaded.
+
+It also means a team-owned file is safe. A team directory is author-owned
+through CODEOWNERS, so a team can write policy for its own rules, and the
+worst it can do is make its own life stricter. Loosening the platform baseline
+is impossible by construction rather than by convention, which is what keeps
+7.1 true.
+
+**Source and directory are independent, not nested.** A rule has both, and
+neither contains the other: payments uses several sources, and `otel_traces`
+is used by several teams. That is a lattice rather than a tree, and it is why
+a maximum is the right merge. A tree would force one axis inside the other and
+then force a winner between them.
+
+**New check settings must be monotonic or they do not belong here.** Severity
+and key lists both have an unambiguous stricter direction. A setting without
+one, a numeric threshold for example, breaks the order independence above and
+needs a different home.
+
+Scoping ships in two steps. Instance and datasource first, since both are
+platform owned and cover the need. Team-level files add file count and a trust
+question that nobody has asked for yet, and the merge semantics are identical,
+so adding them later is additive and costs no rework.
+
+### 7.8 Explaining a finding
+
+Once policy comes from several files, "why is this an error?" has to have an
+answer, or people stop trusting the tool and start ignoring it. This is a
+requirement of the scoping in 7.7, built alongside it rather than afterwards.
+
+Every finding names three things:
+
+- the rule file and line that triggered it, which `Problem` already carries
+- the policy file and line that set the severity, which it does not
+- the check's documentation, by stable anchor
+
+`ruler check --explain` prints the resolved policy for each rule with the
+origin of every setting, so an author can see that `labels/required` is
+`error` because `sources.yaml:12` raised it, not because of anything in their
+own directory.
+
+The documentation link means each check needs a stable page or anchor to point
+at, written when the check is. That is a real deliverable rather than a free
+one, and it is the difference between a finding a contributor can act on alone
+and one that turns into a question for the platform team, which by 7.6 is the
+thing severity is supposed to be rationing.
+
 ---
 
 ## 8. Observability of the ruler itself
@@ -720,7 +1053,8 @@ stubbed collector.
 
 ### 9.1 Compose stack
 
-`compose.yaml`, all image versions pinned:
+`compose.yaml`, all image versions pinned. Items 1 and 4 exist today; the rest
+arrive with the scheduler.
 
 1. **ClickHouse**, single node today. Schema in `deploy/clickhouse/init`, the
    OpenTelemetry Collector ClickHouse exporter trace table reproduced verbatim
@@ -738,7 +1072,11 @@ stubbed collector.
    sink.
 5. **Ruler**, the code under test.
 6. **Webhook sink**, a small HTTP server that records every notification
-   payload it receives and exposes them for assertions.
+   payload it receives and exposes them for assertions. Not a container today:
+   it runs inside the integration test so assertions can read the payloads
+   directly, which is why Alertmanager routes to `host.docker.internal` on a
+   fixed port. Moving it into the stack only becomes worthwhile once the ruler
+   itself is a container and no test process is left to host it.
 
 ### 9.2 Two generators, not one
 
@@ -844,32 +1182,59 @@ one so that watch mode is a caller, not a rewrite.
 - **Credentials.** No DSN. Address, database and username are written in the
   file; only the password comes from `password_file` or `password_env`, and
   setting both is an error. See 6.2.
+- **Label precedence.** `team` defaults to the rule's directory, an explicit
+  `team:` label may override it, and a result column may never set `team` or
+  `alertname`. See 6.3.1.
+- **Check configuration.** Correctness checks are fixed; convention checks
+  take a configurable severity and key list, defaulting to the current lists
+  at `warn`. Rigid defaults narrow who can use the tool. Severity decides who
+  is on the critical path to unblock a contributor, so errors stay rare.
+  See 7.6.
+- **Team derivation.** The directory name is the team, used verbatim. No
+  prefix is stripped, so the label always matches what the path says.
+  See 6.3.1.
+- **Policy scoping.** Policy is set at instance, datasource and team scope,
+  and a rule gets the strictest setting that applies to it. The merge is a
+  maximum, so no precedence rule exists and no scope can loosen another.
+  See 7.7.
 
 ## 12. Open questions
 
 1. **Metrics tables.** The `pint` `promql/rate` and `promql/counter` checks have
    a loose analog for counter columns in OTel metrics tables. Worth it, or skip?
-2. **Label precedence for `team` and `severity`.** See 6.3.1. Result columns
-   currently override rule labels, so a query can redirect its own page.
-   Leaning toward deriving `team` from the rule's directory path. Must be
-   settled before the notifier is built.
-3. **Restart loses pending state.** `ActiveAt` is held in memory only, so a
+2. **Restart loses pending state.** `ActiveAt` is held in memory only, so a
    ruler restart delays every pending alert by its full `for`. Prometheus
    solves this by restoring from an `ALERTS_FOR_STATE` series. Deferred.
-4. **Ownership at scale.** Deferred, not solved. Operating a ruler that
+3. **Ownership at scale.** Deferred, not solved. Operating a ruler that
    thousands of engineers page off means high availability, missed evaluation
    handling, clock skew, ClickHouse restarts mid window, and backfill after an
    outage. Revisit before anyone depends on it in production.
-5. **Sharded clusters.** See 6.9 for the full list. Pinning
+4. **Sharded clusters.** See 6.9 for the full list. Pinning
    `skip_unavailable_shards` to `0` is a correctness fix and should not wait
    for the rest; a dead shard currently risks resolving alerts instead of
    failing the evaluation. Proving it needs a second ClickHouse node in the
    compose stack, since a single node cannot reproduce the failure.
+5. **How a rule gets its ClickHouse user.** 6.6 derives it from the directory
+   path; 6.2 requires it in the sources file so a reviewer can see it. Those
+   are different mechanisms and the code implements the second, so the
+   isolation story in 6.6 does not hold today: two teams referencing the same
+   source connect as the same user, and row policies cannot tell them apart.
+   Either sources become per-team, or a source-plus-team to user mapping is
+   added. Settle before anything depends on per-team isolation.
 
 ---
 
 ## 13. Sources
 
+- [SigNoz: managing alerts via the API](https://signoz.io/docs/userguide/alerts-management/#managing-alerts-via-the-api)
+- [SigNoz Terraform provider](https://signoz.io/docs/alerts-management/terraform-provider-signoz/)
+- [SigNoz roles and IAM, prerequisites](https://signoz.io/docs/manage/administrator-guide/iam/roles/#prerequisites)
+- [Grafana infrastructure as code](https://grafana.com/docs/grafana/latest/as-code/infrastructure-as-code/)
+- [Grafana Git Sync](https://grafana.com/docs/grafana/latest/as-code/observability-as-code/git-sync/)
+- [Git Sync usage and performance limitations](https://grafana.com/docs/grafana/latest/as-code/observability-as-code/git-sync/usage-limits/)
+- [Git Sync: shard by capacity, not by team](https://grafana.com/docs/grafana/latest/as-code/observability-as-code/git-sync/usage-limits/#shard-by-capacity-not-by-team)
+- [Git Sync known limitations](https://grafana.com/docs/learning-paths/git-sync-use/known-limitations/)
+- [Git Sync: optional enforcement mode (grafana#129913)](https://github.com/grafana/grafana/issues/129913)
 - [Alerts with ClickStack](https://clickhouse.com/docs/use-cases/observability/clickstack/alerts)
 - [ClickStack API reference](https://clickhouse.com/docs/clickstack/api-reference)
 - [Alerting arrives in ClickStack for ClickHouse Cloud](https://clickhouse.com/blog/alerting-arrives-in-clickstack-for-clickhouse-cloud)

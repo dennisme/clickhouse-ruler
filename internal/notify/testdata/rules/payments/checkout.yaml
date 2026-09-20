@@ -1,0 +1,20 @@
+# No team label anywhere: it is derived from the payments directory, and
+# the end to end test asserts Alertmanager received it.
+groups:
+  - name: checkout
+    interval: 1m
+    rules:
+      - alert: CheckoutIsSlow
+        source: otel_traces
+        expr: |
+          SELECT ServiceName, max(Duration) / 1e6 AS value
+          FROM otel.otel_traces
+          WHERE Timestamp >= {{ .From }} AND Timestamp < {{ .To }}
+          GROUP BY ServiceName
+          HAVING value > 1000
+        window: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ .ServiceName }} is slow"
+          runbook_url: https://runbooks.internal/checkout-slow

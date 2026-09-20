@@ -4,6 +4,7 @@ set shell := ["bash", "-euo", "pipefail", "-c"]
 
 # Matches the address in compose.yaml.
 clickhouse_addr := env("RULER_CLICKHOUSE_ADDR", "127.0.0.1:9000")
+alertmanager_url := env("RULER_ALERTMANAGER_URL", "http://127.0.0.1:9093")
 
 # List available recipes.
 default:
@@ -30,6 +31,7 @@ test:
 # Tests against real ClickHouse. Requires the stack: `just compose-up` first.
 integration:
     RULER_CLICKHOUSE_ADDR="{{clickhouse_addr}}" \
+    RULER_ALERTMANAGER_URL="{{alertmanager_url}}" \
         env -u GOROOT GOTOOLCHAIN=auto go test -tags=integration -count=1 ./...
 
 # Bring the stack up, run the integration tests, then always tear it down.

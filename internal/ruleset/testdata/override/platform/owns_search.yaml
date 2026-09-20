@@ -1,0 +1,17 @@
+groups:
+  - name: search-ops
+    interval: 1m
+    rules:
+      - alert: SearchLatency
+        source: otel_traces
+        expr: |
+          SELECT ServiceName, max(Duration) AS value
+          FROM otel.otel_traces
+          WHERE Timestamp >= {{ .From }} AND Timestamp < {{ .To }}
+          GROUP BY ServiceName
+        labels:
+          team: search
+          severity: warning
+        annotations:
+          summary: "{{ .ServiceName }} is slow"
+          runbook_url: https://runbooks.internal/slow
