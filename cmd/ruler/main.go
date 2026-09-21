@@ -26,6 +26,17 @@ const (
 	exitUsage   = 2
 )
 
+// Two output streams, two audiences.
+//
+// Usage errors, lint findings and the refusal to start are CLI output: a
+// person ran a command and the command has something to say about what they
+// typed. Those go to stderr through printf below, unstructured, and they are
+// not log lines.
+//
+// Everything `ruler run` says once it is running is a log line, and goes to
+// stdout through slog, where a process supervisor collects it. That is where
+// the daemon's lifetime events already went before there was a logger.
+//
 // printf writes diagnostic output. A write to stdout or stderr that fails
 // leaves nowhere to report the failure, so the error is deliberately dropped
 // rather than checked at every call site.

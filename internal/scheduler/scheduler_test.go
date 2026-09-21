@@ -35,7 +35,7 @@ func TestNewCountsRulesWithNoMatchedSourceAsUnmatched(t *testing.T) {
 	cadence := notify.NewCadence(&recordingSender{}, time.Minute)
 	clock := newFakeClock(time.Unix(0, 0))
 
-	New(set, map[string]Querier{"src1": &fakeQuerier{}}, cadence, metrics, clock, 0)
+	New(set, map[string]Querier{"src1": &fakeQuerier{}}, cadence, metrics, clock, 0, nil)
 
 	got := testutil.ToFloat64(metrics.RulesUnmatched.WithLabelValues("f.yaml:g1"))
 	if got != 1 {
@@ -61,7 +61,7 @@ func TestNewStaggersGroupsSharingAnInterval(t *testing.T) {
 	cadence := notify.NewCadence(&recordingSender{}, time.Minute)
 	clock := newFakeClock(time.Unix(0, 0))
 
-	sched := New(set, map[string]Querier{"src1": &fakeQuerier{}}, cadence, metrics, clock, 0)
+	sched := New(set, map[string]Querier{"src1": &fakeQuerier{}}, cadence, metrics, clock, 0, nil)
 
 	if len(sched.groups) != 2 {
 		t.Fatalf("got %d groups, want 2", len(sched.groups))
@@ -95,7 +95,7 @@ func TestAlertsActiveIsLabelledByGroupAndRule(t *testing.T) {
 	clock := newFakeClock(time.Unix(0, 0))
 
 	sched := New(set, map[string]Querier{"src1": &fakeQuerier{samples: oneSample()}},
-		cadence, metrics, clock, 0)
+		cadence, metrics, clock, 0, nil)
 
 	// Evaluate both groups once, directly, so the gauge is written without
 	// having to drive the tickers.
@@ -122,6 +122,6 @@ func TestShutdownBeforeStartIsANoop(t *testing.T) {
 	cadence := notify.NewCadence(&recordingSender{}, time.Minute)
 	clock := newFakeClock(time.Unix(0, 0))
 
-	sched := New(&ruleset.Set{}, map[string]Querier{}, cadence, metrics, clock, 0)
+	sched := New(&ruleset.Set{}, map[string]Querier{}, cadence, metrics, clock, 0, nil)
 	sched.Shutdown(time.Second)
 }

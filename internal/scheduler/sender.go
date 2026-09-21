@@ -9,8 +9,8 @@ import (
 )
 
 // instrumentedSender wraps a notify.Sender and records the delivery metrics
-// in spec 8.2: how many batches were sent, how many failed, and how long
-// each send took.
+// in spec 8.2: how many alerts were sent, how many batches failed, and how
+// long each send took.
 type instrumentedSender struct {
 	inner        notify.Sender
 	alertmanager string
@@ -27,7 +27,7 @@ func (s *instrumentedSender) Send(ctx context.Context, alerts []alert.Alert, ann
 		s.metrics.AlertsSendFailures.WithLabelValues(s.alertmanager).Inc()
 		return err
 	}
-	s.metrics.AlertsSentTotal.WithLabelValues(s.alertmanager).Inc()
+	s.metrics.AlertsSentTotal.WithLabelValues(s.alertmanager).Add(float64(len(alerts)))
 	return nil
 }
 

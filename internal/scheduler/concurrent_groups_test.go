@@ -54,7 +54,7 @@ func TestConcurrentGroupsShareOneCadenceSafely(t *testing.T) {
 	q := &countingQuerier{}
 
 	sched := New(&ruleset.Set{Rules: rules}, map[string]Querier{"src1": q},
-		cadence, metrics, clock, DefaultQueryConcurrency)
+		cadence, metrics, clock, DefaultQueryConcurrency, nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

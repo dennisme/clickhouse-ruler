@@ -87,9 +87,13 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 			Help: "Number of alert instances currently tracked, by state.",
 		}, []string{"rule_group", "rule", "state"}),
 
+		// Counts alerts rather than batches, matching the Prometheus metric
+		// this name tracks (spec 8.2). A batch count would make the number
+		// unusable for notification volume and would read wrong on a
+		// dashboard carried over from a Prometheus ruler.
 		AlertsSentTotal: f.NewCounterVec(prometheus.CounterOpts{
 			Name: "ruler_alerts_sent_total",
-			Help: "Total number of alert batches sent to Alertmanager.",
+			Help: "Total number of alerts sent to Alertmanager.",
 		}, []string{"alertmanager"}),
 
 		AlertsSendFailures: f.NewCounterVec(prometheus.CounterOpts{

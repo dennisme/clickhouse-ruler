@@ -3,6 +3,7 @@ package scheduler
 import (
 	"context"
 	"hash/fnv"
+	"log/slog"
 	"sort"
 	"sync"
 	"time"
@@ -17,6 +18,7 @@ type Scheduler struct {
 	clock   Clock
 	groups  []GroupSpec
 	metrics *Metrics
+	log     *slog.Logger
 
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
@@ -39,8 +41,14 @@ type namedEval struct {
 // shape of the configuration. Sequential evaluation made a group's tick cost
 // the sum of every query inside it, so a group grew slower simply by having
 // more rules added to it, until it began missing iterations.
-func New(set *ruleset.Set, queriers map[string]Querier, cadence *notify.Cadence, metrics *Metrics, clock Clock, queryConcurrency int) *Scheduler {
+// A nil log discards every line, so a caller that does not care about output
+// does not have to build a handler.
+func New(set *ruleset.Set, queriers map[string]Querier, cadence *notify.Cadence, metrics *Metrics, clock Clock, queryConcurrency int, log *slog.Logger) *Scheduler {
 	type groupKey struct{ file, name string }
+
+	if log == nil {
+		log = slog.New(slog.DiscardHandler)
+	}
 
 	queries := newSemaphore(queryConcurrency)
 
@@ -87,11 +95,11 @@ func New(set *ruleset.Set, queriers map[string]Querier, cadence *notify.Cadence,
 			Name:     groupName,
 			Interval: interval,
 			Start:    now.Add(offset),
-			Eval:     evalGroup(groupName, evals, metrics),
+			Eval:     evalGroup(groupName, evals, metrics, log),
 		})
 	}
 
-	return &Scheduler{clock: clock, groups: specs, metrics: metrics}
+	return &Scheduler{clock: clock, groups: specs, metrics: metrics, log: log}
 }
 
 // staggerOffset spreads a group's first tick across its own interval,
@@ -111,12 +119,17 @@ func staggerOffset(key string, interval time.Duration) time.Duration {
 // evalGroup runs every rule in one group and records the per-rule metrics
 // spec 8.2 asks for. Labelled by rule_group and rule only (spec 8.3).
 //
+// It also logs what the metrics cannot say: which source refused a query and
+// what it said, and which rule could not be delivered. One line per failed
+// source and one per failed send, never one per alert instance, for the same
+// reason the metrics carry no instance label (spec 8.3).
+//
 // Rules run concurrently. The goroutine per rule is not what bounds load:
 // the semaphore inside each RuleEval does, around the query itself, so a
 // group with many rules queues against the limit instead of opening a
 // connection per rule. Prometheus collectors are safe for concurrent use, so
 // the metric writes below need no coordination.
-func evalGroup(groupName string, evals []namedEval, m *Metrics) func(context.Context, time.Time) {
+func evalGroup(groupName string, evals []namedEval, m *Metrics, log *slog.Logger) func(context.Context, time.Time) {
 	return func(ctx context.Context, tickAt time.Time) {
 		var wg sync.WaitGroup
 		for _, ne := range evals {
@@ -126,8 +139,18 @@ func evalGroup(groupName string, evals []namedEval, m *Metrics) func(context.Con
 				res := ne.eval.Evaluate(ctx, tickAt)
 
 				m.EvaluationsTotal.WithLabelValues(groupName, ne.rule).Inc()
-				if res.QueryErrors > 0 {
-					m.EvaluationFailuresTotal.WithLabelValues(groupName, ne.rule).Add(float64(res.QueryErrors))
+				if len(res.QueryErrors) > 0 {
+					m.EvaluationFailuresTotal.WithLabelValues(groupName, ne.rule).Add(float64(len(res.QueryErrors)))
+				}
+				for _, se := range res.QueryErrors {
+					log.Error("rule evaluation failed against a source",
+						"rule_group", groupName, "rule", ne.rule,
+						"source", se.Source, "error", se.Err.Error())
+				}
+				if res.SendError != nil {
+					log.Error("sending alerts to alertmanager failed",
+						"rule_group", groupName, "rule", ne.rule,
+						"error", res.SendError.Error())
 				}
 				m.AlertsActive.WithLabelValues(groupName, ne.rule, "pending").Set(float64(res.Pending))
 				m.AlertsActive.WithLabelValues(groupName, ne.rule, "firing").Set(float64(res.Firing))
@@ -185,5 +208,9 @@ func (s *Scheduler) Shutdown(timeout time.Duration) {
 	select {
 	case <-done:
 	case <-time.After(timeout):
+		// The only signal an operator gets that a query or a send was cut off
+		// part way through.
+		s.log.Warn("shutdown timeout expired with evaluations still running",
+			"timeout", timeout.String())
 	}
 }

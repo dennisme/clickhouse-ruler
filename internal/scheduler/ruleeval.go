@@ -6,6 +6,7 @@ package scheduler
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"time"
 
@@ -21,12 +22,33 @@ type Querier interface {
 	Run(ctx context.Context, r rule.Rule, now time.Time) ([]alert.Sample, error)
 }
 
+// Reasons a source produced no samples that are not the query's own error.
+var (
+	// errNoQuerier means the rule matched a source the ruler holds no
+	// connection for, which is a configuration mismatch rather than an
+	// outage.
+	errNoQuerier = errors.New("no connection open for this source")
+
+	// errQueueAbandoned means shutdown arrived while the query was still
+	// queued behind the concurrency limit, so it never ran.
+	errQueueAbandoned = errors.New("shutdown before the query started")
+)
+
+// SourceError names a source whose query failed this evaluation, and why.
+type SourceError struct {
+	Source string
+	Err    error
+}
+
 // Result reports what one evaluation of a rule did, for the caller to fold
-// into metrics.
+// into metrics and logs.
 type Result struct {
-	// QueryErrors counts sources whose query failed this evaluation. The
-	// source's alert.State is left untouched, so its `for` timer survives.
-	QueryErrors int
+	// QueryErrors holds one entry per source whose query failed this
+	// evaluation, in source order. The source's alert.State is left
+	// untouched, so its `for` timer survives. The error is carried rather
+	// than counted because a counter alone tells an operator that something
+	// failed without saying which source or what it said.
+	QueryErrors []SourceError
 
 	// SendError is set when Cadence failed to reach Alertmanager. The alert
 	// state has already been advanced regardless: a notification failure is
@@ -87,7 +109,7 @@ func (e *RuleEval) Evaluate(ctx context.Context, now time.Time) Result {
 
 	type sourceResult struct {
 		alerts []alert.Alert
-		failed bool
+		err    error
 	}
 	results := make([]sourceResult, len(e.rule.Sources))
 
@@ -95,7 +117,7 @@ func (e *RuleEval) Evaluate(ctx context.Context, now time.Time) Result {
 	for i, src := range e.rule.Sources {
 		q, ok := e.queriers[src.Name]
 		if !ok {
-			results[i].failed = true
+			results[i].err = errNoQuerier
 			continue
 		}
 
@@ -108,14 +130,14 @@ func (e *RuleEval) Evaluate(ctx context.Context, now time.Time) Result {
 				// Shutdown arrived while this query was still queued behind
 				// the limit. Leaving state untouched is the same outcome as
 				// a failed query, and the timers survive either way.
-				results[i].failed = true
+				results[i].err = errQueueAbandoned
 				return
 			}
 			samples, err := q.Run(ctx, e.rule.Rule, now)
 			release()
 
 			if err != nil {
-				results[i].failed = true
+				results[i].err = err
 				return
 			}
 			// State.Eval returns every instance still tracked, pending and
@@ -126,9 +148,9 @@ func (e *RuleEval) Evaluate(ctx context.Context, now time.Time) Result {
 	wg.Wait()
 
 	var current []alert.Alert
-	for _, r := range results {
-		if r.failed {
-			res.QueryErrors++
+	for i, r := range results {
+		if r.err != nil {
+			res.QueryErrors = append(res.QueryErrors, SourceError{Source: e.rule.Sources[i].Name, Err: r.err})
 			continue
 		}
 		current = append(current, r.alerts...)
