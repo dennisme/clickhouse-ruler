@@ -205,7 +205,8 @@ runs anyway.
 | `--config` | `ruler.yaml` beside `--rules` | policy file |
 | `--listen` | `:9090` | address for `/metrics`, `/-/healthy`, `/-/ready` |
 | `--query-concurrency` | `8` | rule queries allowed against ClickHouse at once, across every group; `0` is unbounded |
-| `--resend-interval` | `100s` | how often a still-firing alert is re-posted; each alert is sent an expiry of four times this |
+| `--resend-interval` | `100s` | how often a still-firing alert is re-posted |
+| `--resend-tolerance` | `4` | how many resend periods a firing alert stays valid for, so how many consecutive failed evaluations or sends it survives. `4` is Prometheus' own number. Minimum `2` |
 | `--shutdown-timeout` | `30s` | how long an in-flight evaluation gets to finish once shutdown starts |
 | `--log-level` | `info` | `debug`, `info`, `warn` or `error` |
 
@@ -438,8 +439,10 @@ Working:
   staggers groups so they do not stampede ClickHouse, evaluates rules and their
   sources concurrently under a shared query limit, and shuts down without
   cutting an evaluation off
-- A resend cadence, so a still-firing alert is re-posted and carries an expiry
-  Alertmanager will not time out early
+- A resend cadence, so a still-firing alert is re-posted and carries its own
+  expiry rather than inheriting Alertmanager's `resolve_timeout`. How much
+  failure that expiry tolerates is `--resend-tolerance`, defaulting to what
+  Prometheus gives itself
 - Metrics on `/metrics`, with `/-/healthy` and `/-/ready`, and structured logs
   naming the rule and source behind every failure
 - A ClickHouse and Alertmanager compose stack, with an end to end test that

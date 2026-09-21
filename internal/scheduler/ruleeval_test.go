@@ -70,7 +70,7 @@ func TestRuleEvalKeepsForTimerAcrossEvaluations(t *testing.T) {
 	r := testRule(time.Minute)
 	q := &fakeQuerier{samples: oneSample()}
 	sender := &recordingSender{}
-	eval := NewRuleEval(r, map[string]Querier{"src1": q}, notify.NewCadence(sender, 5*time.Minute), newSemaphore(0))
+	eval := NewRuleEval(r, map[string]Querier{"src1": q}, notify.NewCadence(sender, 5*time.Minute, notify.DefaultResendTolerance), newSemaphore(0))
 
 	now := time.Now()
 	eval.Evaluate(context.Background(), now)
@@ -96,7 +96,7 @@ func TestRuleEvalLeavesStateIntactAcrossAQueryFailure(t *testing.T) {
 	r := testRule(time.Minute)
 	q := &fakeQuerier{samples: oneSample()}
 	sender := &recordingSender{}
-	eval := NewRuleEval(r, map[string]Querier{"src1": q}, notify.NewCadence(sender, 5*time.Minute), newSemaphore(0))
+	eval := NewRuleEval(r, map[string]Querier{"src1": q}, notify.NewCadence(sender, 5*time.Minute, notify.DefaultResendTolerance), newSemaphore(0))
 
 	now := time.Now()
 	eval.Evaluate(context.Background(), now)
@@ -124,7 +124,7 @@ func TestRuleEvalSurvivesAnAlertmanagerOutage(t *testing.T) {
 	r := testRule(0)
 	q := &fakeQuerier{samples: oneSample()}
 	sender := &recordingSender{err: errors.New("alertmanager unreachable")}
-	eval := NewRuleEval(r, map[string]Querier{"src1": q}, notify.NewCadence(sender, 5*time.Minute), newSemaphore(0))
+	eval := NewRuleEval(r, map[string]Querier{"src1": q}, notify.NewCadence(sender, 5*time.Minute, notify.DefaultResendTolerance), newSemaphore(0))
 
 	now := time.Now()
 	res := eval.Evaluate(context.Background(), now)
@@ -147,7 +147,7 @@ func TestRuleEvalSurvivesAnAlertmanagerOutage(t *testing.T) {
 func TestRuleEvalWithNoMatchedSourcesDoesNothing(t *testing.T) {
 	r := ruleset.Rule{Rule: rule.Rule{Alert: "Unmatched"}, Labels: map[string]string{}}
 	sender := &recordingSender{}
-	eval := NewRuleEval(r, map[string]Querier{}, notify.NewCadence(sender, time.Minute), newSemaphore(0))
+	eval := NewRuleEval(r, map[string]Querier{}, notify.NewCadence(sender, time.Minute, notify.DefaultResendTolerance), newSemaphore(0))
 
 	res := eval.Evaluate(context.Background(), time.Now())
 	if len(res.QueryErrors) != 0 {
@@ -170,7 +170,7 @@ func TestRuleEvalReportsWhichSourceFailedAndWhy(t *testing.T) {
 		"src1": &fakeQuerier{samples: oneSample()},
 		"src2": &fakeQuerier{err: refused},
 	}
-	eval := NewRuleEval(r, queriers, notify.NewCadence(&recordingSender{}, time.Minute), newSemaphore(0))
+	eval := NewRuleEval(r, queriers, notify.NewCadence(&recordingSender{}, time.Minute, notify.DefaultResendTolerance), newSemaphore(0))
 
 	res := eval.Evaluate(context.Background(), time.Now())
 	if len(res.QueryErrors) != 1 {
@@ -188,7 +188,7 @@ func TestRuleEvalReportsWhichSourceFailedAndWhy(t *testing.T) {
 // every tick. It reports like any other failed source so it can be logged.
 func TestRuleEvalReportsASourceWithNoQuerier(t *testing.T) {
 	eval := NewRuleEval(testRule(0), map[string]Querier{},
-		notify.NewCadence(&recordingSender{}, time.Minute), newSemaphore(0))
+		notify.NewCadence(&recordingSender{}, time.Minute, notify.DefaultResendTolerance), newSemaphore(0))
 
 	res := eval.Evaluate(context.Background(), time.Now())
 	if len(res.QueryErrors) != 1 {

@@ -33,7 +33,7 @@ func (s *instrumentedSender) Send(ctx context.Context, alerts []alert.Alert, ann
 
 // NewCadence builds the notify.Cadence a Scheduler sends through, wrapping
 // sender with the instrumentation spec 8.2 asks for.
-func NewCadence(sender notify.Sender, alertmanager string, interval time.Duration, metrics *Metrics, clock Clock) *notify.Cadence {
+func NewCadence(sender notify.Sender, alertmanager string, interval time.Duration, tolerance int, metrics *Metrics, clock Clock) *notify.Cadence {
 	instrumented := &instrumentedSender{inner: sender, alertmanager: alertmanager, metrics: metrics, clock: clock}
-	return notify.NewCadence(instrumented, interval)
+	return notify.NewCadence(instrumented, interval, tolerance)
 }
