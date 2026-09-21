@@ -24,8 +24,9 @@ const sinkPort = 9099
 type delivery struct {
 	Status string `json:"status"`
 	Alerts []struct {
-		Status string            `json:"status"`
-		Labels map[string]string `json:"labels"`
+		Status      string            `json:"status"`
+		Labels      map[string]string `json:"labels"`
+		Annotations map[string]string `json:"annotations"`
 	} `json:"alerts"`
 }
 
@@ -188,6 +189,15 @@ func TestRunEndToEndFiringAlertReachesAlertmanager(t *testing.T) {
 				continue
 			}
 			found = true
+
+			// The annotation is rendered from the rule's template, not
+			// passed through: proving the scheduler's send path renders it
+			// needs the expanded text, and the run-unique service name is
+			// what makes the expansion visible rather than merely present.
+			if want := serviceName + " is slow"; a.Annotations["summary"] != want {
+				t.Errorf("delivered summary = %q, want %q", a.Annotations["summary"], want)
+			}
+
 			if a.Labels["alertname"] != "CheckoutIsSlow" {
 				t.Errorf("delivered alertname = %q, want CheckoutIsSlow", a.Labels["alertname"])
 			}

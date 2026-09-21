@@ -55,40 +55,20 @@ func TestLoadWarnsWhenNoSourceMatches(t *testing.T) {
 	}
 }
 
-// An alert name is the alert's identity, and the per-rule metrics in spec
-// 8.2 are labelled by it alone, so two rules sharing a name collide into one
-// series no matter which file each lives in. A single file cannot see the
-// clash, which is why the whole loaded set has to be checked.
-func TestLoadRejectsDuplicateAlertNamesAcrossFiles(t *testing.T) {
+// Two teams may use the same alert name. An alert's identity is its full
+// label set, and rules in different files reach different sources, so their
+// alerts already differ by team and source in the fingerprint. Requiring
+// globally unique names would push authors into PaymentsHighErrorRate
+// prefixes, re-encoding in the name what 6.3.1 says belongs in labels.
+//
+// Asserted rather than left unchecked, so the decision is pinned and the
+// check is not quietly reintroduced later.
+func TestLoadAllowsDuplicateAlertNamesAcrossFiles(t *testing.T) {
 	_, problems := Load(filepath.Join("testdata", "duplicate_names"), loadSources(t), nil)
-
-	var found int
-	for _, p := range problems {
-		if p.Check != "rule/name" {
-			continue
-		}
-		found++
-		if p.Severity != lint.SeverityError {
-			t.Errorf("severity = %v, want error: a duplicate name is a correctness failure (spec 7.6)", p.Severity)
-		}
-		if p.Subject != "HighP99Latency" {
-			t.Errorf("subject = %q, want HighP99Latency", p.Subject)
-		}
-	}
-	if found != 1 {
-		t.Fatalf("got %d rule/name findings, want exactly 1 (the second occurrence), problems: %v", found, problems)
-	}
-}
-
-// The same name in two files is a clash; the same name loaded once is not.
-// Reporting the whole tree as duplicated because a file was walked twice
-// would make the check useless.
-func TestLoadAcceptsDistinctAlertNamesAcrossFiles(t *testing.T) {
-	_, problems := Load(filepath.Join("testdata", "rules"), loadSources(t), nil)
 
 	for _, p := range problems {
 		if p.Check == "rule/name" {
-			t.Errorf("unexpected rule/name finding on a tree with distinct names: %s", p)
+			t.Errorf("unexpected rule/name finding: the same name in two files is legitimate: %s", p)
 		}
 	}
 }

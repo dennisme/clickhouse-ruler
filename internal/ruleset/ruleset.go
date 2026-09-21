@@ -26,7 +26,6 @@ const (
 	checkDirectory   = "ruleset/directory"
 	checkSourceMatch = "rule/source-match"
 	checkProtected   = "rule/protected-label"
-	checkRuleName    = "rule/name"
 )
 
 // Rule is one rule with everything needed to evaluate it resolved: the file it
@@ -81,58 +80,7 @@ func Load(dir string, sources *source.File, root *policy.Policy) (*Set, []lint.P
 		set.Rules = append(set.Rules, loaded...)
 		problems = append(problems, found...)
 	}
-	problems = append(problems, duplicateNames(set.Rules)...)
 	return set, problems
-}
-
-// duplicateNames reports an alert name used by more than one rule in the tree.
-//
-// Within a file this is already caught during validation, so only clashes
-// that span files are reported here; catching them needs the whole tree,
-// which a single file parse does not have.
-//
-// It is an error rather than a convention, for the same reason an empty name
-// is: the name is the alert's identity. Two rules sharing one collide in the
-// per-rule metrics of spec 8.2, which carry the rule name and nothing else,
-// so one rule's evaluation counts and alert totals are silently folded into
-// the other's. It also makes routing on `alertname` ambiguous, and a page
-// naming a rule that could be either of two files is a bad thing to read at
-// three in the morning.
-func duplicateNames(rules []Rule) []lint.Problem {
-	type origin struct {
-		file string
-		line int
-	}
-	firstSeen := map[string]origin{}
-	var out []lint.Problem
-
-	for _, r := range rules {
-		if r.Alert == "" {
-			// Already reported as a missing name; there is nothing to clash.
-			continue
-		}
-		first, seen := firstSeen[r.Alert]
-		if !seen {
-			firstSeen[r.Alert] = origin{file: r.File, line: r.Line()}
-			continue
-		}
-		if first.file == r.File {
-			continue
-		}
-		out = append(out, lint.Problem{
-			File:     r.File,
-			Line:     r.Line(),
-			Subject:  r.Alert,
-			Check:    checkRuleName,
-			Severity: lint.SeverityError,
-			Text: fmt.Sprintf(
-				"duplicate alert name %q, already defined at %s:%d. An alert name is its "+
-					"identity and the only label the per-rule metrics carry, so two rules "+
-					"sharing one report as a single series",
-				r.Alert, first.file, first.line),
-		})
-	}
-	return out
 }
 
 // ruleFiles walks dir for rule files, sorted so that problems come back in a

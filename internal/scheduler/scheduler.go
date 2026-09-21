@@ -129,8 +129,8 @@ func evalGroup(groupName string, evals []namedEval, m *Metrics) func(context.Con
 				if res.QueryErrors > 0 {
 					m.EvaluationFailuresTotal.WithLabelValues(groupName, ne.rule).Add(float64(res.QueryErrors))
 				}
-				m.AlertsActive.WithLabelValues(ne.rule, "pending").Set(float64(res.Pending))
-				m.AlertsActive.WithLabelValues(ne.rule, "firing").Set(float64(res.Firing))
+				m.AlertsActive.WithLabelValues(groupName, ne.rule, "pending").Set(float64(res.Pending))
+				m.AlertsActive.WithLabelValues(groupName, ne.rule, "firing").Set(float64(res.Firing))
 			}(ne)
 		}
 		wg.Wait()

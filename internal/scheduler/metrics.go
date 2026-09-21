@@ -78,10 +78,14 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 			Help: "Duration of the last rule group evaluation.",
 		}, []string{"rule_group"}),
 
+		// Carries the group as well as the rule because an alert name may
+		// legitimately repeat across groups (spec 7.6), and without it two
+		// same-named rules would report into one series. Still a count per
+		// rule, never a series per alert instance (spec 8.3).
 		AlertsActive: f.NewGaugeVec(prometheus.GaugeOpts{
 			Name: "ruler_alerts_active",
 			Help: "Number of alert instances currently tracked, by state.",
-		}, []string{"rule", "state"}),
+		}, []string{"rule_group", "rule", "state"}),
 
 		AlertsSentTotal: f.NewCounterVec(prometheus.CounterOpts{
 			Name: "ruler_alerts_sent_total",

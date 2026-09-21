@@ -11,6 +11,7 @@ import (
 
 const (
 	checkRuleName            = "rule/name"
+	checkRuleGroupName       = "rule/group-name"
 	checkRuleExpr            = "rule/expr"
 	checkLabelsRequired      = "labels/required"
 	checkAnnotationsRequired = "annotations/required"
@@ -44,15 +45,33 @@ func Validate(f *RuleFile, policyFor func(Rule) *policy.Policy) []lint.Problem {
 	}
 	v := &validator{file: f.File, policyFor: policyFor}
 
-	// Alert names are checked across the whole file rather than per group.
-	// The name is the alert's identity and the only label the per-rule
-	// metrics in spec 8.2 carry, so two rules sharing one collide in the
-	// metrics and in Alertmanager no matter which group each sits in.
-	namedAt := map[string]int{}
+	// A group's identity is (file, name): that is what the scheduler keys a
+	// group by and what the rule_group metric label carries, so two groups
+	// sharing a name in one file become one series with two goroutines
+	// reporting into it. The same name in a different file is fine, which
+	// is that identity working rather than a gap.
+	groupAt := map[string]int{}
+
 	for _, g := range f.Groups {
-		v.group(g, namedAt)
+		v.groupName(g, groupAt)
+		v.group(g)
 	}
 	return v.problems
+}
+
+func (v *validator) groupName(g Group, groupAt map[string]int) {
+	line := g.lineOf("name")
+
+	if g.Name == "" {
+		v.addGroup(g, line, checkRuleGroupName, "group name is empty")
+		return
+	}
+	if first, ok := groupAt[g.Name]; ok {
+		v.addGroup(g, line, checkRuleGroupName,
+			"duplicate group name %q, first defined on line %d", g.Name, first)
+		return
+	}
+	groupAt[g.Name] = line
 }
 
 type validator struct {
@@ -68,6 +87,19 @@ func (v *validator) add(r Rule, line int, check string, format string, args ...a
 		File:     v.file,
 		Line:     line,
 		Subject:  r.Alert,
+		Check:    check,
+		Severity: lint.SeverityError,
+		Text:     fmt.Sprintf(format, args...),
+	})
+}
+
+// addGroup reports a correctness failure that belongs to a group rather than
+// to one of its rules, so the subject is the group's own name.
+func (v *validator) addGroup(g Group, line int, check string, format string, args ...any) {
+	v.problems = append(v.problems, lint.Problem{
+		File:     v.file,
+		Line:     line,
+		Subject:  g.Name,
 		Check:    check,
 		Severity: lint.SeverityError,
 		Text:     fmt.Sprintf(format, args...),
@@ -94,9 +126,15 @@ func (v *validator) addPolicy(r Rule, line int, check string, format string, arg
 	})
 }
 
-func (v *validator) group(g Group, namedAt map[string]int) {
+func (v *validator) group(g Group) {
+	// An alert's identity is its full label set, not its name, so the same
+	// name in another group is a different alert: group labels are part of
+	// that set. Uniqueness is therefore scoped to the group rather than to
+	// the file or the tree (spec 6.3, 7.6).
+	namedAt := map[string]int{}
+
 	for _, r := range g.Rules {
-		v.ruleName(r, namedAt)
+		v.ruleName(g, r, namedAt)
 		v.ruleExpr(r)
 		v.requiredKeys(r, "labels", "label", checkLabelsRequired, g.EffectiveLabels(r))
 		v.requiredKeys(r, "annotations", "annotation", checkAnnotationsRequired, r.Annotations)
@@ -106,7 +144,7 @@ func (v *validator) group(g Group, namedAt map[string]int) {
 	}
 }
 
-func (v *validator) ruleName(r Rule, namedAt map[string]int) {
+func (v *validator) ruleName(g Group, r Rule, namedAt map[string]int) {
 	line := r.LineOf("alert")
 
 	if r.Alert == "" {
@@ -115,7 +153,8 @@ func (v *validator) ruleName(r Rule, namedAt map[string]int) {
 	}
 	if first, ok := namedAt[r.Alert]; ok {
 		v.add(r, line, checkRuleName,
-			"duplicate alert name %q, first defined on line %d", r.Alert, first)
+			"duplicate alert name %q in group %q, first defined on line %d",
+			r.Alert, g.Name, first)
 		return
 	}
 	namedAt[r.Alert] = line
