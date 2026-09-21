@@ -8,6 +8,10 @@ import (
 	"github.com/dennisme/clickhouse-ruler/internal/alert"
 )
 
+// testEvalInterval is shorter than every cadence these tests use, so the
+// cadence interval is what paces a resend and the group interval never is.
+const testEvalInterval = time.Second
+
 // recordingSender stands in for a Client, so cadence logic can be tested
 // without an HTTP server or the real retry path.
 type recordingSender struct {
@@ -35,7 +39,7 @@ func TestCadenceSendsAFiringAlertTheFirstTime(t *testing.T) {
 	c := NewCadence(s, time.Minute)
 
 	now := time.Now()
-	if err := c.Send(context.Background(), now, []alert.Alert{firing(1)}, nil); err != nil {
+	if err := c.Send(context.Background(), now, testEvalInterval, []alert.Alert{firing(1)}, nil); err != nil {
 		t.Fatalf("Send: %v", err)
 	}
 	if len(s.calls) != 1 || len(s.calls[0]) != 1 {
@@ -51,12 +55,12 @@ func TestCadenceDropsAFiringAlertBeforeItsCadenceElapses(t *testing.T) {
 	c := NewCadence(s, time.Minute)
 
 	now := time.Now()
-	if err := c.Send(context.Background(), now, []alert.Alert{firing(1)}, nil); err != nil {
+	if err := c.Send(context.Background(), now, testEvalInterval, []alert.Alert{firing(1)}, nil); err != nil {
 		t.Fatalf("Send: %v", err)
 	}
 
 	// Well inside the one minute cadence.
-	if err := c.Send(context.Background(), now.Add(10*time.Second), []alert.Alert{firing(1)}, nil); err != nil {
+	if err := c.Send(context.Background(), now.Add(10*time.Second), testEvalInterval, []alert.Alert{firing(1)}, nil); err != nil {
 		t.Fatalf("Send: %v", err)
 	}
 
@@ -72,10 +76,10 @@ func TestCadenceResendsAFiringAlertOnceItsCadenceElapses(t *testing.T) {
 	c := NewCadence(s, time.Minute)
 
 	now := time.Now()
-	if err := c.Send(context.Background(), now, []alert.Alert{firing(1)}, nil); err != nil {
+	if err := c.Send(context.Background(), now, testEvalInterval, []alert.Alert{firing(1)}, nil); err != nil {
 		t.Fatalf("Send: %v", err)
 	}
-	if err := c.Send(context.Background(), now.Add(time.Minute), []alert.Alert{firing(1)}, nil); err != nil {
+	if err := c.Send(context.Background(), now.Add(time.Minute), testEvalInterval, []alert.Alert{firing(1)}, nil); err != nil {
 		t.Fatalf("Send: %v", err)
 	}
 
@@ -92,11 +96,11 @@ func TestCadenceAlwaysSendsAResolvedAlert(t *testing.T) {
 	c := NewCadence(s, time.Minute)
 
 	now := time.Now()
-	if err := c.Send(context.Background(), now, []alert.Alert{firing(1)}, nil); err != nil {
+	if err := c.Send(context.Background(), now, testEvalInterval, []alert.Alert{firing(1)}, nil); err != nil {
 		t.Fatalf("Send: %v", err)
 	}
 	// Resolved arrives on the very next evaluation, well inside the cadence.
-	if err := c.Send(context.Background(), now.Add(time.Second), []alert.Alert{resolved(1)}, nil); err != nil {
+	if err := c.Send(context.Background(), now.Add(time.Second), testEvalInterval, []alert.Alert{resolved(1)}, nil); err != nil {
 		t.Fatalf("Send: %v", err)
 	}
 
@@ -116,16 +120,78 @@ func TestCadenceRetriesAfterASendFailureWithoutWaitingForCadence(t *testing.T) {
 	c := NewCadence(s, time.Minute)
 
 	now := time.Now()
-	if err := c.Send(context.Background(), now, []alert.Alert{firing(1)}, nil); err == nil {
+	if err := c.Send(context.Background(), now, testEvalInterval, []alert.Alert{firing(1)}, nil); err == nil {
 		t.Fatal("want error from a failing sender")
 	}
 
 	s.err = nil
-	if err := c.Send(context.Background(), now.Add(time.Second), []alert.Alert{firing(1)}, nil); err != nil {
+	if err := c.Send(context.Background(), now.Add(time.Second), testEvalInterval, []alert.Alert{firing(1)}, nil); err != nil {
 		t.Fatalf("Send: %v", err)
 	}
 
 	if len(s.calls) != 2 || len(s.calls[1]) != 1 {
 		t.Fatalf("got %v, want the retry to include the alert", s.calls)
+	}
+}
+
+// A firing alert has to tell Alertmanager how long to hold it, or expiry
+// falls back to a resolve_timeout the ruler cannot read. Four resend
+// intervals absorbs three consecutive failed sends before Alertmanager
+// wrongly resolves it.
+func TestCadenceStampsValidityFromTheCadenceInterval(t *testing.T) {
+	s := &recordingSender{}
+	c := NewCadence(s, time.Minute)
+
+	now := time.Now()
+	if err := c.Send(context.Background(), now, testEvalInterval, []alert.Alert{firing(1)}, nil); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+
+	if len(s.calls) != 1 || len(s.calls[0]) != 1 {
+		t.Fatalf("got %v, want one call with one alert", s.calls)
+	}
+	want := now.Add(4 * time.Minute)
+	if got := s.calls[0][0].ValidUntil; !got.Equal(want) {
+		t.Errorf("ValidUntil = %v, want %v", got, want)
+	}
+}
+
+// A group ticking slower than the cadence is what actually paces the resend,
+// because Cadence cannot send between evaluations it is never called on. A
+// validity sized off the cadence alone would expire in that gap.
+func TestCadenceStampsValidityFromTheGroupIntervalWhenItIsLonger(t *testing.T) {
+	s := &recordingSender{}
+	c := NewCadence(s, time.Minute)
+
+	now := time.Now()
+	if err := c.Send(context.Background(), now, 10*time.Minute, []alert.Alert{firing(1)}, nil); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+
+	if len(s.calls) != 1 || len(s.calls[0]) != 1 {
+		t.Fatalf("got %v, want one call with one alert", s.calls)
+	}
+	want := now.Add(40 * time.Minute)
+	if got := s.calls[0][0].ValidUntil; !got.Equal(want) {
+		t.Errorf("ValidUntil = %v, want %v", got, want)
+	}
+}
+
+// A resolved alert ends when it resolved. Stamping a future validity on it
+// would tell Alertmanager to keep holding an alert that is no longer true.
+func TestCadenceLeavesAResolvedAlertWithoutValidity(t *testing.T) {
+	s := &recordingSender{}
+	c := NewCadence(s, time.Minute)
+
+	now := time.Now()
+	if err := c.Send(context.Background(), now, testEvalInterval, []alert.Alert{resolved(1)}, nil); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+
+	if len(s.calls) != 1 || len(s.calls[0]) != 1 {
+		t.Fatalf("got %v, want one call with one alert", s.calls)
+	}
+	if got := s.calls[0][0].ValidUntil; !got.IsZero() {
+		t.Errorf("ValidUntil = %v, want zero on a resolved alert", got)
 	}
 }

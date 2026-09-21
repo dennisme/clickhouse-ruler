@@ -35,10 +35,58 @@ func TestPayloadMapsFiringAlert(t *testing.T) {
 	if p.StartsAt != payloadAnchor.Format(time.RFC3339Nano) {
 		t.Errorf("startsAt = %q, want %q", p.StartsAt, payloadAnchor.Format(time.RFC3339Nano))
 	}
-	// An endsAt in the future tells Alertmanager the alert is still active.
-	// Sending one on a firing alert would resolve it immediately.
+	// Without a validity this alert falls back to Alertmanager's own
+	// resolve_timeout, which is the behaviour an unset endsAt asks for.
 	if p.EndsAt != "" {
-		t.Errorf("endsAt = %q, want empty while firing", p.EndsAt)
+		t.Errorf("endsAt = %q, want empty when the alert carries no validity", p.EndsAt)
+	}
+}
+
+// A firing alert's endsAt is how long Alertmanager should hold it without
+// hearing again. Carrying it on the alert is what decouples expiry from
+// Alertmanager's resolve_timeout, which the ruler cannot read.
+func TestPayloadSendsValidUntilAsEndsAtWhileFiring(t *testing.T) {
+	validUntil := payloadAnchor.Add(400 * time.Second)
+	a := alert.Alert{
+		Labels:     map[string]string{"alertname": "HighP99Latency"},
+		Phase:      alert.PhaseFiring,
+		FiredAt:    payloadAnchor,
+		ValidUntil: validUntil,
+	}
+
+	got, err := Payload([]alert.Alert{a}, nil)
+	if err != nil {
+		t.Fatalf("Payload: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d payloads, want 1", len(got))
+	}
+	if got[0].EndsAt != validUntil.Format(time.RFC3339Nano) {
+		t.Errorf("endsAt = %q, want %q", got[0].EndsAt, validUntil.Format(time.RFC3339Nano))
+	}
+}
+
+// A resolved alert ended when it resolved, not when its validity ran out, so
+// the validity it was carrying while firing must not override that.
+func TestPayloadPrefersResolvedAtOverValidUntil(t *testing.T) {
+	resolvedAt := payloadAnchor.Add(time.Minute)
+	a := alert.Alert{
+		Labels:     map[string]string{"alertname": "HighP99Latency"},
+		Phase:      alert.PhaseResolved,
+		FiredAt:    payloadAnchor,
+		ResolvedAt: resolvedAt,
+		ValidUntil: payloadAnchor.Add(400 * time.Second),
+	}
+
+	got, err := Payload([]alert.Alert{a}, nil)
+	if err != nil {
+		t.Fatalf("Payload: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d payloads, want 1", len(got))
+	}
+	if got[0].EndsAt != resolvedAt.Format(time.RFC3339Nano) {
+		t.Errorf("endsAt = %q, want %q", got[0].EndsAt, resolvedAt.Format(time.RFC3339Nano))
 	}
 }
 

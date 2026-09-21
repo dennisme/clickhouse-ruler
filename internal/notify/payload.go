@@ -9,8 +9,9 @@ import (
 // Alert is one entry in an Alertmanager POST /api/v2/alerts body.
 //
 // Times are strings rather than time.Time so that an unset endsAt marshals as
-// an absent field. Alertmanager treats a zero endsAt as "resolve now", so
-// emitting one on a firing alert would resolve it the instant it fired.
+// an absent field. Alertmanager reads an absent endsAt as "hold this for my
+// own resolve_timeout", and an endsAt in the past as resolved, so the field
+// decides when an alert expires and a wrong one resolves it early.
 type Alert struct {
 	Labels      map[string]string `json:"labels"`
 	Annotations map[string]string `json:"annotations,omitempty"`
@@ -23,6 +24,10 @@ type Alert struct {
 // Pending alerts are dropped. A `for` duration exists precisely so that a
 // condition which has not held long enough does not page, and Prometheus
 // notifies on firing and resolved only.
+//
+// A firing alert's endsAt is its validity, so the ruler decides when
+// Alertmanager may expire it. A resolved alert's is when it resolved, which
+// outranks whatever validity it was carrying while it fired.
 func Payload(alerts []alert.Alert, annotations map[string]string) ([]Alert, error) {
 	out := make([]Alert, 0, len(alerts))
 
@@ -40,6 +45,7 @@ func Payload(alerts []alert.Alert, annotations map[string]string) ([]Alert, erro
 			Labels:      a.Labels,
 			Annotations: rendered,
 			StartsAt:    format(a.FiredAt),
+			EndsAt:      format(a.ValidUntil),
 		}
 		if a.Phase == alert.PhaseResolved {
 			entry.EndsAt = format(a.ResolvedAt)

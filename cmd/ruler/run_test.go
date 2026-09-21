@@ -57,3 +57,25 @@ func TestRunRefusesToStartOnAnErrorSeverityFinding(t *testing.T) {
 		t.Errorf("expected a refusal message, got:\n%s", stderr)
 	}
 }
+
+// A resend interval of zero or less would post every firing alert on every
+// evaluation and stamp it with an expiry already in the past, which
+// Alertmanager reads as resolved. Refuse it rather than page nobody.
+func TestRunRejectsANonPositiveResendInterval(t *testing.T) {
+	dir := fixture(t, bareRule, "")
+
+	for _, interval := range []string{"0", "-1m"} {
+		code, stderr := runRunCmd(t, "run",
+			"--rules", filepath.Join(dir, "rules"),
+			"--sources", filepath.Join(dir, "sources.yaml"),
+			"--alertmanager", "http://127.0.0.1:9093",
+			"--resend-interval", interval)
+
+		if code != exitUsage {
+			t.Errorf("--resend-interval %s: exit = %d, want exitUsage\n%s", interval, code, stderr)
+		}
+		if !strings.Contains(stderr, "--resend-interval must be positive") {
+			t.Errorf("--resend-interval %s: expected the reason on stderr, got:\n%s", interval, stderr)
+		}
+	}
+}

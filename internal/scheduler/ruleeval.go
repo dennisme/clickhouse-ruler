@@ -146,6 +146,6 @@ func (e *RuleEval) Evaluate(ctx context.Context, now time.Time) Result {
 	if len(current) == 0 {
 		return res
 	}
-	res.SendError = e.cadence.Send(ctx, now, current, e.rule.Annotations)
+	res.SendError = e.cadence.Send(ctx, now, e.rule.Group.Interval, current, e.rule.Annotations)
 	return res
 }
