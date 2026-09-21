@@ -13,9 +13,12 @@
 # label is always a brand new group and flushes after group_wait rather than
 # waiting for the next tick or being suppressed as a repeat. The short waits
 # then only have to cover the flush itself.
-global:
-  resolve_timeout: 1m
-
+#
+# resolve_timeout is left at Alertmanager's own default (5m) deliberately:
+# the ruler does not read this file, it just assumes the default and resends
+# a firing alert at roughly a third of it (notify.DefaultResendInterval).
+# Lowering resolve_timeout here without also touching that constant would let
+# Alertmanager expire an alert the ruler still believes is firing.
 route:
   receiver: sink
   group_by: ["..."]

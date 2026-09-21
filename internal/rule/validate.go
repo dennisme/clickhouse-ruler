@@ -11,6 +11,7 @@ import (
 
 const (
 	checkRuleName            = "rule/name"
+	checkRuleGroupName       = "rule/group-name"
 	checkRuleExpr            = "rule/expr"
 	checkLabelsRequired      = "labels/required"
 	checkAnnotationsRequired = "annotations/required"
@@ -43,10 +44,34 @@ func Validate(f *RuleFile, policyFor func(Rule) *policy.Policy) []lint.Problem {
 		policyFor = func(Rule) *policy.Policy { return policy.Defaults() }
 	}
 	v := &validator{file: f.File, policyFor: policyFor}
+
+	// A group's identity is (file, name): that is what the scheduler keys a
+	// group by and what the rule_group metric label carries, so two groups
+	// sharing a name in one file become one series with two goroutines
+	// reporting into it. The same name in a different file is fine, which
+	// is that identity working rather than a gap.
+	groupAt := map[string]int{}
+
 	for _, g := range f.Groups {
+		v.groupName(g, groupAt)
 		v.group(g)
 	}
 	return v.problems
+}
+
+func (v *validator) groupName(g Group, groupAt map[string]int) {
+	line := g.lineOf("name")
+
+	if g.Name == "" {
+		v.addGroup(g, line, checkRuleGroupName, "group name is empty")
+		return
+	}
+	if first, ok := groupAt[g.Name]; ok {
+		v.addGroup(g, line, checkRuleGroupName,
+			"duplicate group name %q, first defined on line %d", g.Name, first)
+		return
+	}
+	groupAt[g.Name] = line
 }
 
 type validator struct {
@@ -62,6 +87,19 @@ func (v *validator) add(r Rule, line int, check string, format string, args ...a
 		File:     v.file,
 		Line:     line,
 		Subject:  r.Alert,
+		Check:    check,
+		Severity: lint.SeverityError,
+		Text:     fmt.Sprintf(format, args...),
+	})
+}
+
+// addGroup reports a correctness failure that belongs to a group rather than
+// to one of its rules, so the subject is the group's own name.
+func (v *validator) addGroup(g Group, line int, check string, format string, args ...any) {
+	v.problems = append(v.problems, lint.Problem{
+		File:     v.file,
+		Line:     line,
+		Subject:  g.Name,
 		Check:    check,
 		Severity: lint.SeverityError,
 		Text:     fmt.Sprintf(format, args...),
@@ -89,8 +127,10 @@ func (v *validator) addPolicy(r Rule, line int, check string, format string, arg
 }
 
 func (v *validator) group(g Group) {
-	// Alert names only have to be unique within their own group, so the set is
-	// scoped here rather than to the file.
+	// An alert's identity is its full label set, not its name, so the same
+	// name in another group is a different alert: group labels are part of
+	// that set. Uniqueness is therefore scoped to the group rather than to
+	// the file or the tree (spec 6.3, 7.6).
 	namedAt := map[string]int{}
 
 	for _, r := range g.Rules {

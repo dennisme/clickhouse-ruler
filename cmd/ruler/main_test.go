@@ -56,6 +56,25 @@ const brokenRule = `groups:
         expr: "SELECT 1 AS value FROM t"
 `
 
+// Two groups sharing a name in one file. Valid YAML and valid rules; the
+// only thing wrong is that the group identity is no longer unique.
+const repeatedGroupRule = `groups:
+  - name: latency
+    interval: 1m
+    rules:
+      - alert: HighLatency
+        sources:
+          team: payments
+        expr: "SELECT 1 AS value FROM t WHERE ts >= {{ .From }} AND ts < {{ .To }}"
+  - name: latency
+    interval: 1m
+    rules:
+      - alert: HighErrorRate
+        sources:
+          team: payments
+        expr: "SELECT 1 AS value FROM t WHERE ts >= {{ .From }} AND ts < {{ .To }}"
+`
+
 const sourcesYAML = `sources:
   - name: otel_traces
     labels: {team: payments}
@@ -143,6 +162,52 @@ func TestCheckGitHubFormat(t *testing.T) {
 		if !strings.HasPrefix(line, "::") {
 			t.Errorf("non-command line on stdout in github mode: %q", line)
 		}
+	}
+}
+
+// Two teams may use the same alert name in their own files. Their alerts
+// differ by team and source in the fingerprint, so this is not a clash, and
+// blocking it would push authors into prefixing names with what already
+// lives in labels (spec 6.3.1, 7.6).
+func TestCheckAllowsDuplicateAlertNamesAcrossFiles(t *testing.T) {
+	dir := fixture(t, bareRule, "")
+
+	// A second file under a different directory, reusing the same name.
+	other := filepath.Join(dir, "rules", "search")
+	if err := os.MkdirAll(other, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(other, "latency.yaml"), []byte(bareRule), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	code, stdout, _ := runCheck(t, "check",
+		"--sources", filepath.Join(dir, "sources.yaml"),
+		filepath.Join(dir, "rules"))
+
+	if code != exitOK {
+		t.Errorf("exit = %d, want 0: the same alert name in two files is legitimate\n%s", code, stdout)
+	}
+	if strings.Contains(stdout, "rule/name") {
+		t.Errorf("unexpected rule/name finding:\n%s", stdout)
+	}
+}
+
+// A group name repeated inside one file is an error. The scheduler keys a
+// group by (file, name), so two of them collapse onto one rule_group metric
+// label and two goroutines report into a single series (spec 7.6, 8.2).
+func TestCheckRejectsRepeatedGroupNameInOneFile(t *testing.T) {
+	dir := fixture(t, repeatedGroupRule, "")
+
+	code, stdout, _ := runCheck(t, "check",
+		"--sources", filepath.Join(dir, "sources.yaml"),
+		filepath.Join(dir, "rules"))
+
+	if code != exitFinding {
+		t.Errorf("exit = %d, want exitFinding for a repeated group name\n%s", code, stdout)
+	}
+	if !strings.Contains(stdout, "rule/group-name") {
+		t.Errorf("expected a rule/group-name finding, got:\n%s", stdout)
 	}
 }
 

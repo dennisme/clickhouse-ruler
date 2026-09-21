@@ -594,6 +594,19 @@ key and value is length-prefixed rather than joined with a separator. Any
 separator byte can appear inside a ClickHouse column value, and a collision
 there would silently merge two different alerts into one instance.
 
+**Two rows reaching the same final label set is an evaluation error, not a
+merge.** This is a different failure from a hash collision: the rows are
+genuinely distinct in the result and become identical only after the label
+rules in 6.3.1 are applied. The precedence order makes it reachable rather
+than exotic, because source labels overwrite result columns: a query grouping
+by a `cluster` column, evaluated against a source whose labels already set
+`cluster`, collapses every row onto one identity. Silently keeping the last
+row would report one arbitrary value and discard the rest, during an
+incident, with nothing in the output to say it happened. Prometheus treats
+the same condition as `ErrDuplicateAlertLabelSet` and fails the evaluation,
+which is the right call: the rule is asking for something it cannot express,
+and the author needs to know.
+
 ### 6.3.1 Label precedence
 
 Four sources contribute labels to an alert, weakest first:
@@ -1024,6 +1037,48 @@ whether it can run depends on which ruler is asking.
 
 ---
 
+### 6.11 Evaluation concurrency
+
+One goroutine per rule group, each ticking on the group's own interval. Group
+starts are staggered across that interval, so twenty groups on `1m` do not all
+fire on the same second and stampede ClickHouse.
+
+**An overrunning evaluation must not queue.** When an evaluation takes longer
+than the interval, the boundaries that passed while it ran are skipped and
+counted in `ruler_rule_group_iterations_missed_total` (8.2), not run late. A
+backlog is how a ruler silently falls behind, and the counter is what makes
+falling behind visible instead.
+
+**Within a group, rules and their sources are evaluated concurrently.**
+Sequential evaluation made a group's tick cost the sum of every query inside
+it, so a group grew slower purely by having rules added to it, until it began
+missing iterations. Each source has its own `alert.State` and they share
+nothing (6.10.1), so parallel evaluation needs no lock.
+
+Concurrency is bounded by a ruler-wide limit on how many queries may be in
+flight at once, rather than by the shape of the configuration. The goroutines
+are not what bounds load; the limit sits around the query itself, so a large
+group queues against it instead of opening a connection per rule.
+
+**The cap is global, and that is a known compromise.** The thing that actually
+needs protecting is each ClickHouse cluster, and one global number is a loose
+proxy: a slow cluster holds slots that rules against every other cluster then
+queue behind, so an outage on one source delays evaluation of sources that are
+perfectly healthy. A per-source limit, sized from what that cluster can take,
+is the shape this probably wants. It is deferred because sizing it needs a
+view of per-source capacity that nothing collects yet, and the query cost
+metrics in 8.2 are what would inform it. See 12.7.
+
+Notification state is shared across every group, so it is guarded. An
+unsynchronised map there is not a subtle race but a fatal "concurrent map
+writes" abort of the whole process, which is the worst available failure for a
+daemon whose job is paging people. The lock is deliberately not held across
+the POST to Alertmanager: holding it there would serialise every group's
+notifications behind one slow Alertmanager, which is the opposite of what
+running groups concurrently is for.
+
+---
+
 ## 7. Validation
 
 Modelled on Cloudflare `pint`, adapted for SQL.
@@ -1275,8 +1330,22 @@ its job:
 
 - `yaml/syntax`, `yaml/unknown-field`. A typo silently drops configuration, so
   the rule does not do what it says.
-- `rule/name`, empty or duplicate. No identity.
-
+- `rule/name`, empty or duplicate within its group. No identity. Uniqueness
+  is scoped to the group and deliberately no wider. An alert's identity is
+  its full label set, not its name, so the same name in another group or
+  another file is a different alert: it carries different group labels, and
+  it reaches different sources, so `team` and `source` already separate the
+  two in the fingerprint. Requiring globally unique names would push authors
+  into `PaymentsHighErrorRate` prefixes, re-encoding in the name exactly what
+  6.3.1 says belongs in labels, and two teams in a shared repository both
+  wanting `HighErrorRate` is normal rather than a mistake. Prometheus makes
+  the same call.
+- `rule/group-name`, empty or repeated within one file. A group's identity is
+  (file, name): that is what the scheduler keys a group by and what the
+  `rule_group` metric label carries, so two groups sharing a name in one file
+  become a single series with two goroutines reporting into it. The same name
+  in a different file is fine, which is that identity working rather than a
+  gap.
 - `rule/expr`, empty or missing `{{ .From }}` or `{{ .To }}`. Cannot run, or
   scans unbounded on every evaluation.
 - `rule/for`, `rule/window`, negative values. Nonsense.
@@ -1466,7 +1535,10 @@ Evaluation:
 
 Alert state and delivery:
 
-- `ruler_alerts_active` gauge, by `rule`, `state` (pending, firing)
+- `ruler_alerts_active` gauge, by `rule_group`, `rule`, `state` (pending,
+  firing). The group is part of the key because an alert name may repeat
+  across groups (7.6), and without it two same-named rules would report into
+  one series. It remains a count per rule, never a series per instance (8.3).
 - `ruler_alerts_sent_total` counter, by `alertmanager`
 - `ruler_alerts_send_failures_total` counter, by `alertmanager`
 - `ruler_notification_latency_seconds` histogram
@@ -1783,6 +1855,48 @@ instances must stay distinct per source. That is a fingerprint question
    which is a confusing way to find out. A check comparing matched sources'
    tables and column types is the obvious fix and needs tier 1 first. See
    6.10.
+7. **Query concurrency is bounded globally, not per source.** A slow cluster
+   holds slots that rules against every other cluster then queue behind, so an
+   outage on one source delays evaluation of sources that are perfectly
+   healthy. A per-source limit is the shape this probably wants, and sizing it
+   needs per-source capacity that nothing collects yet. See 6.11 for the
+   current behaviour and why it was left here.
+
+8. **Duplicate label sets are silently merged.** This and the three after it
+   came out of reading how Prometheus handles the same problems, and all four
+   are confirmed against the current code rather than suspected.
+   Two result rows that reach
+   the same final labels currently collapse into one instance, last row
+   winning, with no finding and no metric. 6.3 says this should fail the
+   evaluation the way `ErrDuplicateAlertLabelSet` does. The fix belongs in
+   `alert.State.Eval`, which is the only place that sees both rows, and it
+   should count into `ruler_rule_evaluation_failures_total` rather than being
+   reported as a notification problem.
+9. **A resolved alert is forgotten before it is known to have been sent.**
+   `State.expire` returns a resolved instance once and deletes it in the same
+   step, so if that notification fails the resolve is gone: no retry, and
+   Alertmanager holds the alert firing until `resolve_timeout` expires it.
+   Prometheus keeps resolved alerts in memory for a further 15 minutes for
+   exactly this reason, and keeps resending them. Retention has to outlive
+   delivery, or the notification-failure guarantee in 6.5 covers firing
+   alerts but quietly not resolves.
+10. **Annotations are not part of an alert instance.** They are rendered at
+    send time from the rule's templates rather than stored on the alert when
+    it is evaluated, which has three consequences. A template that fails to
+    render fails the whole batch, so one bad annotation blocks every other
+    alert from that rule, permanently, because the failure repeats on every
+    retry. The failure is attributed to notification rather than to
+    evaluation, so an operator reading `ruler_alerts_send_failures_total`
+    goes looking at Alertmanager for what is actually a broken template. And
+    a resolved alert re-renders from its last value rather than carrying what
+    it said when it fired. Prometheus templates at evaluation time and stores
+    the result on the alert; doing the same would fix all three.
+11. **The daemon barely logs.** `ruler run` counts query failures and send
+    failures into metrics but writes no log line for either, and
+    `Result.SendError` is discarded by the group evaluator without ever being
+    read. An operator seeing a counter move has nothing telling them which
+    rule, which source, or what the error said. Structured logging of
+    evaluation and notification failures is the missing half of section 8.
 
 ---
 

@@ -55,6 +55,24 @@ func TestLoadWarnsWhenNoSourceMatches(t *testing.T) {
 	}
 }
 
+// Two teams may use the same alert name. An alert's identity is its full
+// label set, and rules in different files reach different sources, so their
+// alerts already differ by team and source in the fingerprint. Requiring
+// globally unique names would push authors into PaymentsHighErrorRate
+// prefixes, re-encoding in the name what 6.3.1 says belongs in labels.
+//
+// Asserted rather than left unchecked, so the decision is pinned and the
+// check is not quietly reintroduced later.
+func TestLoadAllowsDuplicateAlertNamesAcrossFiles(t *testing.T) {
+	_, problems := Load(filepath.Join("testdata", "duplicate_names"), loadSources(t), nil)
+
+	for _, p := range problems {
+		if p.Check == "rule/name" {
+			t.Errorf("unexpected rule/name finding: the same name in two files is legitimate: %s", p)
+		}
+	}
+}
+
 // A query may not set team or alertname. Not because overriding team is
 // forbidden, a rule may do that in its labels, but because a value arriving
 // from a result column cannot be enumerated when the Alertmanager route tree

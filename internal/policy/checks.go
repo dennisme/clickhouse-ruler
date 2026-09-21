@@ -38,6 +38,7 @@ var fixed = map[string]bool{
 	lint.CheckYAMLUnknownField: true,
 	lint.CheckYAMLType:         true,
 	"rule/name":                true,
+	"rule/group-name":          true,
 	"rule/expr":                true,
 	"rule/protected-label":     true,
 	checkPolicyUnknown:         true,

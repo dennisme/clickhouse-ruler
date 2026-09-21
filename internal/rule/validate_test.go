@@ -39,6 +39,31 @@ func TestValidate(t *testing.T) {
 			},
 		},
 		{
+			// A group's identity is (file, name), which is what the
+			// scheduler keys on and what the rule_group metric label
+			// carries. Two groups sharing a name in one file collapse onto
+			// one series (spec 7.6, 8.2).
+			fixture: "group_name.yaml",
+			want: []lint.Problem{
+				{
+					File:     "testdata/group_name.yaml",
+					Line:     15,
+					Subject:  "api-latency",
+					Check:    "rule/group-name",
+					Severity: lint.SeverityError,
+					Text:     `duplicate group name "api-latency", first defined on line 2`,
+				},
+			},
+		},
+		{
+			// An alert's identity is its full label set, not its name, so
+			// the same name in two groups is allowed: group labels are part
+			// of that set and the two are genuinely different alerts. This
+			// pins the decision rather than leaving it merely unchecked.
+			fixture: "rule_name_across_groups.yaml",
+			want:    nil,
+		},
+		{
 			fixture: "rule_expr.yaml",
 			want: []lint.Problem{
 				{

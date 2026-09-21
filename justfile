@@ -29,10 +29,14 @@ test:
     env -u GOROOT GOTOOLCHAIN=auto go test -race ./...
 
 # Tests against real ClickHouse. Requires the stack: `just compose-up` first.
+#
+# -p 1 runs one package's tests at a time. More than one integration test
+# binds the webhook sink to the fixed port in deploy/alertmanager/alertmanager.yml,
+# and two of them running at once would fight over it.
 integration:
     RULER_CLICKHOUSE_ADDR="{{clickhouse_addr}}" \
     RULER_ALERTMANAGER_URL="{{alertmanager_url}}" \
-        env -u GOROOT GOTOOLCHAIN=auto go test -tags=integration -count=1 ./...
+        env -u GOROOT GOTOOLCHAIN=auto go test -tags=integration -count=1 -p 1 ./...
 
 # Bring the stack up, run the integration tests, then always tear it down.
 integration-clean: compose-up
