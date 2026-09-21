@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"log/slog"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -76,6 +77,59 @@ func TestRunRejectsANonPositiveResendInterval(t *testing.T) {
 		}
 		if !strings.Contains(stderr, "--resend-interval must be positive") {
 			t.Errorf("--resend-interval %s: expected the reason on stderr, got:\n%s", interval, stderr)
+		}
+	}
+}
+
+// A log level nobody can parse has to be refused at startup rather than
+// silently falling back, or an operator who asked for debug output and got
+// none has no way to tell why.
+func TestRunRejectsAnUnknownLogLevel(t *testing.T) {
+	dir := fixture(t, bareRule, "")
+
+	code, stderr := runRunCmd(t, "run",
+		"--rules", filepath.Join(dir, "rules"),
+		"--sources", filepath.Join(dir, "sources.yaml"),
+		"--alertmanager", "http://127.0.0.1:9093",
+		"--log-level", "chatty")
+
+	if code != exitUsage {
+		t.Errorf("exit = %d, want exitUsage\n%s", code, stderr)
+	}
+	if !strings.Contains(stderr, "--log-level") {
+		t.Errorf("expected the reason on stderr, got:\n%s", stderr)
+	}
+}
+
+func TestParseLogLevel(t *testing.T) {
+	tests := []struct {
+		in      string
+		want    slog.Level
+		wantErr bool
+	}{
+		{in: "debug", want: slog.LevelDebug},
+		{in: "info", want: slog.LevelInfo},
+		{in: "warn", want: slog.LevelWarn},
+		{in: "error", want: slog.LevelError},
+		{in: "INFO", want: slog.LevelInfo},
+		{in: "", wantErr: true},
+		{in: "chatty", wantErr: true},
+	}
+
+	for _, tc := range tests {
+		got, err := parseLogLevel(tc.in)
+		if tc.wantErr {
+			if err == nil {
+				t.Errorf("parseLogLevel(%q) = %v, want an error", tc.in, got)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("parseLogLevel(%q): %v", tc.in, err)
+			continue
+		}
+		if got != tc.want {
+			t.Errorf("parseLogLevel(%q) = %v, want %v", tc.in, got, tc.want)
 		}
 	}
 }

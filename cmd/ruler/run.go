@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -26,6 +27,17 @@ const exitRun = 3
 // once SIGINT or SIGTERM arrives, before the process gives up on it anyway.
 const defaultShutdownTimeout = 30 * time.Second
 
+// parseLogLevel reads the --log-level flag. An unparseable level is refused
+// rather than defaulted, because an operator who asked for debug output and
+// got none has no way to tell why.
+func parseLogLevel(s string) (slog.Level, error) {
+	var level slog.Level
+	if err := level.UnmarshalText([]byte(s)); err != nil {
+		return 0, fmt.Errorf("--log-level %q: want debug, info, warn or error", s)
+	}
+	return level, nil
+}
+
 func runRun(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -41,6 +53,7 @@ func runRun(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		"how long an in-flight evaluation gets to finish once shutdown starts")
 	resendInterval := fs.Duration("resend-interval", notify.DefaultResendInterval,
 		"how often a still-firing alert is re-posted to Alertmanager; each alert is sent an expiry of four times this")
+	logLevel := fs.String("log-level", "info", "log verbosity: debug, info, warn or error")
 
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
@@ -56,6 +69,13 @@ func runRun(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		printf(stderr, "--resend-interval must be positive, got %s\n", *resendInterval)
 		return exitUsage
 	}
+
+	level, err := parseLogLevel(*logLevel)
+	if err != nil {
+		printf(stderr, "%s\n", err)
+		return exitUsage
+	}
+	log := slog.New(slog.NewTextHandler(stdout, &slog.HandlerOptions{Level: level}))
 
 	sources, problems, err := loadSources(*sourcesPath)
 	if err != nil {
@@ -101,20 +121,20 @@ func runRun(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	client := notify.NewClient(*alertmanagerURL)
 	cadence := scheduler.NewCadence(client, *alertmanagerURL, *resendInterval, metrics, clock)
 
-	sched := scheduler.New(set, toQuerierMap(queriers), cadence, metrics, clock, *queryConcurrency)
+	sched := scheduler.New(set, toQuerierMap(queriers), cadence, metrics, clock, *queryConcurrency, log)
 
 	httpSrv := &http.Server{Addr: *listen, Handler: scheduler.Handler(reg), ReadHeaderTimeout: 5 * time.Second}
 	go func() {
 		if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			printf(stderr, "http server: %s\n", err)
+			log.Error("metrics listener stopped", "listen", *listen, "error", err.Error())
 		}
 	}()
 
 	sched.Start(ctx)
-	printf(stdout, "ruler running, %d rule(s) loaded, listening on %s\n", len(set.Rules), *listen)
+	log.Info("ruler running", "rules", len(set.Rules), "listen", *listen)
 
 	<-ctx.Done()
-	printf(stdout, "shutting down\n")
+	log.Info("shutting down", "timeout", shutdownTimeout.String())
 	sched.Shutdown(*shutdownTimeout)
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

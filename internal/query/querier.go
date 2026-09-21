@@ -83,7 +83,7 @@ func (q *Querier) Run(ctx context.Context, r rule.Rule, now time.Time) ([]alert.
 
 	rows, err := q.conn.Query(ctx, sql)
 	if err != nil {
-		return nil, fmt.Errorf("rule %q: %w", r.Alert, err)
+		return nil, q.queryErr(r, err)
 	}
 	// Close reports errors already surfaced by rows.Err below.
 	defer func() { _ = rows.Close() }()
@@ -98,7 +98,7 @@ func (q *Querier) Run(ctx context.Context, r rule.Rule, now time.Time) ([]alert.
 			scan[i] = reflect.New(types[i].ScanType()).Interface()
 		}
 		if err := rows.Scan(scan...); err != nil {
-			return nil, fmt.Errorf("rule %q: scanning row: %w", r.Alert, err)
+			return nil, q.queryErr(r, fmt.Errorf("scanning row: %w", err))
 		}
 
 		values := make([]any, len(scan))
@@ -108,7 +108,7 @@ func (q *Querier) Run(ctx context.Context, r rule.Rule, now time.Time) ([]alert.
 		collected = append(collected, values)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("rule %q: %w", r.Alert, err)
+		return nil, q.queryErr(r, err)
 	}
 
 	samples, err := toSamples(columns, collected, q.src.MaxRows)

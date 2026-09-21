@@ -7,8 +7,9 @@ operate.
 Prometheus rule semantics. ClickHouse SQL instead of PromQL. No web UI, by
 design. One service, not a platform.
 
-> **Status: early. Not usable end to end yet.** See [Status](#status) before
-> you try to run it.
+> **Status: early.** It takes a rule from a file to a delivered notification
+> today, but the query checks that need a live database are missing and nothing
+> has operated it for real. See [Status](#status) before you depend on it.
 
 ## Why this exists
 
@@ -185,6 +186,66 @@ someone, which is worth reserving for cases that deserve it. This is modelled
 on Cloudflare's `pint`, with one difference:
 `pint` can only advise, because Cloudflare does not own Prometheus. We do, so
 we can enforce.
+
+## Running it
+
+```bash
+ruler run --rules ./rules --sources ./rules/sources.yaml \
+  --alertmanager http://localhost:9093
+```
+
+An error-severity finding refuses to start. A warning is printed and the ruler
+runs anyway.
+
+| Flag | Default | What it does |
+| --- | --- | --- |
+| `--rules` | required | rules directory |
+| `--alertmanager` | required | Alertmanager base URL |
+| `--sources` | `sources.yaml` | sources file |
+| `--config` | `ruler.yaml` beside `--rules` | policy file |
+| `--listen` | `:9090` | address for `/metrics`, `/-/healthy`, `/-/ready` |
+| `--query-concurrency` | `8` | rule queries allowed against ClickHouse at once, across every group; `0` is unbounded |
+| `--resend-interval` | `100s` | how often a still-firing alert is re-posted; each alert is sent an expiry of four times this |
+| `--shutdown-timeout` | `30s` | how long an in-flight evaluation gets to finish once shutdown starts |
+| `--log-level` | `info` | `debug`, `info`, `warn` or `error` |
+
+### What it exposes
+
+Names track the Prometheus ruler's own metrics, so existing dashboards and
+existing operator knowledge carry over. Everything is labelled by rule and
+group, never by alert instance: a rule returning 10,000 rows still produces one
+series per rule.
+
+| Metric | Type | Labels |
+| --- | --- | --- |
+| `ruler_rule_evaluations_total` | counter | `rule_group`, `rule` |
+| `ruler_rule_evaluation_failures_total` | counter | `rule_group`, `rule` |
+| `ruler_rule_evaluation_duration_seconds` | histogram | `rule_group` |
+| `ruler_rule_group_iterations_total` | counter | `rule_group` |
+| `ruler_rule_group_iterations_missed_total` | counter | `rule_group` |
+| `ruler_rule_group_last_evaluation_timestamp_seconds` | gauge | `rule_group` |
+| `ruler_rule_group_last_duration_seconds` | gauge | `rule_group` |
+| `ruler_alerts_active` | gauge | `rule_group`, `rule`, `state` |
+| `ruler_alerts_sent_total` | counter | `alertmanager` |
+| `ruler_alerts_send_failures_total` | counter | `alertmanager` |
+| `ruler_notification_latency_seconds` | histogram | none |
+| `ruler_rules_unmatched` | gauge | `rule_group` |
+
+Two are worth alerting on. `ruler_rule_group_iterations_missed_total` rising
+means an evaluation took longer than its group interval, so alerts are silently
+late. `ruler_rules_unmatched` staying above zero means this ruler loaded rules
+that match none of its sources and will never evaluate them, which is expected
+during a rollout and a problem if it persists.
+
+Logs are `log/slog` text on stdout, `--log-level` deep. A failed query, a
+failed send and a shutdown that gave up each write one line naming the rule
+group, the rule and the source involved. One line per rule and per source,
+never per alert instance. Passwords never reach a log; a ClickHouse driver
+error is scrubbed before it is returned, keeping the address and database an
+operator needs.
+
+Usage errors and check findings are separate: unstructured, on stderr, because
+those are for the person who typed the command.
 
 ## How it compares
 
@@ -373,6 +434,14 @@ Working:
 - Loading a rules directory and selecting each rule's sources by label, so one
   rule evaluates against every cluster it matches
 - Annotation templating, and sending to Alertmanager
+- `ruler run`: a scheduler that ticks each rule group on its own interval,
+  staggers groups so they do not stampede ClickHouse, evaluates rules and their
+  sources concurrently under a shared query limit, and shuts down without
+  cutting an evaluation off
+- A resend cadence, so a still-firing alert is re-posted and carries an expiry
+  Alertmanager will not time out early
+- Metrics on `/metrics`, with `/-/healthy` and `/-/ready`, and structured logs
+  naming the rule and source behind every failure
 - A ClickHouse and Alertmanager compose stack, with an end to end test that
   takes a rule from a file all the way to a delivered notification
 
@@ -381,11 +450,9 @@ Not built yet:
 - No checks that read the database. Every check today reads the rule file, so
   a query that references a dropped column, scans a terabyte, or returns
   nothing at all still passes. Spec 7.3 tiers 1 and 2.
-- No `ruler run`. The binary can check rules, not evaluate them.
-- No scheduler. Nothing calls the querier on an interval, so evaluation has to
-  be driven by hand.
-- No resend cadence, so a firing alert is not refreshed and will expire.
-- No `/metrics` endpoint.
+- No `ruler watch`, so rules are not reloaded without a restart.
+- No ClickHouse query cost metrics. Rows and bytes read per rule need a driver
+  progress callback. Spec 8.2.
 - No Alertmanager route tree generation.
 
 Known gaps that will change:
@@ -407,6 +474,7 @@ its own to list every recipe.
 ```bash
 go run ./cmd/ruler check --sources rules/sources.yaml rules/
 just init               # mise tool versions and pre-commit hooks
+just check              # lint, unit tests with -race, markdownlint
 just test               # unit tests with -race, no container needed
 just lint               # golangci-lint
 just integration-clean  # start ClickHouse, run integration tests, tear it down

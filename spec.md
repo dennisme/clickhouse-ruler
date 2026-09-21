@@ -1541,33 +1541,48 @@ Go runtime and process collectors come from `client_golang` defaults.
 
 Evaluation:
 
-- `ruler_rule_evaluations_total` counter, by `rule_group`, `rule`
-- `ruler_rule_evaluation_failures_total` counter, by `rule_group`, `rule`
-- `ruler_rule_evaluation_duration_seconds` histogram, by `rule_group`
-- `ruler_rule_group_iterations_total` counter
-- `ruler_rule_group_iterations_missed_total` counter. Evaluation took longer
-  than the group interval. This is the single most important operational
-  signal, because a missed iteration means alerts are silently late.
-- `ruler_rule_group_last_evaluation_timestamp_seconds` gauge
-- `ruler_rule_group_last_duration_seconds` gauge
+| Metric | Type | Labels |
+| --- | --- | --- |
+| `ruler_rule_evaluations_total` | counter | `rule_group`, `rule` |
+| `ruler_rule_evaluation_failures_total` | counter | `rule_group`, `rule` |
+| `ruler_rule_evaluation_duration_seconds` | histogram | `rule_group` |
+| `ruler_rule_group_iterations_total` | counter | `rule_group` |
+| `ruler_rule_group_iterations_missed_total` | counter | `rule_group` |
+| `ruler_rule_group_last_evaluation_timestamp_seconds` | gauge | `rule_group` |
+| `ruler_rule_group_last_duration_seconds` | gauge | `rule_group` |
+
+A missed iteration means the evaluation took longer than the group interval.
+It is the single most important operational signal here, because alerts are
+then silently late.
 
 Alert state and delivery:
 
-- `ruler_alerts_active` gauge, by `rule_group`, `rule`, `state` (pending,
-  firing). The group is part of the key because an alert name may repeat
-  across groups (7.6), and without it two same-named rules would report into
-  one series. It remains a count per rule, never a series per instance (8.3).
-- `ruler_alerts_sent_total` counter, by `alertmanager`
-- `ruler_alerts_send_failures_total` counter, by `alertmanager`
-- `ruler_notification_latency_seconds` histogram
+| Metric | Type | Labels |
+| --- | --- | --- |
+| `ruler_alerts_active` | gauge | `rule_group`, `rule`, `state` (pending, firing) |
+| `ruler_alerts_sent_total` | counter | `alertmanager` |
+| `ruler_alerts_send_failures_total` | counter | `alertmanager` |
+| `ruler_notification_latency_seconds` | histogram | none |
+
+`ruler_alerts_active` carries the group because an alert name may repeat
+across groups (7.6), and without it two same-named rules would report into one
+series. It remains a count per rule, never a series per instance (8.3).
+
+`ruler_alerts_sent_total` counts alerts, not batches, so it reads the same way
+as the Prometheus metric it is named after. The latency histogram already
+carries a count per send, so there is no separate batch counter.
+`ruler_alerts_send_failures_total` counts a failed batch once however many
+alerts it held, because it delivered none of them.
 
 ClickHouse query cost. Nothing else in this space exposes these, and they are
 what make the guard rails in 6.7 observable rather than theoretical:
 
-- `ruler_query_read_rows_total` counter, by `rule`, `team`
-- `ruler_query_read_bytes_total` counter, by `rule`, `team`
-- `ruler_query_memory_usage_bytes` histogram, by `rule`
-- `ruler_query_duration_seconds` histogram, by `rule`
+| Metric | Type | Labels |
+| --- | --- | --- |
+| `ruler_query_read_rows_total` | counter | `rule`, `team` |
+| `ruler_query_read_bytes_total` | counter | `rule`, `team` |
+| `ruler_query_memory_usage_bytes` | histogram | `rule` |
+| `ruler_query_duration_seconds` | histogram | `rule` |
 
 Source these from the ClickHouse Go driver's progress callbacks rather than
 from `system.query_log`. The driver reports rows and bytes read during the
@@ -1579,16 +1594,24 @@ per team chargeback.
 
 Validation and config, used by watch mode:
 
-- `ruler_problem` gauge, by `rule`, `check`, `severity`. The `pint` analog.
-- `ruler_rules_unmatched` gauge, by `rule_group`. Rules this ruler loaded that
-  match no source it holds, so it will never evaluate them (6.10). Expected to
-  be non-zero on a per-data-centre ruler reading a shared repository, and
-  expected to return to zero after a cluster rollout finishes. Alerting on it
-  staying raised is how the soft failure in 6.10 stops being ignored: the
-  check warns at authoring time, this catches the case where nobody read the
-  warning.
-- `ruler_config_last_reload_successful` gauge
-- `ruler_config_last_reload_timestamp_seconds` gauge
+| Metric | Type | Labels |
+| --- | --- | --- |
+| `ruler_problem` | gauge | `rule`, `check`, `severity` |
+| `ruler_rules_unmatched` | gauge | `rule_group` |
+| `ruler_config_last_reload_successful` | gauge | none |
+| `ruler_config_last_reload_timestamp_seconds` | gauge | none |
+
+`ruler_problem` is the `pint` analog. `ruler_rules_unmatched` counts rules this
+ruler loaded that match no source it holds, so it will never evaluate them
+(6.10). Expected to be non-zero on a per-data-centre ruler reading a shared
+repository, and expected to return to zero after a cluster rollout finishes.
+Alerting on it staying raised is how the soft failure in 6.10 stops being
+ignored: the check warns at authoring time, this catches the case where nobody
+read the warning.
+
+Of these four, only `ruler_rules_unmatched` exists. The other three belong to
+`ruler watch`, and so does the query cost table above, which needs a driver
+progress callback inside `internal/query`.
 
 ### 8.3 Cardinality rule
 
@@ -1598,6 +1621,50 @@ A rule returning 10,000 rows produces 10,000 alert instances and must still
 produce exactly one metric series per rule. Getting this wrong turns the ruler
 into the cardinality problem it exists to avoid. The `ruler_alerts_active`
 gauge is a count, not a series per instance.
+
+### 8.4 Logging
+
+A counter that moved says something failed. It does not say which rule, which
+source, or what the database replied, and those are the three things an
+operator needs before they can act. Logs are the other half of this section,
+not a duplicate of it.
+
+`log/slog` from the standard library, text output, on stdout. `--log-level`
+takes `debug`, `info`, `warn` or `error` and defaults to `info`. An
+unparseable level is refused at startup rather than defaulted. There is no
+`--log-format` until somebody asks for one.
+
+Two streams, two audiences. Usage errors, lint findings and the refusal to
+start are CLI output, unstructured, on stderr: a person ran a command and the
+command has something to say about what they typed. Everything the daemon says
+once it is running is a log line, structured, on stdout.
+
+What is logged:
+
+| Level | Event | Fields |
+| --- | --- | --- |
+| info | ruler running | `rules`, `listen` |
+| info | shutting down | `timeout` |
+| error | rule evaluation failed against a source | `rule_group`, `rule`, `source`, `error` |
+| error | sending alerts to alertmanager failed | `rule_group`, `rule`, `error` |
+| error | metrics listener stopped | `listen`, `error` |
+| warn | shutdown timeout expired with evaluations still running | `timeout` |
+
+A shutdown that gives up is the only signal an operator gets that a query or a
+send was cut off part way through, which is why it is logged rather than
+returned silently. A shutdown also cancels evaluations already running, and
+each cancelled source logs an evaluation failure like any other, because that
+is what it is: the counter has always recorded it and the log now says so.
+
+The cardinality rule in 8.3 is written about metrics and the same reasoning
+holds for logs: one line per failed source and one per failed send, never one
+per alert instance. A rule returning 10,000 rows that cannot be delivered
+writes one line, not 10,000.
+
+Credentials never reach a log. A ClickHouse driver error may echo connection
+detail, so every error `internal/query` returns goes through `redact` first.
+The address and the database survive, because an operator reading the line
+needs them; the password does not.
 
 ---
 
@@ -1841,6 +1908,12 @@ instances must stay distinct per source. That is a fingerprint question
   and a rule gets the strictest setting that applies to it. The merge is a
   maximum, so no precedence rule exists and no scope can loosen another.
   See 7.7.
+- **`ruler_alerts_sent_total` counts alerts, and there is no batch counter.**
+  The name tracks a Prometheus metric that counts alerts, so counting batches
+  read wrong on any dashboard carried over. "How much traffic is Alertmanager
+  taking" is a real question, but `ruler_notification_latency_seconds` already
+  has an observation count per send, so a second counter would be a third way
+  to ask something nothing is asking yet. See 8.2.
 
 ## 12. Open questions
 
@@ -1909,13 +1982,7 @@ instances must stay distinct per source. That is a fingerprint question
     a resolved alert re-renders from its last value rather than carrying what
     it said when it fired. Prometheus templates at evaluation time and stores
     the result on the alert; doing the same would fix all three.
-11. **The daemon barely logs.** `ruler run` counts query failures and send
-    failures into metrics but writes no log line for either, and
-    `Result.SendError` is discarded by the group evaluator without ever being
-    read. An operator seeing a counter move has nothing telling them which
-    rule, which source, or what the error said. Structured logging of
-    evaluation and notification failures is the missing half of section 8.
-12. **A failed source stops re-sending the alerts it already had firing.**
+11. **A failed source stops re-sending the alerts it already had firing.**
     `RuleEval.Evaluate` skips a source whose query failed, and skipping it
     contributes nothing to the batch, so that source's firing alerts are not
     re-posted on that tick. Their state survives, which is what 6.11 claims
@@ -1938,16 +2005,7 @@ instances must stay distinct per source. That is a fingerprint question
     that cannot query has no business claiming an alert is still true. The
     thing that is not defensible is the current position, which is the
     second one arrived at by accident and undocumented.
-13. **`ruler_alerts_sent_total` counts batches, not alerts.**
-    `instrumentedSender.Send` increments once per call regardless of how
-    many alerts the batch held. The Prometheus metric the name tracks
-    (8.2) counts alerts, so a dashboard carried over from a Prometheus
-    ruler reads wrong, and the number is unusable for notification volume.
-    `Add(float64(len(alerts)))` is the fix. Worth deciding at the same time
-    whether a separate batch counter is wanted, since the two questions
-    "how much are we paging" and "how much traffic is Alertmanager taking"
-    are both real and this metric currently answers neither.
-14. **Nothing checks that two rules cannot produce the same alert.** 7.6
+12. **Nothing checks that two rules cannot produce the same alert.** 7.6
     scopes `rule/name` uniqueness to the group, on the reasoning that group
     labels and `source` already separate two same-named rules in the
     fingerprint. That reasoning is an assumption about how the files happen
@@ -1965,7 +2023,7 @@ instances must stay distinct per source. That is a fingerprint question
     labels that are only known at evaluation time, so it can only flag rules
     whose *static* identity already collides. That is the reachable case and
     it is worth flagging.
-15. **A fingerprint collision merges two unrelated alerts.** 6.3 length
+13. **A fingerprint collision merges two unrelated alerts.** 6.3 length
     prefixes each key and value so that no separator inside a ClickHouse
     column value can forge a match, which closes the construction of a
     collision but not its arithmetic: the result is 64 bits, and

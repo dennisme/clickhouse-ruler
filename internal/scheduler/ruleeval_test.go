@@ -103,8 +103,8 @@ func TestRuleEvalLeavesStateIntactAcrossAQueryFailure(t *testing.T) {
 
 	q.err = errors.New("connection refused")
 	res := eval.Evaluate(context.Background(), now.Add(30*time.Second))
-	if res.QueryErrors != 1 {
-		t.Fatalf("QueryErrors = %d, want 1", res.QueryErrors)
+	if len(res.QueryErrors) != 1 {
+		t.Fatalf("QueryErrors = %v, want one entry", res.QueryErrors)
 	}
 
 	q.err = nil
@@ -150,10 +150,54 @@ func TestRuleEvalWithNoMatchedSourcesDoesNothing(t *testing.T) {
 	eval := NewRuleEval(r, map[string]Querier{}, notify.NewCadence(sender, time.Minute), newSemaphore(0))
 
 	res := eval.Evaluate(context.Background(), time.Now())
-	if res.QueryErrors != 0 {
-		t.Fatalf("QueryErrors = %d, want 0", res.QueryErrors)
+	if len(res.QueryErrors) != 0 {
+		t.Fatalf("QueryErrors = %v, want none", res.QueryErrors)
 	}
 	if len(sender.calls) != 0 {
 		t.Fatalf("got %d calls, want 0", len(sender.calls))
+	}
+}
+
+// A counter that moved tells an operator something failed, not what or where.
+// The error has to leave Evaluate carrying the source it came from, or no log
+// line can name either.
+func TestRuleEvalReportsWhichSourceFailedAndWhy(t *testing.T) {
+	r := testRule(0)
+	r.Sources = append(r.Sources, source.Source{Name: "src2"})
+	refused := errors.New("connection refused")
+
+	queriers := map[string]Querier{
+		"src1": &fakeQuerier{samples: oneSample()},
+		"src2": &fakeQuerier{err: refused},
+	}
+	eval := NewRuleEval(r, queriers, notify.NewCadence(&recordingSender{}, time.Minute), newSemaphore(0))
+
+	res := eval.Evaluate(context.Background(), time.Now())
+	if len(res.QueryErrors) != 1 {
+		t.Fatalf("QueryErrors = %v, want one entry", res.QueryErrors)
+	}
+	if got := res.QueryErrors[0].Source; got != "src2" {
+		t.Errorf("Source = %q, want %q", got, "src2")
+	}
+	if !errors.Is(res.QueryErrors[0].Err, refused) {
+		t.Errorf("Err = %v, want %v", res.QueryErrors[0].Err, refused)
+	}
+}
+
+// A source with no connection is a configuration mismatch that repeats on
+// every tick. It reports like any other failed source so it can be logged.
+func TestRuleEvalReportsASourceWithNoQuerier(t *testing.T) {
+	eval := NewRuleEval(testRule(0), map[string]Querier{},
+		notify.NewCadence(&recordingSender{}, time.Minute), newSemaphore(0))
+
+	res := eval.Evaluate(context.Background(), time.Now())
+	if len(res.QueryErrors) != 1 {
+		t.Fatalf("QueryErrors = %v, want one entry", res.QueryErrors)
+	}
+	if got := res.QueryErrors[0].Source; got != "src1" {
+		t.Errorf("Source = %q, want %q", got, "src1")
+	}
+	if res.QueryErrors[0].Err == nil {
+		t.Error("Err is nil, want a reason")
 	}
 }
