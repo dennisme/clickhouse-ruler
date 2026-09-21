@@ -1,0 +1,21 @@
+# Short interval so the integration test does not have to wait long for the
+# scheduler to tick on its own; the test never drives evaluation directly.
+groups:
+  - name: checkout
+    interval: 2s
+    rules:
+      - alert: CheckoutIsSlow
+        sources:
+          team: payments
+        expr: |
+          SELECT ServiceName, max(Duration) / 1e6 AS value
+          FROM otel.otel_traces
+          WHERE Timestamp >= {{ .From }} AND Timestamp < {{ .To }}
+          GROUP BY ServiceName
+          HAVING value > 1000
+        window: 5m
+        labels:
+          team: payments
+          severity: warning
+        annotations:
+          summary: "{{ .ServiceName }} is slow"

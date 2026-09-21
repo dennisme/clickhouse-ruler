@@ -34,7 +34,23 @@ func TestValidate(t *testing.T) {
 					Subject:  "DuplicateName",
 					Check:    "rule/name",
 					Severity: lint.SeverityError,
-					Text:     `duplicate alert name "DuplicateName" in group "api-latency", first defined on line 15`,
+					Text:     `duplicate alert name "DuplicateName", first defined on line 15`,
+				},
+			},
+		},
+		{
+			// An alert name is the alert's identity and the only label the
+			// per-rule metrics in spec 8.2 carry, so two rules sharing one
+			// collide no matter which group each sits in.
+			fixture: "rule_name_across_groups.yaml",
+			want: []lint.Problem{
+				{
+					File:     "testdata/rule_name_across_groups.yaml",
+					Line:     18,
+					Subject:  "SharedName",
+					Check:    "rule/name",
+					Severity: lint.SeverityError,
+					Text:     `duplicate alert name "SharedName", first defined on line 5`,
 				},
 			},
 		},

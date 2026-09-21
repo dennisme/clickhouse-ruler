@@ -1,0 +1,27 @@
+groups:
+  - name: api-latency
+    interval: 1m
+    rules:
+      - alert: SharedName
+        sources:
+          team: payments
+        expr: "SELECT 1 AS value FROM t WHERE ts >= {{ .From }} AND ts < {{ .To }}"
+        labels:
+          team: payments
+          severity: warning
+        annotations:
+          summary: first
+          runbook_url: https://runbooks.internal/first
+  - name: api-errors
+    interval: 1m
+    rules:
+      - alert: SharedName
+        sources:
+          team: payments
+        expr: "SELECT 1 AS value FROM t WHERE ts >= {{ .From }} AND ts < {{ .To }}"
+        labels:
+          team: payments
+          severity: warning
+        annotations:
+          summary: second
+          runbook_url: https://runbooks.internal/second

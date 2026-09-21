@@ -55,6 +55,44 @@ func TestLoadWarnsWhenNoSourceMatches(t *testing.T) {
 	}
 }
 
+// An alert name is the alert's identity, and the per-rule metrics in spec
+// 8.2 are labelled by it alone, so two rules sharing a name collide into one
+// series no matter which file each lives in. A single file cannot see the
+// clash, which is why the whole loaded set has to be checked.
+func TestLoadRejectsDuplicateAlertNamesAcrossFiles(t *testing.T) {
+	_, problems := Load(filepath.Join("testdata", "duplicate_names"), loadSources(t), nil)
+
+	var found int
+	for _, p := range problems {
+		if p.Check != "rule/name" {
+			continue
+		}
+		found++
+		if p.Severity != lint.SeverityError {
+			t.Errorf("severity = %v, want error: a duplicate name is a correctness failure (spec 7.6)", p.Severity)
+		}
+		if p.Subject != "HighP99Latency" {
+			t.Errorf("subject = %q, want HighP99Latency", p.Subject)
+		}
+	}
+	if found != 1 {
+		t.Fatalf("got %d rule/name findings, want exactly 1 (the second occurrence), problems: %v", found, problems)
+	}
+}
+
+// The same name in two files is a clash; the same name loaded once is not.
+// Reporting the whole tree as duplicated because a file was walked twice
+// would make the check useless.
+func TestLoadAcceptsDistinctAlertNamesAcrossFiles(t *testing.T) {
+	_, problems := Load(filepath.Join("testdata", "rules"), loadSources(t), nil)
+
+	for _, p := range problems {
+		if p.Check == "rule/name" {
+			t.Errorf("unexpected rule/name finding on a tree with distinct names: %s", p)
+		}
+	}
+}
+
 // A query may not set team or alertname. Not because overriding team is
 // forbidden, a rule may do that in its labels, but because a value arriving
 // from a result column cannot be enumerated when the Alertmanager route tree

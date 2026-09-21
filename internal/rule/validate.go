@@ -43,8 +43,14 @@ func Validate(f *RuleFile, policyFor func(Rule) *policy.Policy) []lint.Problem {
 		policyFor = func(Rule) *policy.Policy { return policy.Defaults() }
 	}
 	v := &validator{file: f.File, policyFor: policyFor}
+
+	// Alert names are checked across the whole file rather than per group.
+	// The name is the alert's identity and the only label the per-rule
+	// metrics in spec 8.2 carry, so two rules sharing one collide in the
+	// metrics and in Alertmanager no matter which group each sits in.
+	namedAt := map[string]int{}
 	for _, g := range f.Groups {
-		v.group(g)
+		v.group(g, namedAt)
 	}
 	return v.problems
 }
@@ -88,13 +94,9 @@ func (v *validator) addPolicy(r Rule, line int, check string, format string, arg
 	})
 }
 
-func (v *validator) group(g Group) {
-	// Alert names only have to be unique within their own group, so the set is
-	// scoped here rather than to the file.
-	namedAt := map[string]int{}
-
+func (v *validator) group(g Group, namedAt map[string]int) {
 	for _, r := range g.Rules {
-		v.ruleName(g, r, namedAt)
+		v.ruleName(r, namedAt)
 		v.ruleExpr(r)
 		v.requiredKeys(r, "labels", "label", checkLabelsRequired, g.EffectiveLabels(r))
 		v.requiredKeys(r, "annotations", "annotation", checkAnnotationsRequired, r.Annotations)
@@ -104,7 +106,7 @@ func (v *validator) group(g Group) {
 	}
 }
 
-func (v *validator) ruleName(g Group, r Rule, namedAt map[string]int) {
+func (v *validator) ruleName(r Rule, namedAt map[string]int) {
 	line := r.LineOf("alert")
 
 	if r.Alert == "" {
@@ -113,8 +115,7 @@ func (v *validator) ruleName(g Group, r Rule, namedAt map[string]int) {
 	}
 	if first, ok := namedAt[r.Alert]; ok {
 		v.add(r, line, checkRuleName,
-			"duplicate alert name %q in group %q, first defined on line %d",
-			r.Alert, g.Name, first)
+			"duplicate alert name %q, first defined on line %d", r.Alert, first)
 		return
 	}
 	namedAt[r.Alert] = line

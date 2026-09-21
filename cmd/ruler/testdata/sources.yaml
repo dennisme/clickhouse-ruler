@@ -1,0 +1,13 @@
+# Matches compose.yaml. The test overrides the address from
+# RULER_CLICKHOUSE_ADDR, so this file stays reviewable without a live cluster
+# to check it against.
+sources:
+  - name: otel_traces
+    labels: {team: payments}
+    address: 127.0.0.1:9000
+    database: otel
+    username: ruler
+    password_env: RULER_CLICKHOUSE_PASSWORD
+    table: otel_traces
+    timestamp_column: Timestamp
+    evaluation_delay: 0s

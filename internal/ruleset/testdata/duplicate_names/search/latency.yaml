@@ -1,0 +1,21 @@
+groups:
+  - name: search-latency
+    interval: 1m
+    rules:
+      # The same alert name as payments/latency.yaml, in a different
+      # directory and a different group. Both are loaded by one ruler, so
+      # both report into the same per-rule metric series.
+      - alert: HighP99Latency
+        sources:
+          team: search
+        expr: |
+          SELECT ServiceName, max(Duration) AS value
+          FROM otel.otel_traces
+          WHERE Timestamp >= {{ .From }} AND Timestamp < {{ .To }}
+          GROUP BY ServiceName
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ .ServiceName }} is slow"
+          runbook_url: https://runbooks.internal/slow

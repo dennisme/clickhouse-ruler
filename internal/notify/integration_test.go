@@ -212,8 +212,8 @@ func TestEndToEndFiringAlertReachesAlertmanager(t *testing.T) {
 				t.Errorf("delivered alertname = %q, want CheckoutIsSlow", a.Labels["alertname"])
 			}
 
-			// The team label is the point of the directory derivation: it is
-			// what the route tree keys on, and nothing in the file set it.
+			// team is what the route tree keys on, set by the rule's own
+			// labels rather than derived from anything.
 			if a.Labels["team"] != "payments" {
 				t.Errorf("delivered team = %q, want payments", a.Labels["team"])
 			}
@@ -234,7 +234,7 @@ func TestEndToEndFiringAlertReachesAlertmanager(t *testing.T) {
 	}
 
 	// The source label is what kept them apart, and each carried its own
-	// cluster from the source's alert_labels (spec 6.10.1).
+	// cluster from the source's labels (spec 6.10.1).
 	want := map[string]string{"otel_traces_dc1": "dc1", "otel_traces_dc2": "dc2"}
 	if len(clusters) != len(want) {
 		t.Fatalf("delivered sources = %v, want one alert per source %v", clusters, want)

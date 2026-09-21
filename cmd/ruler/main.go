@@ -2,12 +2,15 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"sort"
+	"syscall"
 
 	"github.com/dennisme/clickhouse-ruler/internal/lint"
 	"github.com/dennisme/clickhouse-ruler/internal/policy"
@@ -36,15 +39,19 @@ func main() {
 
 func run(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		printf(stderr, "%s\n", "usage: ruler check [flags] <rules-dir>")
+		printf(stderr, "%s\n", "usage: ruler <check|run> [flags]")
 		return exitUsage
 	}
 
 	switch args[0] {
 	case "check":
 		return check(args[1:], stdout, stderr)
+	case "run":
+		ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+		defer stop()
+		return runRun(ctx, args[1:], stdout, stderr)
 	default:
-		printf(stderr, "unknown command %q, want check\n", args[0])
+		printf(stderr, "unknown command %q, want check or run\n", args[0])
 		return exitUsage
 	}
 }

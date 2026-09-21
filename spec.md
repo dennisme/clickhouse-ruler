@@ -1024,6 +1024,48 @@ whether it can run depends on which ruler is asking.
 
 ---
 
+### 6.11 Evaluation concurrency
+
+One goroutine per rule group, each ticking on the group's own interval. Group
+starts are staggered across that interval, so twenty groups on `1m` do not all
+fire on the same second and stampede ClickHouse.
+
+**An overrunning evaluation must not queue.** When an evaluation takes longer
+than the interval, the boundaries that passed while it ran are skipped and
+counted in `ruler_rule_group_iterations_missed_total` (8.2), not run late. A
+backlog is how a ruler silently falls behind, and the counter is what makes
+falling behind visible instead.
+
+**Within a group, rules and their sources are evaluated concurrently.**
+Sequential evaluation made a group's tick cost the sum of every query inside
+it, so a group grew slower purely by having rules added to it, until it began
+missing iterations. Each source has its own `alert.State` and they share
+nothing (6.10.1), so parallel evaluation needs no lock.
+
+Concurrency is bounded by a ruler-wide limit on how many queries may be in
+flight at once, rather than by the shape of the configuration. The goroutines
+are not what bounds load; the limit sits around the query itself, so a large
+group queues against it instead of opening a connection per rule.
+
+**The cap is global, and that is a known compromise.** The thing that actually
+needs protecting is each ClickHouse cluster, and one global number is a loose
+proxy: a slow cluster holds slots that rules against every other cluster then
+queue behind, so an outage on one source delays evaluation of sources that are
+perfectly healthy. A per-source limit, sized from what that cluster can take,
+is the shape this probably wants. It is deferred because sizing it needs a
+view of per-source capacity that nothing collects yet, and the query cost
+metrics in 8.2 are what would inform it. See 12.7.
+
+Notification state is shared across every group, so it is guarded. An
+unsynchronised map there is not a subtle race but a fatal "concurrent map
+writes" abort of the whole process, which is the worst available failure for a
+daemon whose job is paging people. The lock is deliberately not held across
+the POST to Alertmanager: holding it there would serialise every group's
+notifications behind one slow Alertmanager, which is the opposite of what
+running groups concurrently is for.
+
+---
+
 ## 7. Validation
 
 Modelled on Cloudflare `pint`, adapted for SQL.
@@ -1275,7 +1317,12 @@ its job:
 
 - `yaml/syntax`, `yaml/unknown-field`. A typo silently drops configuration, so
   the rule does not do what it says.
-- `rule/name`, empty or duplicate. No identity.
+- `rule/name`, empty or duplicate. No identity. Uniqueness is checked across
+  the whole loaded tree, not per group or per file: the name is what the
+  per-rule metrics in 8.2 are labelled by, so two rules sharing one fold into
+  a single series, and routing on `alertname` can no longer tell them apart.
+  Neither file is wrong on its own, so this is a check only the loader can
+  make.
 
 - `rule/expr`, empty or missing `{{ .From }}` or `{{ .To }}`. Cannot run, or
   scans unbounded on every evaluation.
@@ -1783,6 +1830,12 @@ instances must stay distinct per source. That is a fingerprint question
    which is a confusing way to find out. A check comparing matched sources'
    tables and column types is the obvious fix and needs tier 1 first. See
    6.10.
+7. **Query concurrency is bounded globally, not per source.** A slow cluster
+   holds slots that rules against every other cluster then queue behind, so an
+   outage on one source delays evaluation of sources that are perfectly
+   healthy. A per-source limit is the shape this probably wants, and sizing it
+   needs per-source capacity that nothing collects yet. See 6.11 for the
+   current behaviour and why it was left here.
 
 ---
 

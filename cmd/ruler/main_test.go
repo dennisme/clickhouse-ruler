@@ -146,6 +146,37 @@ func TestCheckGitHubFormat(t *testing.T) {
 	}
 }
 
+// Two rules in different files may not share an alert name. Neither file is
+// wrong on its own, so this is the case only a whole-tree check can catch,
+// and CI has to fail on it rather than warn (spec 7.6).
+func TestCheckRejectsDuplicateAlertNamesAcrossFiles(t *testing.T) {
+	dir := fixture(t, bareRule, "")
+
+	// A second file under a different directory, reusing the name the first
+	// one already took.
+	other := filepath.Join(dir, "rules", "search")
+	if err := os.MkdirAll(other, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(other, "latency.yaml"), []byte(bareRule), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	code, stdout, _ := runCheck(t, "check",
+		"--sources", filepath.Join(dir, "sources.yaml"),
+		filepath.Join(dir, "rules"))
+
+	if code != exitFinding {
+		t.Errorf("exit = %d, want exitFinding for a duplicate alert name\n%s", code, stdout)
+	}
+	if !strings.Contains(stdout, "rule/name") {
+		t.Errorf("expected a rule/name finding, got:\n%s", stdout)
+	}
+	if !strings.Contains(stdout, "HighLatency") {
+		t.Errorf("finding should name the clashing alert, got:\n%s", stdout)
+	}
+}
+
 // --explain answers "why is this an error", which is the whole point of
 // carrying the policy origin.
 func TestCheckExplainNamesPolicyOrigin(t *testing.T) {
