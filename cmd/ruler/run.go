@@ -39,12 +39,21 @@ func runRun(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		"how many rule queries may run against ClickHouse at once, across every group; 0 means unbounded")
 	shutdownTimeout := fs.Duration("shutdown-timeout", defaultShutdownTimeout,
 		"how long an in-flight evaluation gets to finish once shutdown starts")
+	resendInterval := fs.Duration("resend-interval", notify.DefaultResendInterval,
+		"how often a still-firing alert is re-posted to Alertmanager; each alert is sent an expiry of four times this")
 
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
 	}
 	if *rulesDir == "" || *alertmanagerURL == "" {
 		printf(stderr, "%s\n", "usage: ruler run --rules <dir> --alertmanager <url> [flags]")
+		return exitUsage
+	}
+	// A non-positive interval makes every firing alert due on every
+	// evaluation and gives it an expiry that has already passed, which
+	// Alertmanager reads as resolved.
+	if *resendInterval <= 0 {
+		printf(stderr, "--resend-interval must be positive, got %s\n", *resendInterval)
 		return exitUsage
 	}
 
@@ -90,7 +99,7 @@ func runRun(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	clock := scheduler.NewRealClock()
 
 	client := notify.NewClient(*alertmanagerURL)
-	cadence := scheduler.NewCadence(client, *alertmanagerURL, notify.DefaultResendInterval, metrics, clock)
+	cadence := scheduler.NewCadence(client, *alertmanagerURL, *resendInterval, metrics, clock)
 
 	sched := scheduler.New(set, toQuerierMap(queriers), cadence, metrics, clock, *queryConcurrency)
 

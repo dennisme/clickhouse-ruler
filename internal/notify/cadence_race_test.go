@@ -42,7 +42,7 @@ func TestCadenceSendIsSafeFromConcurrentGroups(t *testing.T) {
 				// evaluating different rules produce different instances.
 				a := firing(uint64(g*ticks + i))
 				_ = c.Send(context.Background(), now.Add(time.Duration(i)*time.Second),
-					[]alert.Alert{a}, nil)
+					testEvalInterval, []alert.Alert{a}, nil)
 			}
 		}(g)
 	}

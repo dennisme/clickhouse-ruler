@@ -687,8 +687,26 @@ The server side settings profile cap is the real guarantee either way. See 6.7.
 
 ### 6.5 Alertmanager integration
 
-`POST /api/v2/alerts`. Re-send firing alerts on roughly a third of
-`resolve_timeout` so they do not expire.
+`POST /api/v2/alerts`. Firing alerts are re-sent on an interval so
+Alertmanager does not expire them, `--resend-interval`, default 100s.
+
+**Every firing alert carries its own `endsAt`**, set to four times the period
+it is actually re-sent on: whichever is longer of the resend interval and the
+group's own interval, because the ruler cannot re-send between two
+evaluations it is never called on.
+
+The alternative is to send no `endsAt` and let Alertmanager apply its own
+`resolve_timeout`, and that couples the ruler to a value in a config file it
+cannot read. An operator who lowers `resolve_timeout` below the resend
+interval gets a firing alert that expires between resends: Alertmanager
+delivers a resolved notification for something still broken, then the next
+evaluation fires it again. Nothing in the ruler can detect it. Sending the
+expiry explicitly removes the coupling, so the resend interval sizes
+notification traffic and nothing else. Prometheus does the same thing, for
+the same reason.
+
+The factor of four is a delivery margin: three consecutive failed sends can
+pass before an alert that is still firing expires.
 
 Alertmanager owns grouping, silences, inhibition, and routing. The ruler does
 not.
@@ -1897,6 +1915,73 @@ instances must stay distinct per source. That is a fingerprint question
     read. An operator seeing a counter move has nothing telling them which
     rule, which source, or what the error said. Structured logging of
     evaluation and notification failures is the missing half of section 8.
+12. **A failed source stops re-sending the alerts it already had firing.**
+    `RuleEval.Evaluate` skips a source whose query failed, and skipping it
+    contributes nothing to the batch, so that source's firing alerts are not
+    re-posted on that tick. Their state survives, which is what 6.11 claims
+    and is true, but their validity (6.5) does not: a ClickHouse outage
+    lasting longer than four resend periods lets Alertmanager expire them.
+    An operator gets a resolved notification for something still broken,
+    then a fresh page when the source comes back and the next evaluation
+    fires it again. The state machine never resolved anything, so nothing in
+    the ruler records that it happened.
+
+    Prometheus has the same shape, because it only notifies after a
+    successful evaluation. The argument for diverging is that the failure
+    here is a network call to a separate database rather than a local
+    evaluation, so it is both likelier and longer.
+
+    Two defensible answers. Keep asserting the last known state: on a failed
+    source, re-send its currently firing instances unchanged, which needs a
+    read-only snapshot on `alert.State` that does not advance any timer. Or
+    let them expire deliberately, and say so, on the grounds that a ruler
+    that cannot query has no business claiming an alert is still true. The
+    thing that is not defensible is the current position, which is the
+    second one arrived at by accident and undocumented.
+13. **`ruler_alerts_sent_total` counts batches, not alerts.**
+    `instrumentedSender.Send` increments once per call regardless of how
+    many alerts the batch held. The Prometheus metric the name tracks
+    (8.2) counts alerts, so a dashboard carried over from a Prometheus
+    ruler reads wrong, and the number is unusable for notification volume.
+    `Add(float64(len(alerts)))` is the fix. Worth deciding at the same time
+    whether a separate batch counter is wanted, since the two questions
+    "how much are we paging" and "how much traffic is Alertmanager taking"
+    are both real and this metric currently answers neither.
+14. **Nothing checks that two rules cannot produce the same alert.** 7.6
+    scopes `rule/name` uniqueness to the group, on the reasoning that group
+    labels and `source` already separate two same-named rules in the
+    fingerprint. That reasoning is an assumption about how the files happen
+    to be written, not something enforced. Two rules with the same `alert`
+    name, the same `sources` selector and no distinguishing group or rule
+    labels produce the same final label set, and are therefore the same
+    alert to Alertmanager and to `notify.Cadence`, which keys `lastSent` on
+    the fingerprint alone. Each rule then overwrites the other's cadence and
+    whichever evaluated last decides what Alertmanager holds.
+
+    This is a tier 0 check: alert name, static labels and selector are all
+    in the files. It needs the sources file as well as the rule, so it
+    belongs in the loader next to `rule/source-match` rather than in the
+    rule parser. It cannot be exact, because result columns contribute
+    labels that are only known at evaluation time, so it can only flag rules
+    whose *static* identity already collides. That is the reachable case and
+    it is worth flagging.
+15. **A fingerprint collision merges two unrelated alerts.** 6.3 length
+    prefixes each key and value so that no separator inside a ClickHouse
+    column value can forge a match, which closes the construction of a
+    collision but not its arithmetic: the result is 64 bits, and
+    `State.active` is keyed on it alone. Two genuinely different label sets
+    that hash alike become one instance, with one value and one `for` timer.
+
+    Prometheus takes the same bet, so this is not a departure from the model
+    the project copies, and the probability is remote for the instance
+    counts a single rule produces. It is cheap to close all the same,
+    because the instance already stores its `Labels`: compare them on a hash
+    hit and treat a mismatch as the distinct alerts they are. The same code
+    path in `State.Eval` is where item 8 lands, so the two are worth doing
+    together, and they must not be conflated. Item 8 is two rows that are
+    genuinely identical after the label rules are applied, which is a rule
+    the author needs to fix. This is two rows that are genuinely different
+    and the hash cannot tell.
 
 ---
 

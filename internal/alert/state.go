@@ -47,6 +47,12 @@ type Alert struct {
 	ActiveAt    time.Time
 	FiredAt     time.Time
 	ResolvedAt  time.Time
+
+	// ValidUntil is how long Alertmanager should hold this alert without
+	// hearing about it again. It is stamped by notify.Cadence at send time
+	// rather than here, because its length is a property of how often the
+	// alert is re-sent and the state machine knows nothing about that.
+	ValidUntil time.Time
 }
 
 // instance is a tracked alert plus the bookkeeping a caller never sees.

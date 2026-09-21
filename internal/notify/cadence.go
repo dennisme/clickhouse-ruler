@@ -14,24 +14,33 @@ type Sender interface {
 	Send(ctx context.Context, alerts []alert.Alert, annotations map[string]string) error
 }
 
-// DefaultResendInterval is a third of Alertmanager's own default
-// resolve_timeout (5m), which is the number Cadence is sized against.
-//
-// This is deliberately not read from Alertmanager's configuration: the
-// ruler has no way to fetch it, and configuring it here would duplicate a
-// value the operator already owns in the Alertmanager config. An operator
-// who lowers resolve_timeout well below its default should keep it
-// comfortably above 3x this so a resend still beats expiry; that tradeoff is
-// theirs to make in Alertmanager's own config, not a flag on the ruler.
+// DefaultResendInterval is how often a firing alert is re-posted unless an
+// operator says otherwise. It decides notification traffic rather than
+// correctness, because every firing alert carries its own expiry (validity).
 const DefaultResendInterval = 100 * time.Second
 
-// Cadence throttles how often a firing alert is re-sent.
+// validityFactor is how many resend periods a firing alert stays valid for.
+// Four means three consecutive failed sends can pass before Alertmanager
+// expires an alert that is still firing, which is the same margin Prometheus
+// gives itself.
+const validityFactor = 4
+
+// Cadence throttles how often a firing alert is re-sent, and stamps each one
+// with how long Alertmanager should hold it.
 //
-// Alertmanager expires a firing alert after resolve_timeout unless it hears
-// about it again, so a firing alert has to be re-posted well before that. But
-// posting on every evaluation is a lot of traffic for a rule on a short
-// interval, so a firing alert is only due again once its own interval has
-// elapsed since it was last actually sent (spec 6.5).
+// Alertmanager expires a firing alert once its endsAt passes unless it hears
+// about it again, so a firing alert has to be re-posted before then. Posting
+// on every evaluation is a lot of traffic for a rule on a short interval, so
+// a firing alert is only due again once its own interval has elapsed since it
+// was last actually sent (spec 6.5).
+//
+// The expiry is the ruler's to set, not Alertmanager's. An alert posted with
+// no endsAt falls back to Alertmanager's resolve_timeout, which lives in a
+// config the ruler cannot read and an operator is free to change: too short
+// and a firing alert expires between resends, producing a resolved
+// notification for something still broken and a re-fire behind it. Sending an
+// explicit validity removes the coupling, so the resend interval below sizes
+// traffic and nothing else.
 // One Cadence is shared by every rule in every group, and the scheduler runs
 // each group in its own goroutine, so two groups whose ticks overlap call
 // Send at the same time. lastSent is therefore guarded: an unsynchronised map
@@ -46,9 +55,7 @@ type Cadence struct {
 	lastSent map[uint64]time.Time
 }
 
-// NewCadence builds a Cadence that re-sends a firing alert every interval,
-// which the caller should set to roughly a third of Alertmanager's
-// resolve_timeout.
+// NewCadence builds a Cadence that re-sends a firing alert every interval.
 func NewCadence(sender Sender, interval time.Duration) *Cadence {
 	return &Cadence{
 		sender:   sender,
@@ -60,6 +67,12 @@ func NewCadence(sender Sender, interval time.Duration) *Cadence {
 // Send posts the alerts due at now: every resolved alert, and every firing
 // alert not sent within the last cadence interval. Pending alerts are left
 // for Payload to drop.
+//
+// evalInterval is the interval of the group the alerts came from. It bounds
+// the validity from below, because Cadence cannot re-send between two
+// evaluations it is never called on: a group ticking slower than the cadence
+// is what actually paces the resend, and a validity sized off the cadence
+// alone would expire in the gap.
 //
 // A send failure is not recorded, so the alert is due again on the very next
 // evaluation instead of waiting out a full cadence interval. That is what
@@ -73,8 +86,8 @@ func NewCadence(sender Sender, interval time.Duration) *Cadence {
 // identical alerts (spec 6.5, which relies on the same property to make two
 // ruler replicas safe), and in practice unreachable, because a fingerprint
 // belongs to one rule and a rule is evaluated by one goroutine at a time.
-func (c *Cadence) Send(ctx context.Context, now time.Time, alerts []alert.Alert, annotations map[string]string) error {
-	due := c.dueAt(now, alerts)
+func (c *Cadence) Send(ctx context.Context, now time.Time, evalInterval time.Duration, alerts []alert.Alert, annotations map[string]string) error {
+	due := c.dueAt(now, evalInterval, alerts)
 	if len(due) == 0 {
 		return nil
 	}
@@ -85,10 +98,13 @@ func (c *Cadence) Send(ctx context.Context, now time.Time, alerts []alert.Alert,
 	return nil
 }
 
-// dueAt selects the alerts worth posting at now.
-func (c *Cadence) dueAt(now time.Time, alerts []alert.Alert) []alert.Alert {
+// dueAt selects the alerts worth posting at now and stamps each firing one
+// with how long Alertmanager should hold it.
+func (c *Cadence) dueAt(now time.Time, evalInterval time.Duration, alerts []alert.Alert) []alert.Alert {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
+	validity := c.validity(evalInterval)
 
 	due := make([]alert.Alert, 0, len(alerts))
 	for _, a := range alerts {
@@ -101,10 +117,23 @@ func (c *Cadence) dueAt(now time.Time, alerts []alert.Alert) []alert.Alert {
 			if sent, ok := c.lastSent[a.Fingerprint]; ok && now.Sub(sent) < c.interval {
 				continue
 			}
+			// The alert is a copy, so this never reaches alert.State.
+			a.ValidUntil = now.Add(validity)
 		}
 		due = append(due, a)
 	}
 	return due
+}
+
+// validity is how far ahead a firing alert's expiry is set, measured from the
+// period it is actually re-sent on: whichever of the cadence and the group's
+// interval is longer.
+func (c *Cadence) validity(evalInterval time.Duration) time.Duration {
+	period := c.interval
+	if evalInterval > period {
+		period = evalInterval
+	}
+	return validityFactor * period
 }
 
 // record marks what was actually delivered. It runs only after a successful
