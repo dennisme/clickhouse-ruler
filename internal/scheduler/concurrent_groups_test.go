@@ -49,7 +49,7 @@ func TestConcurrentGroupsShareOneCadenceSafely(t *testing.T) {
 
 	reg := prometheus.NewRegistry()
 	metrics := NewMetrics(reg)
-	cadence := notify.NewCadence(&recordingSender{}, time.Millisecond)
+	cadence := notify.NewCadence(&recordingSender{}, time.Millisecond, notify.DefaultResendTolerance)
 	clock := newFakeClock(time.Unix(0, 0))
 	q := &countingQuerier{}
 

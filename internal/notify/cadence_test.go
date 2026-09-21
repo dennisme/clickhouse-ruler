@@ -36,7 +36,7 @@ func resolved(fp uint64) alert.Alert {
 // otherwise nothing would ever fire.
 func TestCadenceSendsAFiringAlertTheFirstTime(t *testing.T) {
 	s := &recordingSender{}
-	c := NewCadence(s, time.Minute)
+	c := NewCadence(s, time.Minute, DefaultResendTolerance)
 
 	now := time.Now()
 	if err := c.Send(context.Background(), now, testEvalInterval, []alert.Alert{firing(1)}, nil); err != nil {
@@ -52,7 +52,7 @@ func TestCadenceSendsAFiringAlertTheFirstTime(t *testing.T) {
 // re-posted.
 func TestCadenceDropsAFiringAlertBeforeItsCadenceElapses(t *testing.T) {
 	s := &recordingSender{}
-	c := NewCadence(s, time.Minute)
+	c := NewCadence(s, time.Minute, DefaultResendTolerance)
 
 	now := time.Now()
 	if err := c.Send(context.Background(), now, testEvalInterval, []alert.Alert{firing(1)}, nil); err != nil {
@@ -73,7 +73,7 @@ func TestCadenceDropsAFiringAlertBeforeItsCadenceElapses(t *testing.T) {
 // cadence interval elapses the alert has to go out again to keep it alive.
 func TestCadenceResendsAFiringAlertOnceItsCadenceElapses(t *testing.T) {
 	s := &recordingSender{}
-	c := NewCadence(s, time.Minute)
+	c := NewCadence(s, time.Minute, DefaultResendTolerance)
 
 	now := time.Now()
 	if err := c.Send(context.Background(), now, testEvalInterval, []alert.Alert{firing(1)}, nil); err != nil {
@@ -93,7 +93,7 @@ func TestCadenceResendsAFiringAlertOnceItsCadenceElapses(t *testing.T) {
 // leave Alertmanager showing an alert that is no longer true.
 func TestCadenceAlwaysSendsAResolvedAlert(t *testing.T) {
 	s := &recordingSender{}
-	c := NewCadence(s, time.Minute)
+	c := NewCadence(s, time.Minute, DefaultResendTolerance)
 
 	now := time.Now()
 	if err := c.Send(context.Background(), now, testEvalInterval, []alert.Alert{firing(1)}, nil); err != nil {
@@ -117,7 +117,7 @@ func TestCadenceAlwaysSendsAResolvedAlert(t *testing.T) {
 // is what keeps a notification failure from losing the alert (spec 6.5).
 func TestCadenceRetriesAfterASendFailureWithoutWaitingForCadence(t *testing.T) {
 	s := &recordingSender{err: context.DeadlineExceeded}
-	c := NewCadence(s, time.Minute)
+	c := NewCadence(s, time.Minute, DefaultResendTolerance)
 
 	now := time.Now()
 	if err := c.Send(context.Background(), now, testEvalInterval, []alert.Alert{firing(1)}, nil); err == nil {
@@ -140,7 +140,7 @@ func TestCadenceRetriesAfterASendFailureWithoutWaitingForCadence(t *testing.T) {
 // wrongly resolves it.
 func TestCadenceStampsValidityFromTheCadenceInterval(t *testing.T) {
 	s := &recordingSender{}
-	c := NewCadence(s, time.Minute)
+	c := NewCadence(s, time.Minute, DefaultResendTolerance)
 
 	now := time.Now()
 	if err := c.Send(context.Background(), now, testEvalInterval, []alert.Alert{firing(1)}, nil); err != nil {
@@ -161,7 +161,7 @@ func TestCadenceStampsValidityFromTheCadenceInterval(t *testing.T) {
 // validity sized off the cadence alone would expire in that gap.
 func TestCadenceStampsValidityFromTheGroupIntervalWhenItIsLonger(t *testing.T) {
 	s := &recordingSender{}
-	c := NewCadence(s, time.Minute)
+	c := NewCadence(s, time.Minute, DefaultResendTolerance)
 
 	now := time.Now()
 	if err := c.Send(context.Background(), now, 10*time.Minute, []alert.Alert{firing(1)}, nil); err != nil {
@@ -181,7 +181,7 @@ func TestCadenceStampsValidityFromTheGroupIntervalWhenItIsLonger(t *testing.T) {
 // would tell Alertmanager to keep holding an alert that is no longer true.
 func TestCadenceLeavesAResolvedAlertWithoutValidity(t *testing.T) {
 	s := &recordingSender{}
-	c := NewCadence(s, time.Minute)
+	c := NewCadence(s, time.Minute, DefaultResendTolerance)
 
 	now := time.Now()
 	if err := c.Send(context.Background(), now, testEvalInterval, []alert.Alert{resolved(1)}, nil); err != nil {
@@ -193,5 +193,35 @@ func TestCadenceLeavesAResolvedAlertWithoutValidity(t *testing.T) {
 	}
 	if got := s.calls[0][0].ValidUntil; !got.IsZero() {
 		t.Errorf("ValidUntil = %v, want zero on a resolved alert", got)
+	}
+}
+
+// Four resend periods is what Prometheus gives itself, and it is sized for a
+// local evaluation failing. A ClickHouse outage is a network call to a
+// separate database, so an operator has to be able to buy more room than
+// Prometheus needed.
+func TestCadenceStampsValidityFromTheConfiguredTolerance(t *testing.T) {
+	s := &recordingSender{}
+	c := NewCadence(s, time.Minute, 10)
+
+	now := time.Now()
+	if err := c.Send(context.Background(), now, testEvalInterval, []alert.Alert{firing(1)}, nil); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+
+	if len(s.calls) != 1 || len(s.calls[0]) != 1 {
+		t.Fatalf("got %v, want one call with one alert", s.calls)
+	}
+	want := now.Add(10 * time.Minute)
+	if got := s.calls[0][0].ValidUntil; !got.Equal(want) {
+		t.Errorf("ValidUntil = %v, want %v", got, want)
+	}
+}
+
+// The default is Prometheus' own number, so an operator who changes nothing
+// gets the behaviour a Prometheus ruler would have given them.
+func TestDefaultResendToleranceMatchesPrometheus(t *testing.T) {
+	if DefaultResendTolerance != 4 {
+		t.Errorf("DefaultResendTolerance = %d, want 4", DefaultResendTolerance)
 	}
 }

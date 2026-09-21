@@ -79,7 +79,7 @@ func TestEvalGroupLogsWhichRuleAndSourceFailed(t *testing.T) {
 	q := &fakeQuerier{err: errors.New("connection refused")}
 
 	sched := New(oneRuleSet("Broken", source.Source{Name: "src1"}), map[string]Querier{"src1": q},
-		notify.NewCadence(&recordingSender{}, time.Minute),
+		notify.NewCadence(&recordingSender{}, time.Minute, notify.DefaultResendTolerance),
 		NewMetrics(prometheus.NewRegistry()), newFakeClock(time.Unix(0, 0)), 0, log)
 
 	sched.groups[0].Eval(context.Background(), time.Unix(0, 0))
@@ -108,7 +108,7 @@ func TestEvalGroupLogsASendFailure(t *testing.T) {
 
 	sched := New(oneRuleSet("Undeliverable", source.Source{Name: "src1"}),
 		map[string]Querier{"src1": &fakeQuerier{samples: oneSample()}},
-		notify.NewCadence(sender, time.Minute),
+		notify.NewCadence(sender, time.Minute, notify.DefaultResendTolerance),
 		NewMetrics(prometheus.NewRegistry()), newFakeClock(time.Unix(0, 0)), 0, log)
 
 	sched.groups[0].Eval(context.Background(), time.Unix(0, 0))
@@ -144,7 +144,7 @@ func TestEvalGroupLogsOncePerRuleRegardlessOfInstanceCount(t *testing.T) {
 
 	sched := New(oneRuleSet("Noisy", source.Source{Name: "src1"}),
 		map[string]Querier{"src1": &fakeQuerier{samples: samples}},
-		notify.NewCadence(sender, time.Minute),
+		notify.NewCadence(sender, time.Minute, notify.DefaultResendTolerance),
 		NewMetrics(prometheus.NewRegistry()), newFakeClock(time.Unix(0, 0)), 0, log)
 
 	sched.groups[0].Eval(context.Background(), time.Unix(0, 0))
@@ -165,7 +165,7 @@ func TestShutdownLogsWhenTheTimeoutExpires(t *testing.T) {
 
 	clock := newFakeClock(time.Unix(0, 0))
 	sched := New(oneRuleSet("Slow", source.Source{Name: "src1"}), map[string]Querier{"src1": q},
-		notify.NewCadence(&recordingSender{}, time.Minute),
+		notify.NewCadence(&recordingSender{}, time.Minute, notify.DefaultResendTolerance),
 		NewMetrics(prometheus.NewRegistry()), clock, 0, log)
 
 	ctx, cancel := context.WithCancel(context.Background())

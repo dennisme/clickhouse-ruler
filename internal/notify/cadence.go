@@ -19,11 +19,23 @@ type Sender interface {
 // correctness, because every firing alert carries its own expiry (validity).
 const DefaultResendInterval = 100 * time.Second
 
-// validityFactor is how many resend periods a firing alert stays valid for.
-// Four means three consecutive failed sends can pass before Alertmanager
-// expires an alert that is still firing, which is the same margin Prometheus
-// gives itself.
-const validityFactor = 4
+// DefaultResendTolerance is how many resend periods a firing alert stays
+// valid for unless an operator says otherwise. Four means three consecutive
+// failures can pass before Alertmanager expires an alert that is still
+// firing.
+//
+// Four is Prometheus' number. `sendAlerts` in its rules package stamps
+// `ValidUntil = ts.Add(4 * delta)` where delta is `max(interval,
+// resendDelay)`, under the comment "Allow for two Eval or Alertmanager send
+// failures". Note what that covers: Prometheus spends the same budget on a
+// failed evaluation as on a failed send, because an evaluation it could not
+// run sends nothing either.
+//
+// It is the default rather than a constant because Prometheus sized it for a
+// local PromQL evaluation, and ours is a query to a separate database over a
+// network. That failure is both likelier and longer, and only an operator who
+// knows their cluster can say how much longer (spec 6.5).
+const DefaultResendTolerance = 4
 
 // Cadence throttles how often a firing alert is re-sent, and stamps each one
 // with how long Alertmanager should hold it.
@@ -48,19 +60,22 @@ const validityFactor = 4
 // whole ruler, which is the worst possible failure for a process whose job is
 // to page people.
 type Cadence struct {
-	sender   Sender
-	interval time.Duration
+	sender    Sender
+	interval  time.Duration
+	tolerance int
 
 	mu       sync.Mutex
 	lastSent map[uint64]time.Time
 }
 
-// NewCadence builds a Cadence that re-sends a firing alert every interval.
-func NewCadence(sender Sender, interval time.Duration) *Cadence {
+// NewCadence builds a Cadence that re-sends a firing alert every interval and
+// asks Alertmanager to hold it for tolerance of those periods.
+func NewCadence(sender Sender, interval time.Duration, tolerance int) *Cadence {
 	return &Cadence{
-		sender:   sender,
-		interval: interval,
-		lastSent: map[uint64]time.Time{},
+		sender:    sender,
+		interval:  interval,
+		tolerance: tolerance,
+		lastSent:  map[uint64]time.Time{},
 	}
 }
 
@@ -133,7 +148,7 @@ func (c *Cadence) validity(evalInterval time.Duration) time.Duration {
 	if evalInterval > period {
 		period = evalInterval
 	}
-	return validityFactor * period
+	return time.Duration(c.tolerance) * period
 }
 
 // record marks what was actually delivered. It runs only after a successful

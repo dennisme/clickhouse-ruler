@@ -53,6 +53,9 @@ func runRun(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		"how long an in-flight evaluation gets to finish once shutdown starts")
 	resendInterval := fs.Duration("resend-interval", notify.DefaultResendInterval,
 		"how often a still-firing alert is re-posted to Alertmanager; each alert is sent an expiry of four times this")
+	resendTolerance := fs.Int("resend-tolerance", notify.DefaultResendTolerance,
+		"how many resend periods a firing alert stays valid for, so how many consecutive failed evaluations or sends "+
+			"pass before Alertmanager expires an alert that is still firing; 4 is what Prometheus gives itself")
 	logLevel := fs.String("log-level", "info", "log verbosity: debug, info, warn or error")
 
 	if err := fs.Parse(args); err != nil {
@@ -67,6 +70,14 @@ func runRun(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	// Alertmanager reads as resolved.
 	if *resendInterval <= 0 {
 		printf(stderr, "--resend-interval must be positive, got %s\n", *resendInterval)
+		return exitUsage
+	}
+
+	// One period of validity expires a firing alert at the exact moment it is
+	// next due, leaving no room for the send that would have renewed it to
+	// fail. Tolerating nothing is not a tolerance.
+	if *resendTolerance < 2 {
+		printf(stderr, "--resend-tolerance must be at least 2, got %d\n", *resendTolerance)
 		return exitUsage
 	}
 
@@ -119,7 +130,7 @@ func runRun(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	clock := scheduler.NewRealClock()
 
 	client := notify.NewClient(*alertmanagerURL)
-	cadence := scheduler.NewCadence(client, *alertmanagerURL, *resendInterval, metrics, clock)
+	cadence := scheduler.NewCadence(client, *alertmanagerURL, *resendInterval, *resendTolerance, metrics, clock)
 
 	sched := scheduler.New(set, toQuerierMap(queriers), cadence, metrics, clock, *queryConcurrency, log)
 

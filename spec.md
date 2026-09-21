@@ -690,10 +690,10 @@ The server side settings profile cap is the real guarantee either way. See 6.7.
 `POST /api/v2/alerts`. Firing alerts are re-sent on an interval so
 Alertmanager does not expire them, `--resend-interval`, default 100s.
 
-**Every firing alert carries its own `endsAt`**, set to four times the period
-it is actually re-sent on: whichever is longer of the resend interval and the
-group's own interval, because the ruler cannot re-send between two
-evaluations it is never called on.
+**Every firing alert carries its own `endsAt`**, set to `--resend-tolerance`
+times the period it is actually re-sent on: whichever is longer of the resend
+interval and the group's own interval, because the ruler cannot re-send
+between two evaluations it is never called on.
 
 The alternative is to send no `endsAt` and let Alertmanager apply its own
 `resolve_timeout`, and that couples the ruler to a value in a config file it
@@ -705,8 +705,37 @@ expiry explicitly removes the coupling, so the resend interval sizes
 notification traffic and nothing else. Prometheus does the same thing, for
 the same reason.
 
-The factor of four is a delivery margin: three consecutive failed sends can
-pass before an alert that is still firing expires.
+**The tolerance is the budget for everything that can stop an alert being
+re-asserted.** It defaults to 4, which is Prometheus' number: its `sendAlerts`
+stamps `ValidUntil = ts.Add(4 * delta)` with `delta` of `max(interval,
+resendDelay)`, under the comment "Allow for two Eval or Alertmanager send
+failures". Worth reading twice, because it is the answer to a question this
+spec used to leave open. Prometheus spends one budget on both kinds of
+failure, a send it could not deliver and an evaluation it could not run,
+because an evaluation that failed sends nothing either.
+
+That is also what this ruler does, and the reason it is a flag rather than a
+constant. A source whose query fails is skipped for that tick (6.11), so its
+firing alerts are not re-posted and they are living on this budget. Prometheus
+sized the budget for a local PromQL evaluation over data it already has. Ours
+is a query to a separate database across a network, which fails more often and
+for longer, and only an operator who knows their cluster can say how much
+longer. At the default of 4 and a 100s resend interval, a ClickHouse outage
+has about six and a half minutes before Alertmanager expires alerts that are
+still true, delivers a resolved notification for each, and pages again when
+the source comes back.
+
+Raising the tolerance costs nothing but a longer wait for a genuine resolve
+that the ruler failed to deliver, and the `endsAt` on each alert is what buys
+the time. A tolerance below 2 is refused: one period expires an alert at the
+exact moment it is next due, leaving no room for the send that would have
+renewed it to fail.
+
+The alternative was to re-assert on failure, sending a failed source's
+currently firing instances from a read-only snapshot of `alert.State`. That is
+strictly more correct and survives an outage of any length, and it is not
+here, because it means claiming an alert is still true at a moment when the
+ruler cannot check. Reach for it if a real outage beats a tuned tolerance.
 
 Alertmanager owns grouping, silences, inhibition, and routing. The ruler does
 not.
@@ -1908,6 +1937,16 @@ instances must stay distinct per source. That is a fingerprint question
   and a rule gets the strictest setting that applies to it. The merge is a
   maximum, so no precedence rule exists and no scope can loosen another.
   See 7.7.
+- **A failed source lets its firing alerts expire, and the margin is tunable.**
+  A source whose query fails is skipped for that tick, so its firing alerts are
+  not re-asserted and they live on the `endsAt` of the last successful send.
+  That is Prometheus' behaviour, and `--resend-tolerance` defaults to
+  Prometheus' number so an operator who changes nothing gets what a Prometheus
+  ruler would have given them. It is a flag because Prometheus sized that
+  budget for a local evaluation and ours is a query to a separate database.
+  Re-asserting from a read-only snapshot of `alert.State` was the alternative,
+  and it is not here: it means claiming an alert is still true when the ruler
+  cannot check. See 6.5.
 - **`ruler_alerts_sent_total` counts alerts, and there is no batch counter.**
   The name tracks a Prometheus metric that counts alerts, so counting batches
   read wrong on any dashboard carried over. "How much traffic is Alertmanager
@@ -1982,30 +2021,7 @@ instances must stay distinct per source. That is a fingerprint question
     a resolved alert re-renders from its last value rather than carrying what
     it said when it fired. Prometheus templates at evaluation time and stores
     the result on the alert; doing the same would fix all three.
-11. **A failed source stops re-sending the alerts it already had firing.**
-    `RuleEval.Evaluate` skips a source whose query failed, and skipping it
-    contributes nothing to the batch, so that source's firing alerts are not
-    re-posted on that tick. Their state survives, which is what 6.11 claims
-    and is true, but their validity (6.5) does not: a ClickHouse outage
-    lasting longer than four resend periods lets Alertmanager expire them.
-    An operator gets a resolved notification for something still broken,
-    then a fresh page when the source comes back and the next evaluation
-    fires it again. The state machine never resolved anything, so nothing in
-    the ruler records that it happened.
-
-    Prometheus has the same shape, because it only notifies after a
-    successful evaluation. The argument for diverging is that the failure
-    here is a network call to a separate database rather than a local
-    evaluation, so it is both likelier and longer.
-
-    Two defensible answers. Keep asserting the last known state: on a failed
-    source, re-send its currently firing instances unchanged, which needs a
-    read-only snapshot on `alert.State` that does not advance any timer. Or
-    let them expire deliberately, and say so, on the grounds that a ruler
-    that cannot query has no business claiming an alert is still true. The
-    thing that is not defensible is the current position, which is the
-    second one arrived at by accident and undocumented.
-12. **Nothing checks that two rules cannot produce the same alert.** 7.6
+11. **Nothing checks that two rules cannot produce the same alert.** 7.6
     scopes `rule/name` uniqueness to the group, on the reasoning that group
     labels and `source` already separate two same-named rules in the
     fingerprint. That reasoning is an assumption about how the files happen
@@ -2023,7 +2039,7 @@ instances must stay distinct per source. That is a fingerprint question
     labels that are only known at evaluation time, so it can only flag rules
     whose *static* identity already collides. That is the reachable case and
     it is worth flagging.
-13. **A fingerprint collision merges two unrelated alerts.** 6.3 length
+12. **A fingerprint collision merges two unrelated alerts.** 6.3 length
     prefixes each key and value so that no separator inside a ClickHouse
     column value can forge a match, which closes the construction of a
     collision but not its arithmetic: the result is 64 bits, and

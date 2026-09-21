@@ -95,7 +95,7 @@ func TestRuleEvalQueriesItsSourcesConcurrently(t *testing.T) {
 	}
 
 	eval := NewRuleEval(multiSourceRule(names...), queriers,
-		notify.NewCadence(&recordingSender{}, time.Minute), newSemaphore(0))
+		notify.NewCadence(&recordingSender{}, time.Minute, notify.DefaultResendTolerance), newSemaphore(0))
 
 	go eval.Evaluate(context.Background(), time.Now())
 
@@ -120,7 +120,7 @@ func TestRuleEvalRespectsTheQueryConcurrencyLimit(t *testing.T) {
 	}
 
 	eval := NewRuleEval(multiSourceRule(names...), queriers,
-		notify.NewCadence(&recordingSender{}, time.Minute), newSemaphore(limit))
+		notify.NewCadence(&recordingSender{}, time.Minute, notify.DefaultResendTolerance), newSemaphore(limit))
 
 	done := make(chan Result, 1)
 	go func() { done <- eval.Evaluate(context.Background(), time.Now()) }()
@@ -153,7 +153,7 @@ func TestRuleEvalReturnsSourcesInAStableOrder(t *testing.T) {
 
 	sender := &recordingSender{}
 	eval := NewRuleEval(multiSourceRule(names...), queriers,
-		notify.NewCadence(sender, time.Minute), newSemaphore(0))
+		notify.NewCadence(sender, time.Minute, notify.DefaultResendTolerance), newSemaphore(0))
 
 	eval.Evaluate(context.Background(), time.Now())
 

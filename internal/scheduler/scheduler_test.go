@@ -32,7 +32,7 @@ func TestNewCountsRulesWithNoMatchedSourceAsUnmatched(t *testing.T) {
 
 	reg := prometheus.NewRegistry()
 	metrics := NewMetrics(reg)
-	cadence := notify.NewCadence(&recordingSender{}, time.Minute)
+	cadence := notify.NewCadence(&recordingSender{}, time.Minute, notify.DefaultResendTolerance)
 	clock := newFakeClock(time.Unix(0, 0))
 
 	New(set, map[string]Querier{"src1": &fakeQuerier{}}, cadence, metrics, clock, 0, nil)
@@ -58,7 +58,7 @@ func TestNewStaggersGroupsSharingAnInterval(t *testing.T) {
 
 	reg := prometheus.NewRegistry()
 	metrics := NewMetrics(reg)
-	cadence := notify.NewCadence(&recordingSender{}, time.Minute)
+	cadence := notify.NewCadence(&recordingSender{}, time.Minute, notify.DefaultResendTolerance)
 	clock := newFakeClock(time.Unix(0, 0))
 
 	sched := New(set, map[string]Querier{"src1": &fakeQuerier{}}, cadence, metrics, clock, 0, nil)
@@ -91,7 +91,7 @@ func TestAlertsActiveIsLabelledByGroupAndRule(t *testing.T) {
 
 	reg := prometheus.NewRegistry()
 	metrics := NewMetrics(reg)
-	cadence := notify.NewCadence(&recordingSender{}, time.Minute)
+	cadence := notify.NewCadence(&recordingSender{}, time.Minute, notify.DefaultResendTolerance)
 	clock := newFakeClock(time.Unix(0, 0))
 
 	sched := New(set, map[string]Querier{"src1": &fakeQuerier{samples: oneSample()}},
@@ -119,7 +119,7 @@ func TestAlertsActiveIsLabelledByGroupAndRule(t *testing.T) {
 func TestShutdownBeforeStartIsANoop(t *testing.T) {
 	reg := prometheus.NewRegistry()
 	metrics := NewMetrics(reg)
-	cadence := notify.NewCadence(&recordingSender{}, time.Minute)
+	cadence := notify.NewCadence(&recordingSender{}, time.Minute, notify.DefaultResendTolerance)
 	clock := newFakeClock(time.Unix(0, 0))
 
 	sched := New(&ruleset.Set{}, map[string]Querier{}, cadence, metrics, clock, 0, nil)

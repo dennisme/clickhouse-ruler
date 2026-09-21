@@ -26,7 +26,7 @@ func TestCadenceSendIsSafeFromConcurrentGroups(t *testing.T) {
 	// Cadence's own state rather than on a test helper's slice.
 	c := NewCadence(senderFunc(func(context.Context, []alert.Alert, map[string]string) error {
 		return nil
-	}), time.Minute)
+	}), time.Minute, DefaultResendTolerance)
 
 	now := time.Now()
 	const groups = 8

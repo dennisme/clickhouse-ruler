@@ -133,3 +133,26 @@ func TestParseLogLevel(t *testing.T) {
 		}
 	}
 }
+
+// A tolerance of one makes a firing alert expire at the exact moment it is
+// next due, so any delay at all produces a resolved notification for
+// something still broken. Below two there is no headroom to tolerate
+// anything, which is the whole point of the number.
+func TestRunRejectsAToleranceWithNoHeadroom(t *testing.T) {
+	dir := fixture(t, bareRule, "")
+
+	for _, tolerance := range []string{"1", "0", "-1"} {
+		code, stderr := runRunCmd(t, "run",
+			"--rules", filepath.Join(dir, "rules"),
+			"--sources", filepath.Join(dir, "sources.yaml"),
+			"--alertmanager", "http://127.0.0.1:9093",
+			"--resend-tolerance", tolerance)
+
+		if code != exitUsage {
+			t.Errorf("--resend-tolerance %s: exit = %d, want exitUsage\n%s", tolerance, code, stderr)
+		}
+		if !strings.Contains(stderr, "--resend-tolerance") {
+			t.Errorf("--resend-tolerance %s: expected the reason on stderr, got:\n%s", tolerance, stderr)
+		}
+	}
+}
