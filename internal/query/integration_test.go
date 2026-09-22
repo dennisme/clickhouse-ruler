@@ -267,7 +267,7 @@ func TestRunRejectsMapColumnAsLabel(t *testing.T) {
 	seed(t, q, []span{{at: anchor.Add(-time.Minute), service: "checkout", duration: 1}})
 
 	r := rule.Rule{
-		Alert:  "MapLabel",
+		Alert: "MapLabel",
 		Expr: `SELECT SpanAttributes, max(Duration) AS value FROM otel.otel_traces
 		       WHERE Timestamp >= {{ .From }} AND Timestamp < {{ .To }} GROUP BY SpanAttributes`,
 		Window: 5 * time.Minute,
@@ -296,7 +296,7 @@ func TestRunGroupsByResourceAttribute(t *testing.T) {
 	})
 
 	r := rule.Rule{
-		Alert:  "LatencyByEnv",
+		Alert: "LatencyByEnv",
 		Expr: `SELECT ResourceAttributes['deployment.environment'] AS environment,
 		              max(Duration) AS value
 		       FROM otel.otel_traces

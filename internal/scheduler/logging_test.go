@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 
 	"github.com/dennisme/clickhouse-ruler/internal/alert"
 	"github.com/dennisme/clickhouse-ruler/internal/notify"
@@ -217,4 +218,45 @@ func (q *blockingQuerier) Run(context.Context, rule.Rule, time.Time) ([]alert.Sa
 	}
 	<-q.release
 	return nil, nil
+}
+
+// A duplicate label set is a rule the author has to fix, so it has to reach
+// them the way a query failure does: counted as an evaluation failure and named
+// in one log line, with the label set the rows collapsed onto.
+func TestEvalGroupLogsADuplicateLabelSet(t *testing.T) {
+	log, buf := logBuffer()
+
+	// The source's cluster label outranks the column of the same name
+	// (spec 6.3.1), so both rows reach one identity.
+	src := source.Source{Name: "src1", Labels: map[string]string{"cluster": "dc1"}}
+	q := &fakeQuerier{samples: []alert.Sample{
+		{Labels: map[string]string{"ServiceName": "checkout", "cluster": "reported-a"}, Value: 1},
+		{Labels: map[string]string{"ServiceName": "checkout", "cluster": "reported-b"}, Value: 2},
+	}}
+
+	metrics := NewMetrics(prometheus.NewRegistry())
+	sched := New(oneRuleSet("Collapsed", src), map[string]Querier{"src1": q},
+		notify.NewCadence(&recordingSender{}, time.Minute, notify.DefaultResendTolerance),
+		metrics, newFakeClock(time.Unix(0, 0)), 0, log)
+
+	sched.groups[0].Eval(context.Background(), time.Unix(0, 0))
+
+	lines := logLines(t, buf)
+	if len(lines) != 1 {
+		t.Fatalf("got %d log lines, want 1: %v", len(lines), lines)
+	}
+	wantFields(t, lines[0], map[string]string{
+		"level":      "ERROR",
+		"rule_group": "f.yaml:g1",
+		"rule":       "Collapsed",
+		"source":     "src1",
+	})
+	if got, _ := lines[0]["error"].(string); !strings.Contains(got, "ServiceName=checkout") {
+		t.Errorf("error field = %q, want the collapsed label set", got)
+	}
+
+	got := testutil.ToFloat64(metrics.EvaluationFailuresTotal.WithLabelValues("f.yaml:g1", "Collapsed"))
+	if got != 1 {
+		t.Errorf("ruler_rule_evaluation_failures_total = %v, want 1", got)
+	}
 }

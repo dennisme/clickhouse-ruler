@@ -21,8 +21,14 @@ init:
     fi
 
 # Build all packages.
+#
+# The second line compiles the integration tests without running them. They sit
+# behind a build tag, so nothing else in `just check` type checks them, and a
+# signature change stays green here and fails hours later in front of a real
+# ClickHouse.
 build:
     go build ./...
+    env -u GOROOT GOTOOLCHAIN=auto go vet -tags=integration ./...
 
 # Unit tests with the race detector. No container needed.
 test:
@@ -52,9 +58,20 @@ coverage:
     env -u GOROOT GOTOOLCHAIN=auto go run github.com/boumenot/gocover-cobertura@v1.4.0 \
         --by-files -ignore-gen-files < coverage.out > coverage.xml
 
-# Run golangci-lint.
+# Run golangci-lint, formatters included.
+#
+# `run` does not apply the formatters configured in .golangci.yml: golangci-lint
+# v2 moved those behind `fmt`, which rewrites files rather than reporting on
+# them. `--diff` makes it report instead, so unformatted code fails the recipe
+# rather than passing it silently. `just fix` is the one that rewrites.
 lint:
+    env -u GOROOT GOTOOLCHAIN=auto golangci-lint fmt --diff
     env -u GOROOT GOTOOLCHAIN=auto golangci-lint run
+
+# Apply every fix golangci-lint can make, formatting included.
+fix:
+    env -u GOROOT GOTOOLCHAIN=auto golangci-lint fmt
+    env -u GOROOT GOTOOLCHAIN=auto golangci-lint run --fix
 
 # Lint markdown with markdownlint-cli2.
 markdownlint:
@@ -79,4 +96,4 @@ compose-down:
     docker compose down -v --remove-orphans --rmi local
 
 # Everything CI runs, in the order CI runs it.
-check: lint test markdownlint
+check: lint build test markdownlint

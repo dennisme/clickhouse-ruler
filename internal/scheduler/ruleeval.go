@@ -34,7 +34,7 @@ var (
 	errQueueAbandoned = errors.New("shutdown before the query started")
 )
 
-// SourceError names a source whose query failed this evaluation, and why.
+// SourceError names a source this evaluation failed against, and why.
 type SourceError struct {
 	Source string
 	Err    error
@@ -43,12 +43,13 @@ type SourceError struct {
 // Result reports what one evaluation of a rule did, for the caller to fold
 // into metrics and logs.
 type Result struct {
-	// QueryErrors holds one entry per source whose query failed this
-	// evaluation, in source order. The source's alert.State is left
-	// untouched, so its `for` timer survives. The error is carried rather
-	// than counted because a counter alone tells an operator that something
-	// failed without saying which source or what it said.
-	QueryErrors []SourceError
+	// SourceErrors holds one entry per source this evaluation failed against,
+	// in source order, whether the query failed or the result could not be
+	// turned into alerts. The source's alert.State is left untouched either
+	// way, so its `for` timer survives. The error is carried rather than
+	// counted because a counter alone tells an operator that something failed
+	// without saying which source or what it said.
+	SourceErrors []SourceError
 
 	// SendError is set when Cadence failed to reach Alertmanager. The alert
 	// state has already been advanced regardless: a notification failure is
@@ -91,9 +92,10 @@ func NewRuleEval(r ruleset.Rule, queriers map[string]Querier, cadence *notify.Ca
 }
 
 // Evaluate runs the rule against every matched source and sends whatever
-// fired or resolved. A source whose query fails is skipped for this tick
-// only; its state is untouched and the next evaluation picks up where the
-// last successful one left off.
+// fired or resolved. A source the evaluation failed against is skipped for
+// this tick only, whether its query failed or its rows could not be turned
+// into alerts; its state is untouched and the next evaluation picks up where
+// the last successful one left off.
 //
 // Sources are queried concurrently, bounded by the shared semaphore. A rule
 // spanning an estate would otherwise cost the sum of every cluster's latency
@@ -141,8 +143,15 @@ func (e *RuleEval) Evaluate(ctx context.Context, now time.Time) Result {
 				return
 			}
 			// State.Eval returns every instance still tracked, pending and
-			// firing, plus anything that resolved this tick.
-			results[i].alerts = e.states[name].Eval(now, samples)
+			// firing, plus anything that resolved this tick. It fails when two
+			// rows reached one identity, which leaves its state untouched and
+			// so reports exactly like a failed query (spec 6.3).
+			alerts, err := e.states[name].Eval(now, samples)
+			if err != nil {
+				results[i].err = err
+				return
+			}
+			results[i].alerts = alerts
 		}(i, src.Name, q)
 	}
 	wg.Wait()
@@ -150,7 +159,7 @@ func (e *RuleEval) Evaluate(ctx context.Context, now time.Time) Result {
 	var current []alert.Alert
 	for i, r := range results {
 		if r.err != nil {
-			res.QueryErrors = append(res.QueryErrors, SourceError{Source: e.rule.Sources[i].Name, Err: r.err})
+			res.SourceErrors = append(res.SourceErrors, SourceError{Source: e.rule.Sources[i].Name, Err: r.err})
 			continue
 		}
 		current = append(current, r.alerts...)

@@ -103,8 +103,8 @@ func TestRuleEvalLeavesStateIntactAcrossAQueryFailure(t *testing.T) {
 
 	q.err = errors.New("connection refused")
 	res := eval.Evaluate(context.Background(), now.Add(30*time.Second))
-	if len(res.QueryErrors) != 1 {
-		t.Fatalf("QueryErrors = %v, want one entry", res.QueryErrors)
+	if len(res.SourceErrors) != 1 {
+		t.Fatalf("SourceErrors = %v, want one entry", res.SourceErrors)
 	}
 
 	q.err = nil
@@ -150,8 +150,8 @@ func TestRuleEvalWithNoMatchedSourcesDoesNothing(t *testing.T) {
 	eval := NewRuleEval(r, map[string]Querier{}, notify.NewCadence(sender, time.Minute, notify.DefaultResendTolerance), newSemaphore(0))
 
 	res := eval.Evaluate(context.Background(), time.Now())
-	if len(res.QueryErrors) != 0 {
-		t.Fatalf("QueryErrors = %v, want none", res.QueryErrors)
+	if len(res.SourceErrors) != 0 {
+		t.Fatalf("SourceErrors = %v, want none", res.SourceErrors)
 	}
 	if len(sender.calls) != 0 {
 		t.Fatalf("got %d calls, want 0", len(sender.calls))
@@ -173,14 +173,14 @@ func TestRuleEvalReportsWhichSourceFailedAndWhy(t *testing.T) {
 	eval := NewRuleEval(r, queriers, notify.NewCadence(&recordingSender{}, time.Minute, notify.DefaultResendTolerance), newSemaphore(0))
 
 	res := eval.Evaluate(context.Background(), time.Now())
-	if len(res.QueryErrors) != 1 {
-		t.Fatalf("QueryErrors = %v, want one entry", res.QueryErrors)
+	if len(res.SourceErrors) != 1 {
+		t.Fatalf("SourceErrors = %v, want one entry", res.SourceErrors)
 	}
-	if got := res.QueryErrors[0].Source; got != "src2" {
+	if got := res.SourceErrors[0].Source; got != "src2" {
 		t.Errorf("Source = %q, want %q", got, "src2")
 	}
-	if !errors.Is(res.QueryErrors[0].Err, refused) {
-		t.Errorf("Err = %v, want %v", res.QueryErrors[0].Err, refused)
+	if !errors.Is(res.SourceErrors[0].Err, refused) {
+		t.Errorf("Err = %v, want %v", res.SourceErrors[0].Err, refused)
 	}
 }
 
@@ -191,13 +191,13 @@ func TestRuleEvalReportsASourceWithNoQuerier(t *testing.T) {
 		notify.NewCadence(&recordingSender{}, time.Minute, notify.DefaultResendTolerance), newSemaphore(0))
 
 	res := eval.Evaluate(context.Background(), time.Now())
-	if len(res.QueryErrors) != 1 {
-		t.Fatalf("QueryErrors = %v, want one entry", res.QueryErrors)
+	if len(res.SourceErrors) != 1 {
+		t.Fatalf("SourceErrors = %v, want one entry", res.SourceErrors)
 	}
-	if got := res.QueryErrors[0].Source; got != "src1" {
+	if got := res.SourceErrors[0].Source; got != "src1" {
 		t.Errorf("Source = %q, want %q", got, "src1")
 	}
-	if res.QueryErrors[0].Err == nil {
+	if res.SourceErrors[0].Err == nil {
 		t.Error("Err is nil, want a reason")
 	}
 }

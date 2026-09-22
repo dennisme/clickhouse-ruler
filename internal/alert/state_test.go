@@ -21,6 +21,18 @@ func testRule(forDuration, keepFiringFor time.Duration) rule.Rule {
 	}
 }
 
+// evalOK is Eval for the tests that are not about a failed evaluation. An
+// error there is the test's problem, not an expectation.
+func evalOK(t *testing.T, s *State, now time.Time, samples []Sample) []Alert {
+	t.Helper()
+
+	alerts, err := s.Eval(now, samples)
+	if err != nil {
+		t.Fatalf("Eval at %v: %v", now, err)
+	}
+	return alerts
+}
+
 func sample(service string, value float64) Sample {
 	return Sample{
 		Labels: map[string]string{"ServiceName": service},
@@ -82,22 +94,22 @@ func formatAlerts(alerts []Alert) string {
 func TestPendingUntilForElapses(t *testing.T) {
 	s := New(testRule(5*time.Minute, 0), nil, testSource())
 
-	assertAlerts(t, s.Eval(t0, []Sample{sample("checkout", 1200)}), []want{
+	assertAlerts(t, evalOK(t, s, t0, []Sample{sample("checkout", 1200)}), []want{
 		{service: "checkout", phase: PhasePending, value: 1200, activeAt: t0},
 	})
 
-	assertAlerts(t, s.Eval(t0.Add(2*time.Minute), []Sample{sample("checkout", 1300)}), []want{
+	assertAlerts(t, evalOK(t, s, t0.Add(2*time.Minute), []Sample{sample("checkout", 1300)}), []want{
 		{service: "checkout", phase: PhasePending, value: 1300, activeAt: t0},
 	})
 
 	// The sample has now been present for exactly the configured duration.
 	fired := t0.Add(5 * time.Minute)
-	assertAlerts(t, s.Eval(fired, []Sample{sample("checkout", 1400)}), []want{
+	assertAlerts(t, evalOK(t, s, fired, []Sample{sample("checkout", 1400)}), []want{
 		{service: "checkout", phase: PhaseFiring, value: 1400, activeAt: t0, firedAt: fired},
 	})
 
 	// FiredAt is the moment it first fired, not the latest evaluation.
-	assertAlerts(t, s.Eval(t0.Add(6*time.Minute), []Sample{sample("checkout", 1500)}), []want{
+	assertAlerts(t, evalOK(t, s, t0.Add(6*time.Minute), []Sample{sample("checkout", 1500)}), []want{
 		{service: "checkout", phase: PhaseFiring, value: 1500, activeAt: t0, firedAt: fired},
 	})
 }
@@ -105,7 +117,7 @@ func TestPendingUntilForElapses(t *testing.T) {
 func TestForZeroFiresOnFirstEvaluation(t *testing.T) {
 	s := New(testRule(0, 0), nil, testSource())
 
-	assertAlerts(t, s.Eval(t0, []Sample{sample("checkout", 1200)}), []want{
+	assertAlerts(t, evalOK(t, s, t0, []Sample{sample("checkout", 1200)}), []want{
 		{service: "checkout", phase: PhaseFiring, value: 1200, activeAt: t0, firedAt: t0},
 	})
 }
@@ -113,7 +125,7 @@ func TestForZeroFiresOnFirstEvaluation(t *testing.T) {
 func TestFinalLabelsMergeRuleAndSample(t *testing.T) {
 	s := New(testRule(0, 0), nil, testSource())
 
-	got := s.Eval(t0, []Sample{sample("checkout", 1200)})
+	got := evalOK(t, s, t0, []Sample{sample("checkout", 1200)})
 	if len(got) != 1 {
 		t.Fatalf("got %d alerts, want 1", len(got))
 	}

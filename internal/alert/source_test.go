@@ -21,8 +21,8 @@ func TestSourcesProduceDistinctFingerprints(t *testing.T) {
 	now := time.Date(2026, 9, 20, 12, 0, 0, 0, time.UTC)
 	r := testRule(0, 0)
 
-	one := New(r, nil, dc("traces_dc1", "dc1")).Eval(now, []Sample{sample("checkout", 1)})
-	two := New(r, nil, dc("traces_dc2", "dc2")).Eval(now, []Sample{sample("checkout", 1)})
+	one := evalOK(t, New(r, nil, dc("traces_dc1", "dc1")), now, []Sample{sample("checkout", 1)})
+	two := evalOK(t, New(r, nil, dc("traces_dc2", "dc2")), now, []Sample{sample("checkout", 1)})
 
 	if len(one) != 1 || len(two) != 1 {
 		t.Fatalf("expected one alert each, got %d and %d", len(one), len(two))
@@ -50,13 +50,13 @@ func TestOneSourceResolvingLeavesTheOtherFiring(t *testing.T) {
 	dc1 := New(r, nil, dc("traces_dc1", "dc1"))
 	dc2 := New(r, nil, dc("traces_dc2", "dc2"))
 
-	dc1.Eval(now, []Sample{sample("checkout", 1)})
-	dc2.Eval(now, []Sample{sample("checkout", 1)})
+	evalOK(t, dc1, now, []Sample{sample("checkout", 1)})
+	evalOK(t, dc2, now, []Sample{sample("checkout", 1)})
 
 	// dc1 recovers, dc2 still returns the row.
 	later := now.Add(time.Minute)
-	gone := dc1.Eval(later, nil)
-	still := dc2.Eval(later, []Sample{sample("checkout", 1)})
+	gone := evalOK(t, dc1, later, nil)
+	still := evalOK(t, dc2, later, []Sample{sample("checkout", 1)})
 
 	if len(gone) != 1 || gone[0].Phase != PhaseResolved {
 		t.Fatalf("dc1 should have resolved exactly one alert, got %+v", gone)
@@ -71,7 +71,7 @@ func TestOneSourceResolvingLeavesTheOtherFiring(t *testing.T) {
 func TestSourceLabelsBeatResultColumns(t *testing.T) {
 	now := time.Date(2026, 9, 20, 12, 0, 0, 0, time.UTC)
 
-	got := New(testRule(0, 0), nil, dc("traces_dc1", "dc1")).Eval(now, []Sample{{
+	got := evalOK(t, New(testRule(0, 0), nil, dc("traces_dc1", "dc1")), now, []Sample{{
 		Labels: map[string]string{"ServiceName": "checkout", "cluster": "lies", "source": "lies"},
 		Value:  1,
 	}})

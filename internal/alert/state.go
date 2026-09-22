@@ -75,10 +75,21 @@ const LabelSource = "source"
 // and leave the other firing, which only works if each source counts its
 // instances separately (spec 6.10.1).
 type State struct {
-	rule   rule.Rule
-	src    source.Source
-	base   map[string]string
-	active map[uint64]*instance
+	rule rule.Rule
+	src  source.Source
+	base map[string]string
+
+	// active holds every tracked instance, grouped by fingerprint. A slice
+	// rather than one instance per key because the fingerprint is 64 bits and
+	// two different label sets can hash alike; merging them would give two
+	// unrelated alerts one value and one `for` timer. In every real case the
+	// slice holds exactly one instance.
+	active map[uint64][]*instance
+
+	// hash identifies an instance by its labels. It is a field so a test can
+	// force the collision that cannot be produced by chance; nothing outside
+	// this package can change it, and the real fingerprint is what New sets.
+	hash func(map[string]string) uint64
 }
 
 // New builds the state for one rule against one source. Group labels are the
@@ -97,32 +108,32 @@ func New(r rule.Rule, groupLabels map[string]string, src source.Source) *State {
 		rule:   r,
 		src:    src,
 		base:   base,
-		active: map[uint64]*instance{},
+		active: map[uint64][]*instance{},
+		hash:   fingerprint,
 	}
 }
 
 // Eval advances every instance by one evaluation and returns the pending and
 // firing instances along with any that resolved on this evaluation. A
 // resolved instance is returned once and then forgotten.
-func (s *State) Eval(now time.Time, samples []Sample) []Alert {
-	present := make(map[uint64]bool, len(samples))
+//
+// An error means the evaluation did not happen: nothing is tracked, no timer
+// moves, and the caller has the same state it had before. That is deliberately
+// the same outcome as a failed query, so a rule that cannot be evaluated does
+// not also lose the alerts it already had (spec 6.3).
+func (s *State) Eval(now time.Time, samples []Sample) ([]Alert, error) {
+	labelled, err := s.resolveLabels(samples)
+	if err != nil {
+		return nil, err
+	}
 
-	for _, smpl := range samples {
-		labels := s.labelsFor(smpl)
-		fp := fingerprint(labels)
-		present[fp] = true
+	present := make(map[*instance]bool, len(labelled))
 
-		inst, tracked := s.active[fp]
-		if !tracked {
-			inst = &instance{Alert: Alert{
-				Fingerprint: fp,
-				Labels:      labels,
-				Phase:       PhasePending,
-				ActiveAt:    now,
-			}}
-			s.active[fp] = inst
-		}
-		inst.Value = smpl.Value
+	for _, l := range labelled {
+		inst := s.track(l, now)
+		present[inst] = true
+
+		inst.Value = l.value
 		inst.lastSeen = now
 
 		if inst.Phase == PhasePending && now.Sub(inst.ActiveAt) >= s.rule.For {
@@ -131,31 +142,93 @@ func (s *State) Eval(now time.Time, samples []Sample) []Alert {
 		}
 	}
 
-	return s.expire(now, present)
+	return s.expire(now, present), nil
+}
+
+// labelled is one sample with its final label set and fingerprint worked out.
+type labelled struct {
+	labels map[string]string
+	fp     uint64
+	value  float64
+}
+
+// resolveLabels applies the label rules to every sample and refuses a result
+// where two rows ended up as the same alert.
+//
+// It runs before anything is tracked, because failing half way through an
+// evaluation would leave some instances advanced and others not, which is a
+// worse state to recover from than not having evaluated at all.
+func (s *State) resolveLabels(samples []Sample) ([]labelled, error) {
+	out := make([]labelled, 0, len(samples))
+
+	for _, smpl := range samples {
+		labels := s.labelsFor(smpl)
+		fp := s.hash(labels)
+
+		for _, seen := range out {
+			// Same fingerprint is not enough: two different label sets can
+			// hash alike, and that is a collision to keep apart rather than a
+			// rule to reject.
+			if seen.fp == fp && sameLabels(seen.labels, labels) {
+				return nil, &DuplicateLabelSetError{Alert: s.rule.Alert, Labels: labels}
+			}
+		}
+		out = append(out, labelled{labels: labels, fp: fp, value: smpl.Value})
+	}
+	return out, nil
+}
+
+// track finds the instance this row belongs to, creating it if the row is new.
+// Labels are compared rather than trusted to the fingerprint, so two label
+// sets that hash alike get an instance each.
+func (s *State) track(l labelled, now time.Time) *instance {
+	for _, inst := range s.active[l.fp] {
+		if sameLabels(inst.Labels, l.labels) {
+			return inst
+		}
+	}
+
+	inst := &instance{Alert: Alert{
+		Fingerprint: l.fp,
+		Labels:      l.labels,
+		Phase:       PhasePending,
+		ActiveAt:    now,
+	}}
+	s.active[l.fp] = append(s.active[l.fp], inst)
+	return inst
 }
 
 // expire handles instances the latest evaluation did not return.
-func (s *State) expire(now time.Time, present map[uint64]bool) []Alert {
+func (s *State) expire(now time.Time, present map[*instance]bool) []Alert {
 	var resolved []Alert
 
-	for fp, inst := range s.active {
-		if present[fp] {
-			continue
+	for fp, insts := range s.active {
+		kept := insts[:0]
+		for _, inst := range insts {
+			if present[inst] {
+				kept = append(kept, inst)
+				continue
+			}
+			// A pending instance was never notified, so it leaves without a
+			// resolve for something nobody was told about.
+			if inst.Phase == PhasePending {
+				continue
+			}
+			if now.Sub(inst.lastSeen) < s.rule.KeepFiringFor {
+				kept = append(kept, inst)
+				continue
+			}
+
+			inst.Phase = PhaseResolved
+			inst.ResolvedAt = now
+			resolved = append(resolved, inst.Alert)
 		}
-		// A pending instance was never notified, so it leaves without a
-		// resolve for something nobody was told about.
-		if inst.Phase == PhasePending {
+
+		if len(kept) == 0 {
 			delete(s.active, fp)
 			continue
 		}
-		if now.Sub(inst.lastSeen) < s.rule.KeepFiringFor {
-			continue
-		}
-
-		inst.Phase = PhaseResolved
-		inst.ResolvedAt = now
-		resolved = append(resolved, inst.Alert)
-		delete(s.active, fp)
+		s.active[fp] = kept
 	}
 
 	return s.snapshot(resolved)
@@ -191,19 +264,45 @@ func (s *State) labelsFor(smpl Sample) map[string]string {
 // snapshot returns the still-tracked instances together with the ones that
 // resolved, in fingerprint order so a caller sees the same sequence for the
 // same state.
+//
+// Two instances sharing a fingerprint make that order incomplete, so the label
+// set breaks the tie. Without it the order of a colliding pair would follow
+// Go's randomized map iteration, and a batch whose order changes from tick to
+// tick is needlessly hard to read in a log or a diff.
 func (s *State) snapshot(resolved []Alert) []Alert {
 	if len(s.active) == 0 && len(resolved) == 0 {
 		return nil
 	}
 
 	out := make([]Alert, 0, len(s.active)+len(resolved))
-	for _, inst := range s.active {
-		out = append(out, inst.Alert)
+	for _, insts := range s.active {
+		for _, inst := range insts {
+			out = append(out, inst.Alert)
+		}
 	}
 	out = append(out, resolved...)
 
 	sort.Slice(out, func(i, j int) bool {
-		return out[i].Fingerprint < out[j].Fingerprint
+		if out[i].Fingerprint != out[j].Fingerprint {
+			return out[i].Fingerprint < out[j].Fingerprint
+		}
+		return labelKey(out[i].Labels) < labelKey(out[j].Labels)
 	})
 	return out
+}
+
+// DuplicateLabelSetError reports two result rows that became the same alert.
+//
+// The rule is asking for something it cannot express, so the author is the one
+// who has to act, and the message carries the label set they collapsed onto.
+// Prometheus reports the same condition as ErrDuplicateAlertLabelSet.
+type DuplicateLabelSetError struct {
+	Alert  string
+	Labels map[string]string
+}
+
+func (e *DuplicateLabelSetError) Error() string {
+	return fmt.Sprintf("rule %q: two result rows produce the same alert {%s}; "+
+		"a source label is overwriting the column meant to tell them apart",
+		e.Alert, labelKey(e.Labels))
 }

@@ -589,10 +589,19 @@ Each instance carries its own `for` timer and resolves on its own. Two rows
 from the same rule can be in different phases on the same evaluation, and one
 resolving does not disturb the other.
 
-Instance identity is a hash of the final label set. Keys are sorted, and each
-key and value is length-prefixed rather than joined with a separator. Any
-separator byte can appear inside a ClickHouse column value, and a collision
-there would silently merge two different alerts into one instance.
+Instance identity is the final label set. It is *indexed* by a hash of that
+label set: keys sorted, each key and value length-prefixed rather than joined
+with a separator, because any separator byte can appear inside a ClickHouse
+column value and a collision there would be one an author could construct.
+
+**The hash is a bucket, not the identity.** Length prefixing closes the
+construction of a collision but not its arithmetic: the result is 64 bits, and
+two genuinely different label sets can land on one. So a hash hit is where the
+comparison starts rather than ends, and the labels themselves decide. Two
+instances sharing a hash stay two alerts, with their own values and their own
+`for` timers. Prometheus keys on the hash alone and takes the odds; the
+comparison costs one label-set equality on a bucket that holds one instance in
+every real case, which is cheap enough not to take a bet at all.
 
 **Two rows reaching the same final label set is an evaluation error, not a
 merge.** This is a different failure from a hash collision: the rows are
@@ -1937,6 +1946,14 @@ instances must stay distinct per source. That is a fingerprint question
   and a rule gets the strictest setting that applies to it. The merge is a
   maximum, so no precedence rule exists and no scope can loosen another.
   See 7.7.
+- **Labels decide identity; the fingerprint is a bucket.** Two instances that
+  hash alike stay two alerts, compared on their label sets. Prometheus keys on
+  the hash alone, and the comparison is cheap enough that there is no reason to
+  take the bet. See 6.3.
+- **Two rows reaching one identity fail the evaluation.** Not a merge and not a
+  warning: the rule is asking for something it cannot express, so it counts as
+  an evaluation failure, leaves the state untouched like any other, and names
+  the collapsed label set in the log. See 6.3.
 - **A failed source lets its firing alerts expire, and the margin is tunable.**
   A source whose query fails is skipped for that tick, so its firing alerts are
   not re-asserted and they live on the `endsAt` of the last successful send.
@@ -1992,17 +2009,7 @@ instances must stay distinct per source. That is a fingerprint question
    needs per-source capacity that nothing collects yet. See 6.11 for the
    current behaviour and why it was left here.
 
-8. **Duplicate label sets are silently merged.** This and the three after it
-   came out of reading how Prometheus handles the same problems, and all four
-   are confirmed against the current code rather than suspected.
-   Two result rows that reach
-   the same final labels currently collapse into one instance, last row
-   winning, with no finding and no metric. 6.3 says this should fail the
-   evaluation the way `ErrDuplicateAlertLabelSet` does. The fix belongs in
-   `alert.State.Eval`, which is the only place that sees both rows, and it
-   should count into `ruler_rule_evaluation_failures_total` rather than being
-   reported as a notification problem.
-9. **A resolved alert is forgotten before it is known to have been sent.**
+8. **A resolved alert is forgotten before it is known to have been sent.**
    `State.expire` returns a resolved instance once and deletes it in the same
    step, so if that notification fails the resolve is gone: no retry, and
    Alertmanager holds the alert firing until `resolve_timeout` expires it.
@@ -2010,7 +2017,7 @@ instances must stay distinct per source. That is a fingerprint question
    exactly this reason, and keeps resending them. Retention has to outlive
    delivery, or the notification-failure guarantee in 6.5 covers firing
    alerts but quietly not resolves.
-10. **Annotations are not part of an alert instance.** They are rendered at
+9. **Annotations are not part of an alert instance.** They are rendered at
     send time from the rule's templates rather than stored on the alert when
     it is evaluated, which has three consequences. A template that fails to
     render fails the whole batch, so one bad annotation blocks every other
@@ -2021,7 +2028,7 @@ instances must stay distinct per source. That is a fingerprint question
     a resolved alert re-renders from its last value rather than carrying what
     it said when it fired. Prometheus templates at evaluation time and stores
     the result on the alert; doing the same would fix all three.
-11. **Nothing checks that two rules cannot produce the same alert.** 7.6
+10. **Nothing checks that two rules cannot produce the same alert.** 7.6
     scopes `rule/name` uniqueness to the group, on the reasoning that group
     labels and `source` already separate two same-named rules in the
     fingerprint. That reasoning is an assumption about how the files happen
@@ -2039,23 +2046,6 @@ instances must stay distinct per source. That is a fingerprint question
     labels that are only known at evaluation time, so it can only flag rules
     whose *static* identity already collides. That is the reachable case and
     it is worth flagging.
-12. **A fingerprint collision merges two unrelated alerts.** 6.3 length
-    prefixes each key and value so that no separator inside a ClickHouse
-    column value can forge a match, which closes the construction of a
-    collision but not its arithmetic: the result is 64 bits, and
-    `State.active` is keyed on it alone. Two genuinely different label sets
-    that hash alike become one instance, with one value and one `for` timer.
-
-    Prometheus takes the same bet, so this is not a departure from the model
-    the project copies, and the probability is remote for the instance
-    counts a single rule produces. It is cheap to close all the same,
-    because the instance already stores its `Labels`: compare them on a hash
-    hit and treat a mismatch as the distinct alerts they are. The same code
-    path in `State.Eval` is where item 8 lands, so the two are worth doing
-    together, and they must not be conflated. Item 8 is two rows that are
-    genuinely identical after the label rules are applied, which is a rule
-    the author needs to fix. This is two rows that are genuinely different
-    and the hash cannot tell.
 
 ---
 
