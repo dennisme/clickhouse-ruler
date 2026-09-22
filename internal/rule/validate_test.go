@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/dennisme/clickhouse-ruler/internal/lint"
+	"github.com/dennisme/clickhouse-ruler/internal/policy"
 )
 
 // Each fixture is otherwise valid so that exactly one check fires, which keeps
@@ -174,6 +175,41 @@ func TestValidate(t *testing.T) {
 			},
 		},
 		{
+			// UnknownColumn must not be reported: whether the query returns
+			// the column a variable names is only knowable from the result,
+			// which is tier 1 (spec 7.3). This check covers parsing.
+			fixture: "annotations_template.yaml",
+			want: []lint.Problem{
+				{
+					File:     "testdata/annotations_template.yaml",
+					Line:     13,
+					Subject:  "UnclosedAction",
+					Check:    "annotations/template",
+					Severity: lint.SeverityWarning,
+					Text: `annotation "summary" is not a valid template: ` +
+						`template: summary:1: unexpected "}" in operand`,
+				},
+				{
+					File:     "testdata/annotations_template.yaml",
+					Line:     23,
+					Subject:  "UnknownFunction",
+					Check:    "annotations/template",
+					Severity: lint.SeverityWarning,
+					Text: `annotation "summary" is not a valid template: ` +
+						`template: summary:1: function "humanize" not defined`,
+				},
+				{
+					File:     "testdata/annotations_template.yaml",
+					Line:     34,
+					Subject:  "BrokenRunbookTemplate",
+					Check:    "annotations/template",
+					Severity: lint.SeverityWarning,
+					Text: `annotation "runbook_url" is not a valid template: ` +
+						`template: runbook_url:1: unclosed action`,
+				},
+			},
+		},
+		{
 			// NoFor and ExplicitZeroFor must not be reported. Firing on the
 			// first evaluation is a legitimate choice, and warning about it
 			// would fire on most rules in a repository.
@@ -259,5 +295,47 @@ func TestValidateRequiredLabelsSatisfiedByGroup(t *testing.T) {
 
 	if got := Validate(f, nil); len(got) != 0 {
 		t.Fatalf("expected no problems, got %d: %v", len(got), got)
+	}
+}
+
+// An operator who would rather a broken annotation template never reach a pager
+// raises the check to an error, which refuses to start the ruler and blocks the
+// merge. Soft is the shipped default; hard is theirs to choose (spec 7.6).
+func TestAnnotationsTemplateSeverityIsTheOperatorsChoice(t *testing.T) {
+	f, problems := Parse("testdata/annotations_template.yaml", readFixture(t, "annotations_template.yaml"))
+	if len(problems) != 0 {
+		t.Fatalf("parse problems: %v", problems)
+	}
+
+	for _, tc := range []struct {
+		name     string
+		severity lint.Severity
+		want     int
+	}{
+		{name: "shipped default", severity: lint.SeverityWarning, want: 3},
+		{name: "raised to error", severity: lint.SeverityError, want: 3},
+		{name: "turned off", severity: lint.SeverityOff, want: 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := &policy.Policy{Checks: map[string]policy.Setting{
+				policy.CheckAnnotationsTemplate: {Severity: tc.severity},
+			}}
+
+			var got []lint.Problem
+			for _, problem := range Validate(f, func(Rule) *policy.Policy { return p }) {
+				if problem.Check == "annotations/template" {
+					got = append(got, problem)
+				}
+			}
+
+			if len(got) != tc.want {
+				t.Fatalf("got %d annotations/template problems, want %d", len(got), tc.want)
+			}
+			for _, problem := range got {
+				if problem.Severity != tc.severity {
+					t.Errorf("severity = %v, want %v", problem.Severity, tc.severity)
+				}
+			}
+		})
 	}
 }

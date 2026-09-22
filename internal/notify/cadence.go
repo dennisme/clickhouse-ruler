@@ -11,7 +11,7 @@ import (
 // Sender posts a batch of alerts. Client satisfies it; Cadence exists to
 // decide what belongs in the batch before Client ever sees it.
 type Sender interface {
-	Send(ctx context.Context, alerts []alert.Alert, annotations map[string]string) error
+	Send(ctx context.Context, alerts []alert.Alert) error
 }
 
 // DefaultResendInterval is how often a firing alert is re-posted unless an
@@ -101,12 +101,12 @@ func NewCadence(sender Sender, interval time.Duration, tolerance int) *Cadence {
 // identical alerts (spec 6.5, which relies on the same property to make two
 // ruler replicas safe), and in practice unreachable, because a fingerprint
 // belongs to one rule and a rule is evaluated by one goroutine at a time.
-func (c *Cadence) Send(ctx context.Context, now time.Time, evalInterval time.Duration, alerts []alert.Alert, annotations map[string]string) error {
+func (c *Cadence) Send(ctx context.Context, now time.Time, evalInterval time.Duration, alerts []alert.Alert) error {
 	due := c.dueAt(now, evalInterval, alerts)
 	if len(due) == 0 {
 		return nil
 	}
-	if err := c.sender.Send(ctx, due, annotations); err != nil {
+	if err := c.sender.Send(ctx, due); err != nil {
 		return err
 	}
 	c.record(now, due)

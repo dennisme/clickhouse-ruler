@@ -147,6 +147,17 @@ func evalGroup(groupName string, evals []namedEval, m *Metrics, log *slog.Logger
 						"rule_group", groupName, "rule", ne.rule,
 						"source", se.Source, "error", se.Err.Error())
 				}
+				// One line per broken annotation, not per instance: a template
+				// that will not render fails on every row a rule returns
+				// (spec 8.3, 8.4). Warn rather than error, because the alert
+				// was still delivered.
+				for _, ae := range res.AnnotationErrors {
+					m.AnnotationFailures.WithLabelValues(groupName, ne.rule, ae.Annotation).Inc()
+					log.Warn("annotation template failed, the alert carries the error instead",
+						"rule_group", groupName, "rule", ne.rule,
+						"source", ae.Source, "annotation", ae.Annotation,
+						"error", ae.Err.Error())
+				}
 				if res.SendError != nil {
 					log.Error("sending alerts to alertmanager failed",
 						"rule_group", groupName, "rule", ne.rule,

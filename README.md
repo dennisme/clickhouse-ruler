@@ -221,6 +221,7 @@ series per rule.
 | --- | --- | --- |
 | `ruler_rule_evaluations_total` | counter | `rule_group`, `rule` |
 | `ruler_rule_evaluation_failures_total` | counter | `rule_group`, `rule` |
+| `ruler_annotation_failures_total` | counter | `rule_group`, `rule`, `annotation` |
 | `ruler_rule_evaluation_duration_seconds` | histogram | `rule_group` |
 | `ruler_rule_group_iterations_total` | counter | `rule_group` |
 | `ruler_rule_group_iterations_missed_total` | counter | `rule_group` |
@@ -231,6 +232,11 @@ series per rule.
 | `ruler_alerts_send_failures_total` | counter | `alertmanager` |
 | `ruler_notification_latency_seconds` | histogram | none |
 | `ruler_rules_unmatched` | gauge | `rule_group` |
+
+`ruler_annotation_failures_total` is separate from the evaluation failures on
+purpose: an annotation that will not render still pages, carrying the template
+error in place of the annotation, so it is the rule author's bug rather than a
+failed evaluation.
 
 Two are worth alerting on. `ruler_rule_group_iterations_missed_total` rising
 means an evaluation took longer than its group interval, so alerts are silently

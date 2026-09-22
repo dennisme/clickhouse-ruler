@@ -165,9 +165,15 @@ func TestEndToEndFiringAlertReachesAlertmanager(t *testing.T) {
 		}
 
 		// for is 0 in the fixture, so the first evaluation fires immediately.
-		got, err := alert.New(r.Rule, labels, src).Eval(now, samples)
+		got, annotationErrs, err := alert.New(r.Rule, labels, src).Eval(now, samples)
 		if err != nil {
 			t.Fatalf("evaluating %s: %v", src.Name, err)
+		}
+		// The fixture's annotations are the point of the assertions below, so a
+		// template that would not render has to fail the test rather than reach
+		// them as an error string.
+		if len(annotationErrs) != 0 {
+			t.Fatalf("annotations for %s: %v", src.Name, annotationErrs)
 		}
 		if len(got) == 0 {
 			t.Fatalf("state machine produced no alerts for %s", src.Name)
@@ -183,7 +189,8 @@ func TestEndToEndFiringAlertReachesAlertmanager(t *testing.T) {
 	}
 
 	client := notify.NewClient(amURL)
-	if err := client.Send(ctx, fired, r.Annotations); err != nil {
+	// The alerts already carry their rendered annotations, from Eval above.
+	if err := client.Send(ctx, fired); err != nil {
 		t.Fatalf("sending to alertmanager: %v", err)
 	}
 

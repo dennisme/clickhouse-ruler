@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"net/url"
 	"regexp"
+	"sort"
+	"text/template"
 
 	"github.com/dennisme/clickhouse-ruler/internal/lint"
 	"github.com/dennisme/clickhouse-ruler/internal/policy"
@@ -16,6 +18,7 @@ const (
 	checkLabelsRequired      = "labels/required"
 	checkAnnotationsRequired = "annotations/required"
 	checkAnnotationsRunbook  = "annotations/runbook"
+	checkAnnotationsTemplate = "annotations/template"
 	checkRuleFor             = "rule/for"
 	checkRuleWindow          = "rule/window"
 )
@@ -139,6 +142,7 @@ func (v *validator) group(g Group) {
 		v.requiredKeys(r, "labels", "label", checkLabelsRequired, g.EffectiveLabels(r))
 		v.requiredKeys(r, "annotations", "annotation", checkAnnotationsRequired, r.Annotations)
 		v.annotationsRunbook(r)
+		v.annotationsTemplate(r)
 		v.ruleFor(g, r)
 		v.ruleWindow(g, r)
 	}
@@ -210,6 +214,33 @@ func (v *validator) annotationsRunbook(r Rule) {
 	}
 	v.addPolicy(r, r.LineOf("annotations.runbook_url", "annotations"), checkAnnotationsRunbook,
 		"runbook_url must be an absolute http or https URL, got %q", raw)
+}
+
+// annotationsTemplate reports an annotation that is not a parseable template.
+// A rule whose summary cannot be parsed still pages, carrying the parse failure
+// where the summary should be, so this is a rule an author wants to hear about
+// before it reaches an on-call rotation.
+//
+// Parsing is all this can do offline. Whether a variable names a column the
+// query actually returns depends on the result, which is tier 1 (spec 7.3), so
+// the finding says "not a valid template" rather than claiming the annotation
+// will render.
+//
+// Annotations are checked in name order so a rule with two broken templates
+// reports them the same way every run.
+func (v *validator) annotationsTemplate(r Rule) {
+	names := make([]string, 0, len(r.Annotations))
+	for name := range r.Annotations {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	for _, name := range names {
+		if _, err := template.New(name).Option("missingkey=error").Parse(r.Annotations[name]); err != nil {
+			v.addPolicy(r, r.LineOf("annotations."+name, "annotations"), checkAnnotationsTemplate,
+				"annotation %q is not a valid template: %s", name, err)
+		}
+	}
 }
 
 // ruleFor checks the pending duration against the interval it is measured in.

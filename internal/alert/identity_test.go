@@ -18,7 +18,7 @@ import (
 func TestEvalFailsWhenTwoRowsReachOneIdentity(t *testing.T) {
 	s := New(testRule(0, 0), nil, dc("traces_dc1", "dc1"))
 
-	got, err := s.Eval(t0, []Sample{
+	got, _, err := s.Eval(t0, []Sample{
 		{Labels: map[string]string{"ServiceName": "checkout", "cluster": "reported-a"}, Value: 1200},
 		{Labels: map[string]string{"ServiceName": "checkout", "cluster": "reported-b"}, Value: 1300},
 	})
@@ -45,7 +45,7 @@ func TestEvalFailsWhenTwoRowsReachOneIdentity(t *testing.T) {
 func TestEvalLeavesStateIntactWhenItFails(t *testing.T) {
 	s := New(testRule(time.Minute, 0), nil, dc("traces_dc1", "dc1"))
 
-	if _, err := s.Eval(t0, []Sample{
+	if _, _, err := s.Eval(t0, []Sample{
 		{Labels: map[string]string{"ServiceName": "checkout", "cluster": "reported-a"}, Value: 1200},
 		{Labels: map[string]string{"ServiceName": "checkout", "cluster": "reported-b"}, Value: 1300},
 	}); err == nil {
@@ -128,7 +128,7 @@ func TestEvalDoesNotMistakeACollisionForADuplicate(t *testing.T) {
 	s := New(testRule(0, 0), nil, testSource())
 	s.hash = func(map[string]string) uint64 { return 1 }
 
-	alerts, err := s.Eval(t0, []Sample{sample("checkout", 1200), sample("payments", 1300)})
+	alerts, _, err := s.Eval(t0, []Sample{sample("checkout", 1200), sample("payments", 1300)})
 	if err != nil {
 		t.Fatalf("two different label sets sharing a hash are not a duplicate: %v", err)
 	}

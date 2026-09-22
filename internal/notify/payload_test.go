@@ -15,12 +15,12 @@ func TestPayloadMapsFiringAlert(t *testing.T) {
 		Value:   1234.5,
 		Phase:   alert.PhaseFiring,
 		FiredAt: payloadAnchor,
+		// Rendered when the alert was evaluated, so Payload passes it through
+		// rather than expanding a template here.
+		Annotations: map[string]string{"summary": "payments is slow"},
 	}
 
-	got, err := Payload([]alert.Alert{a}, map[string]string{"summary": "{{ .team }} is slow"})
-	if err != nil {
-		t.Fatalf("Payload: %v", err)
-	}
+	got := Payload([]alert.Alert{a})
 	if len(got) != 1 {
 		t.Fatalf("got %d payloads, want 1", len(got))
 	}
@@ -54,10 +54,7 @@ func TestPayloadSendsValidUntilAsEndsAtWhileFiring(t *testing.T) {
 		ValidUntil: validUntil,
 	}
 
-	got, err := Payload([]alert.Alert{a}, nil)
-	if err != nil {
-		t.Fatalf("Payload: %v", err)
-	}
+	got := Payload([]alert.Alert{a})
 	if len(got) != 1 {
 		t.Fatalf("got %d payloads, want 1", len(got))
 	}
@@ -78,10 +75,7 @@ func TestPayloadPrefersResolvedAtOverValidUntil(t *testing.T) {
 		ValidUntil: payloadAnchor.Add(400 * time.Second),
 	}
 
-	got, err := Payload([]alert.Alert{a}, nil)
-	if err != nil {
-		t.Fatalf("Payload: %v", err)
-	}
+	got := Payload([]alert.Alert{a})
 	if len(got) != 1 {
 		t.Fatalf("got %d payloads, want 1", len(got))
 	}
@@ -99,10 +93,7 @@ func TestPayloadMapsResolvedAlert(t *testing.T) {
 		ResolvedAt: resolved,
 	}
 
-	got, err := Payload([]alert.Alert{a}, nil)
-	if err != nil {
-		t.Fatalf("Payload: %v", err)
-	}
+	got := Payload([]alert.Alert{a})
 	if len(got) != 1 {
 		t.Fatalf("got %d payloads, want 1", len(got))
 	}
@@ -121,10 +112,7 @@ func TestPayloadSkipsPending(t *testing.T) {
 		ActiveAt: payloadAnchor,
 	}
 
-	got, err := Payload([]alert.Alert{a}, nil)
-	if err != nil {
-		t.Fatalf("Payload: %v", err)
-	}
+	got := Payload([]alert.Alert{a})
 	if len(got) != 0 {
 		t.Fatalf("got %d payloads, want 0 for a pending alert: %+v", len(got), got)
 	}

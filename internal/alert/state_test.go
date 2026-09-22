@@ -26,7 +26,7 @@ func testRule(forDuration, keepFiringFor time.Duration) rule.Rule {
 func evalOK(t *testing.T, s *State, now time.Time, samples []Sample) []Alert {
 	t.Helper()
 
-	alerts, err := s.Eval(now, samples)
+	alerts, _, err := s.Eval(now, samples)
 	if err != nil {
 		t.Fatalf("Eval at %v: %v", now, err)
 	}

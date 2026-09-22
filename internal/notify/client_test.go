@@ -38,7 +38,7 @@ func TestSendPostsToAlertsAPI(t *testing.T) {
 	defer srv.Close()
 
 	c := NewClient(srv.URL)
-	if err := c.Send(context.Background(), []alert.Alert{firingAlert()}, nil); err != nil {
+	if err := c.Send(context.Background(), []alert.Alert{firingAlert()}); err != nil {
 		t.Fatalf("Send: %v", err)
 	}
 
@@ -67,7 +67,7 @@ func TestSendRetriesServerErrors(t *testing.T) {
 	c := NewClient(srv.URL)
 	c.Backoff = time.Millisecond
 
-	if err := c.Send(context.Background(), []alert.Alert{firingAlert()}, nil); err != nil {
+	if err := c.Send(context.Background(), []alert.Alert{firingAlert()}); err != nil {
 		t.Fatalf("Send: %v", err)
 	}
 	if got := attempts.Load(); got != 3 {
@@ -89,7 +89,7 @@ func TestSendDoesNotRetryClientErrors(t *testing.T) {
 	c := NewClient(srv.URL)
 	c.Backoff = time.Millisecond
 
-	if err := c.Send(context.Background(), []alert.Alert{firingAlert()}, nil); err == nil {
+	if err := c.Send(context.Background(), []alert.Alert{firingAlert()}); err == nil {
 		t.Fatal("expected an error for a 400")
 	}
 	if got := attempts.Load(); got != 1 {
@@ -110,7 +110,7 @@ func TestSendGivesUpAfterMaxAttempts(t *testing.T) {
 	c.Backoff = time.Millisecond
 	c.MaxAttempts = 2
 
-	if err := c.Send(context.Background(), []alert.Alert{firingAlert()}, nil); err == nil {
+	if err := c.Send(context.Background(), []alert.Alert{firingAlert()}); err == nil {
 		t.Fatal("expected an error once attempts are exhausted")
 	}
 	if got := attempts.Load(); got != 2 {
@@ -132,7 +132,7 @@ func TestSendSkipsWhenNothingToNotify(t *testing.T) {
 	c := NewClient(srv.URL)
 	pending := alert.Alert{Labels: map[string]string{"alertname": "X"}, Phase: alert.PhasePending}
 
-	if err := c.Send(context.Background(), []alert.Alert{pending}, nil); err != nil {
+	if err := c.Send(context.Background(), []alert.Alert{pending}); err != nil {
 		t.Fatalf("Send: %v", err)
 	}
 	if called.Load() {

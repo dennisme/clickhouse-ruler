@@ -3,6 +3,7 @@ package alert
 import (
 	"fmt"
 	"sort"
+	"text/template"
 	"time"
 
 	"github.com/dennisme/clickhouse-ruler/internal/rule"
@@ -48,6 +49,13 @@ type Alert struct {
 	FiredAt     time.Time
 	ResolvedAt  time.Time
 
+	// Annotations are rendered here, when the instance is evaluated, rather
+	// than at send time. They are part of what the alert is: a resolved
+	// instance says what it said when it fired, a broken template is an
+	// evaluation problem rather than a delivery one, and one unrenderable
+	// annotation cannot block the batch it travels in (spec 6.5).
+	Annotations map[string]string
+
 	// ValidUntil is how long Alertmanager should hold this alert without
 	// hearing about it again. It is stamped by notify.Cadence at send time
 	// rather than here, because its length is a property of how often the
@@ -86,6 +94,12 @@ type State struct {
 	// slice holds exactly one instance.
 	active map[uint64][]*instance
 
+	// annotations are the rule's annotation templates, compiled once because
+	// they are fixed for the rule's lifetime. parseErrs holds the ones that did
+	// not compile, so a failure reaches the page rather than vanishing.
+	annotations map[string]*template.Template
+	parseErrs   map[string]error
+
 	// hash identifies an instance by its labels. It is a field so a test can
 	// force the collision that cannot be produced by chance; nothing outside
 	// this package can change it, and the real fingerprint is what New sets.
@@ -104,12 +118,16 @@ func New(r rule.Rule, groupLabels map[string]string, src source.Source) *State {
 		base[k] = v
 	}
 
+	parsed, parseErrs := parseAnnotations(r.Annotations)
+
 	return &State{
-		rule:   r,
-		src:    src,
-		base:   base,
-		active: map[uint64][]*instance{},
-		hash:   fingerprint,
+		rule:        r,
+		src:         src,
+		base:        base,
+		annotations: parsed,
+		parseErrs:   parseErrs,
+		active:      map[uint64][]*instance{},
+		hash:        fingerprint,
 	}
 }
 
@@ -121,13 +139,19 @@ func New(r rule.Rule, groupLabels map[string]string, src source.Source) *State {
 // moves, and the caller has the same state it had before. That is deliberately
 // the same outcome as a failed query, so a rule that cannot be evaluated does
 // not also lose the alerts it already had (spec 6.3).
-func (s *State) Eval(now time.Time, samples []Sample) ([]Alert, error) {
+//
+// The AnnotationErrors are not that. They report templates that would not
+// render, which leaves the alert intact and still worth sending, and they are
+// deduplicated to one entry per annotation however many instances the rule
+// produced.
+func (s *State) Eval(now time.Time, samples []Sample) ([]Alert, []AnnotationError, error) {
 	labelled, err := s.resolveLabels(samples)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	present := make(map[*instance]bool, len(labelled))
+	broken := map[string]AnnotationError{}
 
 	for _, l := range labelled {
 		inst := s.track(l, now)
@@ -140,9 +164,39 @@ func (s *State) Eval(now time.Time, samples []Sample) ([]Alert, error) {
 			inst.Phase = PhaseFiring
 			inst.FiredAt = now
 		}
+
+		// Rendered after the value is set, and on every evaluation, so a firing
+		// alert's summary carries the value the responder is being paged about.
+		// An instance that stops being returned keeps what it last rendered,
+		// which is what it said when it fired.
+		annotations, failures := annotate(s.annotations, s.parseErrs, inst.Alert)
+		inst.Annotations = annotations
+		for _, f := range failures {
+			broken[f.Annotation] = f
+		}
 	}
 
-	return s.expire(now, present), nil
+	return s.expire(now, present), sortedFailures(broken), nil
+}
+
+// sortedFailures orders the deduplicated annotation failures by name, so a rule
+// with two broken templates reports them the same way on every evaluation.
+func sortedFailures(broken map[string]AnnotationError) []AnnotationError {
+	if len(broken) == 0 {
+		return nil
+	}
+
+	names := make([]string, 0, len(broken))
+	for name := range broken {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	out := make([]AnnotationError, 0, len(names))
+	for _, name := range names {
+		out = append(out, broken[name])
+	}
+	return out
 }
 
 // labelled is one sample with its final label set and fingerprint worked out.

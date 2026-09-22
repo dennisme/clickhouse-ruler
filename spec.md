@@ -746,6 +746,33 @@ strictly more correct and survives an outage of any length, and it is not
 here, because it means claiming an alert is still true at a moment when the
 ruler cannot check. Reach for it if a real outage beats a tuned tolerance.
 
+**Annotations are rendered when the alert is evaluated, not when it is sent.**
+They are part of what the alert is, which settles three things at once. A
+resolved alert says what it said when it fired, rather than re-rendering from
+whatever value it last held for a condition that has already gone away. A
+template that will not render is an evaluation problem, so an operator is not
+sent to Alertmanager to explain a broken `summary`. And one bad annotation
+cannot fail the batch it travels in, which it used to do permanently, because
+the failure repeated on every retry.
+
+**A broken annotation never stops the page.** Each annotation renders
+independently and the ones that worked are delivered untouched: an operator's
+Alertmanager templates read these, and a `runbook_url` is a static string that
+cannot fail, so losing it over a mistake in a different annotation would cost
+the responder their runbook. The annotation that failed carries its own error
+as its value, where a human reading the page will see it, and the failure is
+logged once per rule and source (8.4). Prometheus does the same, substituting
+`<error expanding template: ...>`, on the reasoning that a ruler which drops a
+page over a bad summary is worse than one that pages with a bad summary.
+
+Whether a broken template should have reached production at all is a check-time
+question, not a runtime one. `annotations/template` reports it at authoring
+time, and an operator who wants it to block sets that check to `error` (7.6).
+
+Templates are compiled once per rule rather than per evaluation, because they
+are fixed for the rule's lifetime and a rule returning a thousand rows would
+otherwise re-parse each annotation a thousand times every tick.
+
 Alertmanager owns grouping, silences, inhibition, and routing. The ruler does
 not.
 
@@ -1233,6 +1260,7 @@ with the finding so it can be silenced or grepped:
 | `labels/required` | missing or empty `team` or `severity` |
 | `annotations/required` | missing `summary` or `runbook_url` |
 | `annotations/runbook` | a `runbook_url` that is not an absolute http or https URL |
+| `annotations/template` | an annotation that is not a parseable Go template |
 | `rule/protected-label` | a query aliasing `team`, `alertname`, `source` or a source identity label, or a `labels` block setting `alertname` or `source` |
 
 `rule/source-match` and `rule/protected-label` need the sources file as well
@@ -1413,6 +1441,12 @@ and where they take a list of keys that list is configurable too:
 - `labels/required`, and which labels
 - `annotations/required`, and which annotations
 - `annotations/runbook`
+- `annotations/template`, an annotation that will not parse. Default `warn`,
+  because the alert still pages: the failure lands in the annotation text
+  rather than stopping the notification (6.5). An operator who would rather a
+  broken template never reach a pager raises it to `error`, which refuses the
+  file. Parsing is as far as tier 0 reaches; whether a variable names a column
+  the query returns needs the result, which is tier 1 (7.3).
 - `rule/for` and `rule/window` shorter than the group interval
 - `rule/source-match`, a rule whose labels match no source. Unlike everything
   else in this list it is not a matter of taste: it is here because whether a
@@ -1466,6 +1500,8 @@ checks:
     severity: warn
   annotations/runbook:
     severity: off
+  annotations/template:
+    severity: error
 ```
 
 Two consequences worth stating before this is built.
@@ -1583,6 +1619,7 @@ Evaluation:
 | --- | --- | --- |
 | `ruler_rule_evaluations_total` | counter | `rule_group`, `rule` |
 | `ruler_rule_evaluation_failures_total` | counter | `rule_group`, `rule` |
+| `ruler_annotation_failures_total` | counter | `rule_group`, `rule`, `annotation` |
 | `ruler_rule_evaluation_duration_seconds` | histogram | `rule_group` |
 | `ruler_rule_group_iterations_total` | counter | `rule_group` |
 | `ruler_rule_group_iterations_missed_total` | counter | `rule_group` |
@@ -1592,6 +1629,17 @@ Evaluation:
 A missed iteration means the evaluation took longer than the group interval.
 It is the single most important operational signal here, because alerts are
 then silently late.
+
+`ruler_rule_evaluation_failures_total` counts evaluations that did not happen,
+which is what the Prometheus metric it is named after counts. An annotation
+that would not render is not one of those: the evaluation produced alerts and
+they were delivered, carrying the template error where the annotation should be
+(6.5). It gets its own counter rather than a label on this one, because a label
+would make every carried-over dashboard query read high, and because the two
+have different audiences: a failed evaluation is an operator's problem and a
+broken template is the rule author's. `annotation` is a label worth having,
+since it names what to fix and an annotation is static configuration rather
+than anything data can multiply (8.3).
 
 Alert state and delivery:
 
@@ -1685,6 +1733,7 @@ What is logged:
 | info | shutting down | `timeout` |
 | error | rule evaluation failed against a source | `rule_group`, `rule`, `source`, `error` |
 | error | sending alerts to alertmanager failed | `rule_group`, `rule`, `error` |
+| warn | annotation template failed, the alert carries the error instead | `rule_group`, `rule`, `source`, `annotation`, `error` |
 | error | metrics listener stopped | `listen`, `error` |
 | warn | shutdown timeout expired with evaluations still running | `timeout` |
 
@@ -1946,6 +1995,21 @@ instances must stay distinct per source. That is a fingerprint question
   and a rule gets the strictest setting that applies to it. The merge is a
   maximum, so no precedence rule exists and no scope can loosen another.
   See 7.7.
+- **Annotations are rendered at evaluation time and stored on the alert.** A
+  resolved alert then says what it said when it fired, a broken template is an
+  evaluation problem rather than a delivery one, and one unrenderable annotation
+  cannot block a batch. See 6.5.
+- **`ruler_rule_evaluation_failures_total` counts evaluations that did not
+  happen, and nothing else.** A degraded evaluation that still delivered its
+  alerts is `ruler_annotation_failures_total`, a separate counter, because this
+  name tracks Prometheus' own and a dashboard carried over from a Prometheus
+  ruler has to keep reading true. See 8.2.
+- **A broken annotation template never stops a page.** Each annotation renders
+  independently, the ones that worked are delivered, and the one that failed
+  carries its error as its value. Hard or soft is a check-time choice through
+  `annotations/template`; at runtime the page always goes out. Anything else
+  means a mistake in a `summary` costs a responder the `runbook_url` next to
+  it. See 6.5 and 7.6.
 - **Labels decide identity; the fingerprint is a bucket.** Two instances that
   hash alike stay two alerts, compared on their label sets. Prometheus keys on
   the hash alone, and the comparison is cheap enough that there is no reason to
@@ -2017,18 +2081,7 @@ instances must stay distinct per source. That is a fingerprint question
    exactly this reason, and keeps resending them. Retention has to outlive
    delivery, or the notification-failure guarantee in 6.5 covers firing
    alerts but quietly not resolves.
-9. **Annotations are not part of an alert instance.** They are rendered at
-    send time from the rule's templates rather than stored on the alert when
-    it is evaluated, which has three consequences. A template that fails to
-    render fails the whole batch, so one bad annotation blocks every other
-    alert from that rule, permanently, because the failure repeats on every
-    retry. The failure is attributed to notification rather than to
-    evaluation, so an operator reading `ruler_alerts_send_failures_total`
-    goes looking at Alertmanager for what is actually a broken template. And
-    a resolved alert re-renders from its last value rather than carrying what
-    it said when it fired. Prometheus templates at evaluation time and stores
-    the result on the alert; doing the same would fix all three.
-10. **Nothing checks that two rules cannot produce the same alert.** 7.6
+9. **Nothing checks that two rules cannot produce the same alert.** 7.6
     scopes `rule/name` uniqueness to the group, on the reasoning that group
     labels and `source` already separate two same-named rules in the
     fingerprint. That reasoning is an assumption about how the files happen

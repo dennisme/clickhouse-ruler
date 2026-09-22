@@ -29,7 +29,7 @@ func TestAlertsSentTotalCountsAlertsNotBatches(t *testing.T) {
 	s := &instrumentedSender{inner: &recordingSender{}, alertmanager: am,
 		metrics: metrics, clock: newFakeClock(time.Unix(0, 0))}
 
-	if err := s.Send(context.Background(), threeAlerts(), nil); err != nil {
+	if err := s.Send(context.Background(), threeAlerts()); err != nil {
 		t.Fatalf("Send: %v", err)
 	}
 
@@ -46,7 +46,7 @@ func TestAlertsSentTotalIgnoresAFailedBatch(t *testing.T) {
 	s := &instrumentedSender{inner: &recordingSender{err: errors.New("unreachable")},
 		alertmanager: am, metrics: metrics, clock: newFakeClock(time.Unix(0, 0))}
 
-	if err := s.Send(context.Background(), threeAlerts(), nil); err == nil {
+	if err := s.Send(context.Background(), threeAlerts()); err == nil {
 		t.Fatal("want the sender's error back")
 	}
 

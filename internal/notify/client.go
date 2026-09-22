@@ -49,11 +49,8 @@ func NewClient(url string) *Client {
 // Returning an error reports that notification failed; it does not mean the
 // evaluation failed. The caller keeps its alert state either way, otherwise an
 // Alertmanager outage would also lose the `for` timers that survived it.
-func (c *Client) Send(ctx context.Context, alerts []alert.Alert, annotations map[string]string) error {
-	payload, err := Payload(alerts, annotations)
-	if err != nil {
-		return err
-	}
+func (c *Client) Send(ctx context.Context, alerts []alert.Alert) error {
+	payload := Payload(alerts)
 	// Every quiet evaluation of every rule would otherwise post an empty
 	// array, which is almost all evaluations.
 	if len(payload) == 0 {
