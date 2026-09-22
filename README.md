@@ -317,7 +317,7 @@ but is not the same as asking ClickHouse what the query does. The checks that
 need a connection, `EXPLAIN` for cost and plan, `system.columns` for whether
 the table still has the column, `DESCRIBE` for whether an annotation
 references a label the query actually returns, are specified in
-[spec 7.3](spec.md) and are not built. That is the next piece of work, and
+[spec 7.3](spec/validation.md) and are not built. That is the next piece of work, and
 until it lands this column reads "file checks today" rather than yes.
 
 ### SigNoz and ClickStack
@@ -553,7 +553,7 @@ ClickHouse, with real SQL and real rows.
 ## Design
 
 The full design, the research behind it, and the decisions that are still open
-are in [spec.md](spec.md).
+are in [spec.md](spec.md), which indexes the rest of the spec under `spec/`.
 
 ## License
 
