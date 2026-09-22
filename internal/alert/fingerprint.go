@@ -4,7 +4,46 @@ import (
 	"encoding/binary"
 	"hash/fnv"
 	"sort"
+	"strings"
 )
+
+// sameLabels reports whether two final label sets are the same alert.
+//
+// The fingerprint alone cannot answer that: it is 64 bits, so two different
+// label sets can hash alike. Everything deciding identity compares the labels
+// themselves and treats the hash as the bucket it is.
+func sameLabels(a, b map[string]string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for k, v := range a {
+		if other, ok := b[k]; !ok || other != v {
+			return false
+		}
+	}
+	return true
+}
+
+// labelKey renders a label set for a human to read and for a tie-break to
+// order on. Not an identity: sameLabels decides that.
+func labelKey(labels map[string]string) string {
+	keys := make([]string, 0, len(labels))
+	for k := range labels {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	var b strings.Builder
+	for i, k := range keys {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		b.WriteString(k)
+		b.WriteString("=")
+		b.WriteString(labels[k])
+	}
+	return b.String()
+}
 
 // fingerprint identifies an alert instance by its label set.
 //

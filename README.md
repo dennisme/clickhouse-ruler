@@ -479,7 +479,8 @@ go run ./cmd/ruler check --sources rules/sources.yaml rules/
 just init               # mise tool versions and pre-commit hooks
 just check              # lint, unit tests with -race, markdownlint
 just test               # unit tests with -race, no container needed
-just lint               # golangci-lint
+just lint               # golangci-lint, formatting included
+just fix                # apply every fix golangci-lint can make
 just integration-clean  # start ClickHouse, run integration tests, tear it down
 ```
 

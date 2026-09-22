@@ -139,10 +139,10 @@ func evalGroup(groupName string, evals []namedEval, m *Metrics, log *slog.Logger
 				res := ne.eval.Evaluate(ctx, tickAt)
 
 				m.EvaluationsTotal.WithLabelValues(groupName, ne.rule).Inc()
-				if len(res.QueryErrors) > 0 {
-					m.EvaluationFailuresTotal.WithLabelValues(groupName, ne.rule).Add(float64(len(res.QueryErrors)))
+				if len(res.SourceErrors) > 0 {
+					m.EvaluationFailuresTotal.WithLabelValues(groupName, ne.rule).Add(float64(len(res.SourceErrors)))
 				}
-				for _, se := range res.QueryErrors {
+				for _, se := range res.SourceErrors {
 					log.Error("rule evaluation failed against a source",
 						"rule_group", groupName, "rule", ne.rule,
 						"source", se.Source, "error", se.Err.Error())

@@ -49,13 +49,13 @@ func assertAlertSet(t *testing.T, got []Alert, wants map[string]want) {
 func TestInstancesAdvanceIndependently(t *testing.T) {
 	s := New(testRule(5*time.Minute, 0), nil, testSource())
 
-	assertAlertSet(t, s.Eval(t0, []Sample{sample("checkout", 1200)}), map[string]want{
+	assertAlertSet(t, evalOK(t, s, t0, []Sample{sample("checkout", 1200)}), map[string]want{
 		"checkout": {phase: PhasePending, value: 1200, activeAt: t0},
 	})
 
 	// cart starts its own for timer two minutes behind checkout.
 	cartActive := t0.Add(2 * time.Minute)
-	assertAlertSet(t, s.Eval(cartActive, []Sample{
+	assertAlertSet(t, evalOK(t, s, cartActive, []Sample{
 		sample("checkout", 1250),
 		sample("cart", 1100),
 	}), map[string]want{
@@ -65,7 +65,7 @@ func TestInstancesAdvanceIndependently(t *testing.T) {
 
 	// checkout has waited its full for, cart has not.
 	checkoutFired := t0.Add(5 * time.Minute)
-	assertAlertSet(t, s.Eval(checkoutFired, []Sample{
+	assertAlertSet(t, evalOK(t, s, checkoutFired, []Sample{
 		sample("checkout", 1300),
 		sample("cart", 1150),
 	}), map[string]want{
@@ -76,7 +76,7 @@ func TestInstancesAdvanceIndependently(t *testing.T) {
 	// checkout recovers while cart crosses its own threshold. One resolves,
 	// the other fires, on the same evaluation.
 	cartFired := t0.Add(7 * time.Minute)
-	assertAlertSet(t, s.Eval(cartFired, []Sample{sample("cart", 1200)}), map[string]want{
+	assertAlertSet(t, evalOK(t, s, cartFired, []Sample{sample("cart", 1200)}), map[string]want{
 		"checkout": {
 			phase:      PhaseResolved,
 			value:      1300,
@@ -88,7 +88,7 @@ func TestInstancesAdvanceIndependently(t *testing.T) {
 	})
 
 	// Only cart is left, and checkout is not resolved a second time.
-	assertAlertSet(t, s.Eval(t0.Add(8*time.Minute), []Sample{sample("cart", 1250)}), map[string]want{
+	assertAlertSet(t, evalOK(t, s, t0.Add(8*time.Minute), []Sample{sample("cart", 1250)}), map[string]want{
 		"cart": {phase: PhaseFiring, value: 1250, activeAt: cartActive, firedAt: cartFired},
 	})
 }
@@ -96,7 +96,7 @@ func TestInstancesAdvanceIndependently(t *testing.T) {
 func TestReturnOrderIsSortedByFingerprint(t *testing.T) {
 	s := New(testRule(0, 0), nil, testSource())
 
-	got := s.Eval(t0, []Sample{
+	got := evalOK(t, s, t0, []Sample{
 		sample("checkout", 1),
 		sample("cart", 2),
 		sample("search", 3),
@@ -125,8 +125,8 @@ func TestEvalIsDeterministicAcrossStates(t *testing.T) {
 	}
 	reversed := []Sample{samples[2], samples[1], samples[0]}
 
-	first := New(testRule(0, 0), nil, testSource()).Eval(t0, samples)
-	second := New(testRule(0, 0), nil, testSource()).Eval(t0, reversed)
+	first := evalOK(t, New(testRule(0, 0), nil, testSource()), t0, samples)
+	second := evalOK(t, New(testRule(0, 0), nil, testSource()), t0, reversed)
 
 	if len(first) != len(second) {
 		t.Fatalf("lengths differ: %d vs %d", len(first), len(second))
@@ -151,7 +151,7 @@ func TestLabelPrecedence(t *testing.T) {
 
 	s := New(r, map[string]string{"tier": "group", "region": "us-east"}, testSource())
 
-	got := s.Eval(t0, []Sample{{
+	got := evalOK(t, s, t0, []Sample{{
 		Labels: map[string]string{"ServiceName": "checkout", "severity": "critical"},
 		Value:  1200,
 	}})
