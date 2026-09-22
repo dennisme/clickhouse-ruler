@@ -288,6 +288,24 @@ func TestAssertionsMatchPolicyDefaults(t *testing.T) {
 	}
 }
 
+// The check names this package reports and the names policy knows are the
+// same set, or a finding arrives under a name no policy can resolve. They are
+// spelled twice because policy cannot import this package without a cycle.
+func TestCheckNamesAreKnownToPolicy(t *testing.T) {
+	configurable := []string{CheckSelectStar, CheckTableFunction, CheckNondeterministic}
+	for _, name := range configurable {
+		if !policy.Configurable(name) {
+			t.Errorf("%s is not configurable in policy, so its severity cannot be resolved", name)
+		}
+	}
+
+	for _, name := range []string{CheckSyntax, CheckInspect} {
+		if !policy.Fixed(name) {
+			t.Errorf("%s must be fixed: there is no severity to resolve for it", name)
+		}
+	}
+}
+
 func contains(haystack, needle string) bool { return strings.Contains(haystack, needle) }
 
 // A probe that is still running when its deadline passes got past the

@@ -460,6 +460,10 @@ Working:
   per source. `--explain` names the file that set each one
 - Rule file parsing, with line numbers on every finding and strict unknown
   field rejection
+- Query checks that read the SQL rather than the file: a rule that will not
+  parse, carries a second statement, selects `*`, reads through a table
+  function, or calls `now()` is reported before it ever runs. Found in the
+  tree ClickHouse itself parsed, never by matching words in the query text
 - The ClickHouse user contract: `source/privileges` checks each source's user
   for revoked table-function privileges, `readonly = 2`, a constraint behind
   every limit the ruler sends, and the grant on its own table. Probed rather
@@ -493,9 +497,10 @@ Working:
 
 Not built yet:
 
-- No checks that read the query. `source/privileges` connects, but nothing
-  inspects the SQL: a rule referencing a dropped column, scanning a terabyte,
-  or returning nothing at all still passes. Spec 7.3 tiers 1 and 2.
+- The query checks stop at the parse tree. A rule referencing a dropped
+  column, setting its own `SETTINGS`, reading a table outside its source,
+  scanning a terabyte, or returning nothing at all still passes. Spec 7.3,
+  the rest of tier 1 and all of tier 2.
 - No `ruler watch`, so rules are not reloaded without a restart.
 - No ClickHouse query cost metrics. Rows and bytes read per rule need a driver
   progress callback. Spec 8.2.

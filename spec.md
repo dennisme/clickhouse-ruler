@@ -1491,7 +1491,14 @@ connection, so it belongs here rather than in tier 1.
 
 Tier 1, metadata only, reads no table data:
 
-- `EXPLAIN SYNTAX` for syntax
+- `rule/syntax`, through `EXPLAIN AST`, which parses the statement and hands
+  back the tree without reading a row. It also refuses a second statement
+  itself, with `Syntax error (Multi-statements are not allowed)`, so nothing
+  here hunts for semicolons in a string. A correctness check: a rule that
+  will not parse cannot run.
+- `rule/inspect` is not a finding about a rule at all. It is how the ruler
+  reports that it could not ask, because silence would read as a rule that
+  passed.
 - table and columns exist, via `system.columns`
 - annotation template variables resolve against the real output column names
   from `DESCRIBE (SELECT ...)`. Better than the `pint` equivalent, which has to
@@ -1501,13 +1508,12 @@ Tier 1, metadata only, reads no table data:
   the primary key is not pruning anything
 - eval interval against predicted cost. A rule on a 30s interval reading 400GB
   is arithmetic, and it is rejected
-- banned constructs. `now()`, `today()` and `rand()` inside rule SQL break
-  window alignment and make replays lie. `FINAL` and `clusterAllReplicas` are
-  cost bombs. The statement must be a single `SELECT` or `WITH`, because a
-  second statement is a second thing nobody reviewed. The list of
-  nondeterministic functions is ours to curate and configurable to extend:
-  `system.functions` has no `is_deterministic` column to read it from (6.7.1).
-- table functions. Two kinds, and only one of them has a backstop.
+- `rule/nondeterministic`. `now()`, `today()` and `rand()` inside rule SQL
+  break window alignment and make replays lie. The list is ours to curate and
+  configurable to extend: `system.functions` has no `is_deterministic` column
+  to read it from (6.7.1). `FINAL` and `clusterAllReplicas` are cost bombs and
+  belong with the cost checks rather than here.
+- `rule/table-function`. Two kinds, and only one of them has a backstop.
   `remote()`, `cluster()`, `url()`, `file()` and `s3()` read data the row
   policies never see, and the database refuses them on the SOURCES privileges
   (6.7.2), so the check here is early feedback on a mistake rather than the
@@ -1515,7 +1521,14 @@ Tier 1, metadata only, reads no table data:
   no privilege gates them at all, so this check is the only thing that
   prevents one and the database can only time it out afterwards. Allowlist
   rather than blocklist either way: a name nobody thought of should fail
-  closed.
+  closed, and the allowlist ships empty, so an operator permits the one
+  function they actually need rather than the tool guessing which are safe.
+
+  **Found by position, never by name.** ClickHouse writes `Function numbers`
+  for a table function and `Function now` for a scalar one; what separates
+  them is that the first sits under a `TableExpression`. A name list would
+  have to know every table function that exists, which is the blocklist this
+  bullet refuses, and it would be wrong the first time one is added.
 - databases and tables outside the source's own are refused. Also early
   feedback: the grants are what stop it (6.7.1), which is why this check may
   read `table:` naively without that being a tenancy question (6.9).
@@ -1524,8 +1537,9 @@ Tier 1, metadata only, reads no table data:
   checks are allowed to stop making are actually in place. Probes for the
   privileges, reads `system.settings` for the constraints, and reports each
   assertion by name so a finding says which half of the contract is missing.
-- no `SELECT *`. The result columns become labels, so a schema change silently
-  changes an alert's identity and every instance refingerprints.
+- `rule/select-star`, an `Asterisk` node anywhere in the tree. The result
+  columns become labels, so a schema change silently changes an alert's
+  identity and every instance refingerprints.
 - join count and subquery depth against a ceiling, as a proxy for cost that
   needs no data read.
 - a `SETTINGS` clause on the query. The ruler's limits are sent per query and
@@ -1675,6 +1689,14 @@ and where they take a list of keys that list is configurable too:
   rule can run depends on which ruler is asking, so the same repository is
   legitimately unmatched on one ruler and fine on another (6.10, 10.2).
   Default `warn`.
+- `rule/select-star` and `rule/nondeterministic`. Both produce rules that
+  evaluate; they just evaluate badly, so both default to `warn`.
+- `rule/table-function`, and which functions are permitted. The only check
+  here defaulting to `error`, because it is the only preventive control
+  rather than early feedback: `remote()` and `url()` are refused by the
+  grants behind them, but `numbers()` and `generateRandom()` are gated by no
+  privilege at all (6.7.1). Its list is an allowlist, which merges in the
+  other direction, see 7.7.
 - `source/privileges`, a source whose ClickHouse user does not meet the
   contract in 6.7.2, and which assertions are required. Default `warn`, with
   the full list required. The assertions are the check's `keys` list, the same
@@ -1807,8 +1829,24 @@ wins every merge: the one setting that means "nobody is asked" can then be
 written and silently not take effect. Their key lists do still apply, so a
 scope can add a required key and cannot drop one.
 
+**A list's stricter direction depends on what the list is for.** A required
+list gets stricter as it grows, so scopes union it. An allowlist gets stricter
+as it shrinks, so scopes intersect it: unioning one would let a source permit
+a table function the instance policy refused, and that is exactly the
+loosening this section exists to prevent. Each check declares which kind its
+list is.
+
+Order independence survives, because both directions are commutative and
+associative: intersection is the meet where union is the join, and the merge
+is still a single pass with no precedence rule to remember.
+
+An allowlist starts from the first scope that sets one rather than from the
+shipped default, which is empty. Intersecting with an empty list would refuse
+everything however the scopes were written, which is a different check from
+the one anybody configured.
+
 **New check settings must be monotonic or they do not belong here.** Severity
-and key lists both have an unambiguous stricter direction. A setting without
+and both kinds of list have an unambiguous stricter direction. A setting without
 one, a numeric threshold for example, breaks the order independence above and
 needs a different home.
 
@@ -2331,6 +2369,22 @@ instances must stay distinct per source. That is a fingerprint question
   cannot act if they are not, and treats the denial as the pass. Constraints
   are still read from `system.settings`, which does expose the effective
   `min`, `max` and `readonly`. See 6.7.2.
+- **Tier 1 reads the parsed query, not its text.** `EXPLAIN AST` returns the
+  tree ClickHouse itself built, so a table function is found by sitting under
+  a `TableExpression` rather than by matching a name, and a nested one inside
+  a CTE is found the same as one at the top. It also refuses a second
+  statement itself, which settles multi-statements without anyone hunting
+  semicolons in a string. See 7.2 and 7.3.
+- **The table-function allowlist ships empty, and defaults to `error`.** The
+  operator knows which functions their rules need; the tool does not, and a
+  name nobody thought of has to fail closed. Error rather than warn because
+  this is the one check that is preventive rather than early feedback: the
+  grants refuse `remote()` and `url()`, and nothing refuses `numbers()`. See
+  6.7.1 and 7.6.
+- **A list's stricter direction is per check.** Required lists union across
+  scopes, allowlists intersect. Both are commutative, so 7.7's order
+  independence is untouched, and a source still cannot loosen what the
+  instance policy set. See 7.7.
 - **The contract is checked once per source, never per evaluation.** In
   `ruler check`, at startup and on reload. Grants do not change between two
   ticks in any way worth four refused queries of latency in front of a page,
