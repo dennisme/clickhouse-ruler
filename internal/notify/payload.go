@@ -19,7 +19,7 @@ type Alert struct {
 	EndsAt      string            `json:"endsAt,omitempty"`
 }
 
-// Payload renders annotations and maps evaluated alerts to the v2 wire format.
+// Payload maps evaluated alerts to the v2 wire format.
 //
 // Pending alerts are dropped. A `for` duration exists precisely so that a
 // condition which has not held long enough does not page, and Prometheus
@@ -28,7 +28,10 @@ type Alert struct {
 // A firing alert's endsAt is its validity, so the ruler decides when
 // Alertmanager may expire it. A resolved alert's is when it resolved, which
 // outranks whatever validity it was carrying while it fired.
-func Payload(alerts []alert.Alert, annotations map[string]string) ([]Alert, error) {
+// Annotations are rendered when the alert is evaluated rather than here, so a
+// template that will not render is an evaluation problem and cannot fail the
+// delivery of every other alert in the batch (spec 6.5).
+func Payload(alerts []alert.Alert) []Alert {
 	out := make([]Alert, 0, len(alerts))
 
 	for _, a := range alerts {
@@ -36,14 +39,9 @@ func Payload(alerts []alert.Alert, annotations map[string]string) ([]Alert, erro
 			continue
 		}
 
-		rendered, err := Render(annotations, a)
-		if err != nil {
-			return nil, err
-		}
-
 		entry := Alert{
 			Labels:      a.Labels,
-			Annotations: rendered,
+			Annotations: a.Annotations,
 			StartsAt:    format(a.FiredAt),
 			EndsAt:      format(a.ValidUntil),
 		}
@@ -52,7 +50,7 @@ func Payload(alerts []alert.Alert, annotations map[string]string) ([]Alert, erro
 		}
 		out = append(out, entry)
 	}
-	return out, nil
+	return out
 }
 
 func format(t time.Time) string {

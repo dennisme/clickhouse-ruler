@@ -18,9 +18,9 @@ type instrumentedSender struct {
 	clock        Clock
 }
 
-func (s *instrumentedSender) Send(ctx context.Context, alerts []alert.Alert, annotations map[string]string) error {
+func (s *instrumentedSender) Send(ctx context.Context, alerts []alert.Alert) error {
 	start := s.clock.Now()
-	err := s.inner.Send(ctx, alerts, annotations)
+	err := s.inner.Send(ctx, alerts)
 	s.metrics.NotificationLatency.Observe(s.clock.Now().Sub(start).Seconds())
 
 	if err != nil {

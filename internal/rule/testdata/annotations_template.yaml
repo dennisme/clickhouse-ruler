@@ -1,0 +1,47 @@
+groups:
+  - name: api-latency
+    interval: 1m
+    rules:
+      - alert: UnclosedAction
+        sources:
+          team: payments
+        expr: "SELECT 1 AS value FROM t WHERE ts >= {{ .From }} AND ts < {{ .To }}"
+        labels:
+          team: payments
+          severity: warning
+        annotations:
+          summary: "p99 is {{ .value }"
+          runbook_url: https://runbooks.internal/high-p99
+      - alert: UnknownFunction
+        sources:
+          team: payments
+        expr: "SELECT 1 AS value FROM t WHERE ts >= {{ .From }} AND ts < {{ .To }}"
+        labels:
+          team: payments
+          severity: warning
+        annotations:
+          summary: "p99 is {{ humanize .value }}"
+          runbook_url: https://runbooks.internal/high-p99
+      - alert: BrokenRunbookTemplate
+        sources:
+          team: payments
+        expr: "SELECT 1 AS value FROM t WHERE ts >= {{ .From }} AND ts < {{ .To }}"
+        labels:
+          team: payments
+          severity: warning
+        annotations:
+          summary: the runbook is what fails to parse here
+          runbook_url: "https://runbooks.internal/{{ .ServiceName"
+      - alert: UnknownColumn
+        sources:
+          team: payments
+        expr: "SELECT 1 AS value FROM t WHERE ts >= {{ .From }} AND ts < {{ .To }}"
+        labels:
+          team: payments
+          severity: warning
+        annotations:
+          # Parses, so this check says nothing. Whether the query returns a
+          # ServiceName column is only knowable from the result, which is
+          # tier 1 (spec 7.3).
+          summary: "{{ .ServiceName }} p99 is {{ .value }}"
+          runbook_url: https://runbooks.internal/high-p99

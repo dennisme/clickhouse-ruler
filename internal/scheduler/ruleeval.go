@@ -40,6 +40,18 @@ type SourceError struct {
 	Err    error
 }
 
+// AnnotationError names an annotation whose template would not render, and the
+// source whose evaluation found it.
+//
+// Not a failure of anything: the alert was evaluated, it is being sent, and it
+// carries the template error where its annotation should be. It is reported so
+// an author learns their summary reads as an error on somebody's page.
+type AnnotationError struct {
+	Source     string
+	Annotation string
+	Err        error
+}
+
 // Result reports what one evaluation of a rule did, for the caller to fold
 // into metrics and logs.
 type Result struct {
@@ -50,6 +62,11 @@ type Result struct {
 	// counted because a counter alone tells an operator that something failed
 	// without saying which source or what it said.
 	SourceErrors []SourceError
+
+	// AnnotationErrors holds one entry per source and annotation whose
+	// template would not render, deduplicated by alert.State across however
+	// many instances the rule produced (spec 8.3).
+	AnnotationErrors []AnnotationError
 
 	// SendError is set when Cadence failed to reach Alertmanager. The alert
 	// state has already been advanced regardless: a notification failure is
@@ -110,8 +127,9 @@ func (e *RuleEval) Evaluate(ctx context.Context, now time.Time) Result {
 	var res Result
 
 	type sourceResult struct {
-		alerts []alert.Alert
-		err    error
+		alerts      []alert.Alert
+		err         error
+		annotations []alert.AnnotationError
 	}
 	results := make([]sourceResult, len(e.rule.Sources))
 
@@ -146,20 +164,28 @@ func (e *RuleEval) Evaluate(ctx context.Context, now time.Time) Result {
 			// firing, plus anything that resolved this tick. It fails when two
 			// rows reached one identity, which leaves its state untouched and
 			// so reports exactly like a failed query (spec 6.3).
-			alerts, err := e.states[name].Eval(now, samples)
+			alerts, annotations, err := e.states[name].Eval(now, samples)
 			if err != nil {
 				results[i].err = err
 				return
 			}
 			results[i].alerts = alerts
+			// An annotation that would not render is reported without failing
+			// anything: the alert is intact and still worth sending.
+			results[i].annotations = annotations
 		}(i, src.Name, q)
 	}
 	wg.Wait()
 
 	var current []alert.Alert
 	for i, r := range results {
+		name := e.rule.Sources[i].Name
+		for _, a := range r.annotations {
+			res.AnnotationErrors = append(res.AnnotationErrors,
+				AnnotationError{Source: name, Annotation: a.Annotation, Err: a.Err})
+		}
 		if r.err != nil {
-			res.SourceErrors = append(res.SourceErrors, SourceError{Source: e.rule.Sources[i].Name, Err: r.err})
+			res.SourceErrors = append(res.SourceErrors, SourceError{Source: name, Err: r.err})
 			continue
 		}
 		current = append(current, r.alerts...)
@@ -177,6 +203,6 @@ func (e *RuleEval) Evaluate(ctx context.Context, now time.Time) Result {
 	if len(current) == 0 {
 		return res
 	}
-	res.SendError = e.cadence.Send(ctx, now, e.rule.Group.Interval, current, e.rule.Annotations)
+	res.SendError = e.cadence.Send(ctx, now, e.rule.Group.Interval, current)
 	return res
 }

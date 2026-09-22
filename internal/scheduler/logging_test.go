@@ -260,3 +260,82 @@ func TestEvalGroupLogsADuplicateLabelSet(t *testing.T) {
 		t.Errorf("ruler_rule_evaluation_failures_total = %v, want 1", got)
 	}
 }
+
+// A broken annotation is the author's problem, not Alertmanager's. It must not
+// be reported as a send failure, which would send an operator hunting in
+// Alertmanager, and the page still has to go out.
+func TestEvalGroupLogsABrokenAnnotationWithoutFailingTheSend(t *testing.T) {
+	log, buf := logBuffer()
+
+	set := oneRuleSet("BrokenSummary", source.Source{Name: "src1"})
+	set.Rules[0].Annotations = map[string]string{
+		"summary":     "{{ .NoSuchColumn }} is slow",
+		"runbook_url": "https://runbooks.internal/broken-summary",
+	}
+
+	// Several instances, to hold the line count at one.
+	samples := make([]alert.Sample, 0, 50)
+	for i := 0; i < 50; i++ {
+		samples = append(samples, alert.Sample{
+			Labels: map[string]string{"ServiceName": "svc" + strconv.Itoa(i)},
+			Value:  1,
+		})
+	}
+
+	sender := &recordingSender{}
+	metrics := NewMetrics(prometheus.NewRegistry())
+	sched := New(set, map[string]Querier{"src1": &fakeQuerier{samples: samples}},
+		notify.NewCadence(sender, time.Minute, notify.DefaultResendTolerance),
+		metrics, newFakeClock(time.Unix(0, 0)), 0, log)
+
+	sched.groups[0].Eval(context.Background(), time.Unix(0, 0))
+
+	lines := logLines(t, buf)
+	if len(lines) != 1 {
+		t.Fatalf("got %d log lines for 50 instances, want 1: %v", len(lines), lines)
+	}
+	wantFields(t, lines[0], map[string]string{
+		"level":      "WARN",
+		"rule_group": "f.yaml:g1",
+		"rule":       "BrokenSummary",
+		"source":     "src1",
+		"annotation": "summary",
+	})
+
+	if got := testutil.ToFloat64(metrics.AlertsSendFailures.WithLabelValues("")); got != 0 {
+		t.Errorf("ruler_alerts_send_failures_total = %v, want 0: this is not a delivery problem", got)
+	}
+	// This name tracks Prometheus' own, which counts evaluations that did not
+	// happen. An evaluation that delivered alerts with one ugly annotation is
+	// not one of those, or a dashboard carried over from a Prometheus ruler
+	// reads high (spec 8.2).
+	if got := testutil.ToFloat64(metrics.EvaluationFailuresTotal.WithLabelValues("f.yaml:g1", "BrokenSummary")); got != 0 {
+		t.Errorf("ruler_rule_evaluation_failures_total = %v, want 0: the evaluation produced alerts", got)
+	}
+
+	// It still has to be alertable, or a rule pages error strings for a month
+	// and only the logs know.
+	got := testutil.ToFloat64(
+		metrics.AnnotationFailures.WithLabelValues("f.yaml:g1", "BrokenSummary", "summary"))
+	if got != 1 {
+		t.Errorf("ruler_annotation_failures_total = %v, want 1", got)
+	}
+	// Counted once for the rule, not once per instance (spec 8.3).
+	if got := testutil.ToFloat64(
+		metrics.AnnotationFailures.WithLabelValues("f.yaml:g1", "BrokenSummary", "runbook_url")); got != 0 {
+		t.Errorf("runbook_url rendered, so its counter should be 0, got %v", got)
+	}
+
+	// The page went out, with the runbook intact and the failure where the
+	// summary should be.
+	if len(sender.calls) != 1 || len(sender.calls[0]) != 50 {
+		t.Fatalf("want one batch of 50 alerts, got %v calls", len(sender.calls))
+	}
+	sent := sender.calls[0][0]
+	if sent.Annotations["runbook_url"] != "https://runbooks.internal/broken-summary" {
+		t.Errorf("runbook_url = %q, want it delivered", sent.Annotations["runbook_url"])
+	}
+	if !strings.Contains(sent.Annotations["summary"], "error expanding template") {
+		t.Errorf("summary = %q, want the failure carried in the annotation", sent.Annotations["summary"])
+	}
+}

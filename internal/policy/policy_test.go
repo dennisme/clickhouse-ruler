@@ -80,7 +80,8 @@ func TestDefaultsAreWarnings(t *testing.T) {
 
 	for _, check := range []string{
 		CheckLabelsRequired, CheckAnnotationsRequired,
-		CheckAnnotationsRunbook, CheckRuleFor, CheckRuleWindow,
+		CheckAnnotationsRunbook, CheckAnnotationsTemplate,
+		CheckRuleFor, CheckRuleWindow,
 	} {
 		if got := d.For(check).Severity; got != lint.SeverityWarning {
 			t.Errorf("%s default severity = %v, want warning", check, got)

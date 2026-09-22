@@ -27,6 +27,8 @@ type Metrics struct {
 	LastEvaluationTimestamp *prometheus.GaugeVec
 	LastDuration            *prometheus.GaugeVec
 
+	AnnotationFailures *prometheus.CounterVec
+
 	AlertsActive        *prometheus.GaugeVec
 	AlertsSentTotal     *prometheus.CounterVec
 	AlertsSendFailures  *prometheus.CounterVec
@@ -50,6 +52,20 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 			Name: "ruler_rule_evaluation_failures_total",
 			Help: "Total number of rule evaluations that failed against a source.",
 		}, []string{"rule_group", "rule"}),
+
+		// Deliberately not a label on ruler_rule_evaluation_failures_total.
+		// That name tracks Prometheus' own, which counts evaluations that did
+		// not happen, and an evaluation that delivered alerts carrying one
+		// error string is not one of those: folding it in would make a
+		// dashboard carried over from a Prometheus ruler read high (spec 8.2).
+		//
+		// Labelled by annotation because that names what to fix, and an
+		// annotation is static configuration, two or three per rule, rather
+		// than anything data can multiply (spec 8.3).
+		AnnotationFailures: f.NewCounterVec(prometheus.CounterOpts{
+			Name: "ruler_annotation_failures_total",
+			Help: "Total number of evaluations where an annotation template would not render, by annotation.",
+		}, []string{"rule_group", "rule", "annotation"}),
 
 		EvaluationDuration: f.NewHistogramVec(prometheus.HistogramOpts{
 			Name: "ruler_rule_evaluation_duration_seconds",

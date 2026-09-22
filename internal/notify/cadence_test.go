@@ -19,7 +19,7 @@ type recordingSender struct {
 	err   error
 }
 
-func (s *recordingSender) Send(_ context.Context, alerts []alert.Alert, _ map[string]string) error {
+func (s *recordingSender) Send(_ context.Context, alerts []alert.Alert) error {
 	s.calls = append(s.calls, alerts)
 	return s.err
 }
@@ -39,7 +39,7 @@ func TestCadenceSendsAFiringAlertTheFirstTime(t *testing.T) {
 	c := NewCadence(s, time.Minute, DefaultResendTolerance)
 
 	now := time.Now()
-	if err := c.Send(context.Background(), now, testEvalInterval, []alert.Alert{firing(1)}, nil); err != nil {
+	if err := c.Send(context.Background(), now, testEvalInterval, []alert.Alert{firing(1)}); err != nil {
 		t.Fatalf("Send: %v", err)
 	}
 	if len(s.calls) != 1 || len(s.calls[0]) != 1 {
@@ -55,12 +55,12 @@ func TestCadenceDropsAFiringAlertBeforeItsCadenceElapses(t *testing.T) {
 	c := NewCadence(s, time.Minute, DefaultResendTolerance)
 
 	now := time.Now()
-	if err := c.Send(context.Background(), now, testEvalInterval, []alert.Alert{firing(1)}, nil); err != nil {
+	if err := c.Send(context.Background(), now, testEvalInterval, []alert.Alert{firing(1)}); err != nil {
 		t.Fatalf("Send: %v", err)
 	}
 
 	// Well inside the one minute cadence.
-	if err := c.Send(context.Background(), now.Add(10*time.Second), testEvalInterval, []alert.Alert{firing(1)}, nil); err != nil {
+	if err := c.Send(context.Background(), now.Add(10*time.Second), testEvalInterval, []alert.Alert{firing(1)}); err != nil {
 		t.Fatalf("Send: %v", err)
 	}
 
@@ -76,10 +76,10 @@ func TestCadenceResendsAFiringAlertOnceItsCadenceElapses(t *testing.T) {
 	c := NewCadence(s, time.Minute, DefaultResendTolerance)
 
 	now := time.Now()
-	if err := c.Send(context.Background(), now, testEvalInterval, []alert.Alert{firing(1)}, nil); err != nil {
+	if err := c.Send(context.Background(), now, testEvalInterval, []alert.Alert{firing(1)}); err != nil {
 		t.Fatalf("Send: %v", err)
 	}
-	if err := c.Send(context.Background(), now.Add(time.Minute), testEvalInterval, []alert.Alert{firing(1)}, nil); err != nil {
+	if err := c.Send(context.Background(), now.Add(time.Minute), testEvalInterval, []alert.Alert{firing(1)}); err != nil {
 		t.Fatalf("Send: %v", err)
 	}
 
@@ -96,11 +96,11 @@ func TestCadenceAlwaysSendsAResolvedAlert(t *testing.T) {
 	c := NewCadence(s, time.Minute, DefaultResendTolerance)
 
 	now := time.Now()
-	if err := c.Send(context.Background(), now, testEvalInterval, []alert.Alert{firing(1)}, nil); err != nil {
+	if err := c.Send(context.Background(), now, testEvalInterval, []alert.Alert{firing(1)}); err != nil {
 		t.Fatalf("Send: %v", err)
 	}
 	// Resolved arrives on the very next evaluation, well inside the cadence.
-	if err := c.Send(context.Background(), now.Add(time.Second), testEvalInterval, []alert.Alert{resolved(1)}, nil); err != nil {
+	if err := c.Send(context.Background(), now.Add(time.Second), testEvalInterval, []alert.Alert{resolved(1)}); err != nil {
 		t.Fatalf("Send: %v", err)
 	}
 
@@ -120,12 +120,12 @@ func TestCadenceRetriesAfterASendFailureWithoutWaitingForCadence(t *testing.T) {
 	c := NewCadence(s, time.Minute, DefaultResendTolerance)
 
 	now := time.Now()
-	if err := c.Send(context.Background(), now, testEvalInterval, []alert.Alert{firing(1)}, nil); err == nil {
+	if err := c.Send(context.Background(), now, testEvalInterval, []alert.Alert{firing(1)}); err == nil {
 		t.Fatal("want error from a failing sender")
 	}
 
 	s.err = nil
-	if err := c.Send(context.Background(), now.Add(time.Second), testEvalInterval, []alert.Alert{firing(1)}, nil); err != nil {
+	if err := c.Send(context.Background(), now.Add(time.Second), testEvalInterval, []alert.Alert{firing(1)}); err != nil {
 		t.Fatalf("Send: %v", err)
 	}
 
@@ -143,7 +143,7 @@ func TestCadenceStampsValidityFromTheCadenceInterval(t *testing.T) {
 	c := NewCadence(s, time.Minute, DefaultResendTolerance)
 
 	now := time.Now()
-	if err := c.Send(context.Background(), now, testEvalInterval, []alert.Alert{firing(1)}, nil); err != nil {
+	if err := c.Send(context.Background(), now, testEvalInterval, []alert.Alert{firing(1)}); err != nil {
 		t.Fatalf("Send: %v", err)
 	}
 
@@ -164,7 +164,7 @@ func TestCadenceStampsValidityFromTheGroupIntervalWhenItIsLonger(t *testing.T) {
 	c := NewCadence(s, time.Minute, DefaultResendTolerance)
 
 	now := time.Now()
-	if err := c.Send(context.Background(), now, 10*time.Minute, []alert.Alert{firing(1)}, nil); err != nil {
+	if err := c.Send(context.Background(), now, 10*time.Minute, []alert.Alert{firing(1)}); err != nil {
 		t.Fatalf("Send: %v", err)
 	}
 
@@ -184,7 +184,7 @@ func TestCadenceLeavesAResolvedAlertWithoutValidity(t *testing.T) {
 	c := NewCadence(s, time.Minute, DefaultResendTolerance)
 
 	now := time.Now()
-	if err := c.Send(context.Background(), now, testEvalInterval, []alert.Alert{resolved(1)}, nil); err != nil {
+	if err := c.Send(context.Background(), now, testEvalInterval, []alert.Alert{resolved(1)}); err != nil {
 		t.Fatalf("Send: %v", err)
 	}
 
@@ -205,7 +205,7 @@ func TestCadenceStampsValidityFromTheConfiguredTolerance(t *testing.T) {
 	c := NewCadence(s, time.Minute, 10)
 
 	now := time.Now()
-	if err := c.Send(context.Background(), now, testEvalInterval, []alert.Alert{firing(1)}, nil); err != nil {
+	if err := c.Send(context.Background(), now, testEvalInterval, []alert.Alert{firing(1)}); err != nil {
 		t.Fatalf("Send: %v", err)
 	}
 

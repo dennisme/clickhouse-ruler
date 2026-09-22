@@ -14,6 +14,7 @@ const (
 	CheckLabelsRequired      = "labels/required"
 	CheckAnnotationsRequired = "annotations/required"
 	CheckAnnotationsRunbook  = "annotations/runbook"
+	CheckAnnotationsTemplate = "annotations/template"
 	CheckRuleFor             = "rule/for"
 	CheckRuleWindow          = "rule/window"
 
@@ -63,9 +64,17 @@ var defaults = map[string]Setting{
 		Keys:     []string{"runbook_url", "summary"},
 	},
 	CheckAnnotationsRunbook: {Severity: lint.SeverityWarning},
-	CheckSourceMatch:        {Severity: lint.SeverityWarning},
-	CheckRuleFor:            {Severity: lint.SeverityWarning},
-	CheckRuleWindow:         {Severity: lint.SeverityWarning},
+
+	// Configurable rather than fixed, and a warning by default, because a rule
+	// with an unparseable annotation still evaluates and still pages: the
+	// failure lands in the annotation text rather than stopping the alert. An
+	// operator who would rather a broken template never reach a pager raises
+	// this to an error, which puts a repo owner on the path to unblock the
+	// author (spec 7.6).
+	CheckAnnotationsTemplate: {Severity: lint.SeverityWarning},
+	CheckSourceMatch:         {Severity: lint.SeverityWarning},
+	CheckRuleFor:             {Severity: lint.SeverityWarning},
+	CheckRuleWindow:          {Severity: lint.SeverityWarning},
 }
 
 // Fixed reports whether a check's severity is not configurable.

@@ -10,10 +10,10 @@ import (
 )
 
 // senderFunc adapts a plain function to Sender.
-type senderFunc func(context.Context, []alert.Alert, map[string]string) error
+type senderFunc func(context.Context, []alert.Alert) error
 
-func (f senderFunc) Send(ctx context.Context, a []alert.Alert, an map[string]string) error {
-	return f(ctx, a, an)
+func (f senderFunc) Send(ctx context.Context, a []alert.Alert) error {
+	return f(ctx, a)
 }
 
 // One Cadence is shared by every rule in every group, and the scheduler gives
@@ -24,7 +24,7 @@ func (f senderFunc) Send(ctx context.Context, a []alert.Alert, an map[string]str
 func TestCadenceSendIsSafeFromConcurrentGroups(t *testing.T) {
 	// A sender that records nothing, so the race detector reports on
 	// Cadence's own state rather than on a test helper's slice.
-	c := NewCadence(senderFunc(func(context.Context, []alert.Alert, map[string]string) error {
+	c := NewCadence(senderFunc(func(context.Context, []alert.Alert) error {
 		return nil
 	}), time.Minute, DefaultResendTolerance)
 
@@ -42,7 +42,7 @@ func TestCadenceSendIsSafeFromConcurrentGroups(t *testing.T) {
 				// evaluating different rules produce different instances.
 				a := firing(uint64(g*ticks + i))
 				_ = c.Send(context.Background(), now.Add(time.Duration(i)*time.Second),
-					testEvalInterval, []alert.Alert{a}, nil)
+					testEvalInterval, []alert.Alert{a})
 			}
 		}(g)
 	}

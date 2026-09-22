@@ -39,7 +39,7 @@ type recordingSender struct {
 	err   error
 }
 
-func (s *recordingSender) Send(_ context.Context, alerts []alert.Alert, _ map[string]string) error {
+func (s *recordingSender) Send(_ context.Context, alerts []alert.Alert) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.calls = append(s.calls, alerts)
