@@ -27,10 +27,11 @@ type AnnotationError struct {
 // its value, and returns what it managed to render.
 //
 // Annotations are rendered per annotation, and a failure in one never discards
-// another. An operator's Alertmanager templates read these: a runbook_url is a
-// static string that cannot fail, and losing it because a summary named a column
-// that is not there would cost the responder their runbook over an unrelated
-// mistake.
+// another. They are independent: an operator's Alertmanager templates read them
+// by name, and the one carrying a link to follow is usually not the one with the
+// interesting template in it. Discarding the set because a summary named a
+// column that is not there would take the useful annotations down with the
+// broken one.
 //
 // A failed annotation carries its failure as its value, so the page still goes
 // out and a human reading it can see which annotation is broken. A missing key

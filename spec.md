@@ -756,10 +756,13 @@ cannot fail the batch it travels in, which it used to do permanently, because
 the failure repeated on every retry.
 
 **A broken annotation never stops the page.** Each annotation renders
-independently and the ones that worked are delivered untouched: an operator's
-Alertmanager templates read these, and a `runbook_url` is a static string that
-cannot fail, so losing it over a mistake in a different annotation would cost
-the responder their runbook. The annotation that failed carries its own error
+independently and the ones that worked are delivered untouched. An operator's
+Alertmanager templates read them by name, and they are not equally likely to
+fail: a `runbook_url` is often a fixed link while a `summary` interpolates
+result columns, so discarding the set on the first failure tends to lose the
+annotation a responder needed in order to keep the one that broke. Neither is
+guaranteed, since a templated runbook is legal (7.3). The annotation that failed
+carries its own error
 as its value, where a human reading the page will see it, and the failure is
 logged once per rule and source (8.4). Prometheus does the same, substituting
 `<error expanding template: ...>`, on the reasoning that a ruler which drops a
@@ -2008,8 +2011,8 @@ instances must stay distinct per source. That is a fingerprint question
   independently, the ones that worked are delivered, and the one that failed
   carries its error as its value. Hard or soft is a check-time choice through
   `annotations/template`; at runtime the page always goes out. Anything else
-  means a mistake in a `summary` costs a responder the `runbook_url` next to
-  it. See 6.5 and 7.6.
+  means a mistake in one annotation costs a responder the others next to it.
+  See 6.5 and 7.6.
 - **Labels decide identity; the fingerprint is a bucket.** Two instances that
   hash alike stay two alerts, compared on their label sets. Prometheus keys on
   the hash alone, and the comparison is cheap enough that there is no reason to

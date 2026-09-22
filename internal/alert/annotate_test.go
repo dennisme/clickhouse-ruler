@@ -15,10 +15,10 @@ func annotatedRule(annotations map[string]string) rule.Rule {
 	return r
 }
 
-// An operator's Alertmanager templates read these, and a runbook_url is a
-// static string that cannot fail to render. Losing it because summary named a
-// column that is not there would cost the responder their runbook over a
-// mistake in a different annotation.
+// Annotations are independent, and an operator's Alertmanager templates read
+// them by name. Discarding the whole set because summary named a column that is
+// not there would lose the ones that rendered perfectly well, which here are
+// the link to follow and the description next to it.
 func TestEvalKeepsTheAnnotationsThatRendered(t *testing.T) {
 	s := New(annotatedRule(map[string]string{
 		"summary":     "{{ .NoSuchColumn }} is slow",
