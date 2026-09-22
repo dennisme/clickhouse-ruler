@@ -17,15 +17,25 @@ import "sort"
 //
 // Scopes are variadic rather than a fixed pair so that adding team-level
 // policy later changes call sites and nothing else.
+// The shipped defaults are not a scope. They are what a check falls back to
+// when no scope configures it, which is what makes `severity: off` reachable:
+// as a scope they would be a floor, the default warning would win every
+// merge, and the one setting meaning "nobody is asked" could be written and
+// never take effect. Their key lists do still apply, so a scope can add a
+// required key and cannot drop one (spec 7.6).
 func Merge(scopes ...*Policy) *Policy {
-	out := Defaults()
+	out := &Policy{Checks: map[string]Setting{}}
 
 	for _, scope := range scopes {
 		if scope == nil {
 			continue
 		}
 		for name, incoming := range scope.Checks {
-			out.Checks[name] = strictest(out.For(name), incoming)
+			current, ok := out.Checks[name]
+			if !ok {
+				current = Setting{Keys: defaults[name].Keys}
+			}
+			out.Checks[name] = strictest(current, incoming)
 		}
 	}
 	return out

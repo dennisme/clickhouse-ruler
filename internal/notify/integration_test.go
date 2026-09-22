@@ -268,9 +268,6 @@ func loadSet(t *testing.T, chAddr string) *ruleset.Set {
 		switch name {
 		case "RULER_CLICKHOUSE_ADDR":
 			return chAddr, true
-		case "RULER_CLICKHOUSE_PASSWORD":
-			// Matches compose.yaml. Dev only, and the stack binds localhost.
-			return "ruler", true
 		}
 		return "", false
 	}
@@ -296,9 +293,9 @@ func loadSet(t *testing.T, chAddr string) *ruleset.Set {
 
 // seed writes one slow checkout span and returns the evaluation time.
 //
-// It opens its own connection rather than borrowing the Querier's. Writing is
-// not something the ruler ever does, so Querier has no Exec and should not
-// grow one just to make a test shorter.
+// It connects as the admin user rather than as the source's. Writing is not
+// something the ruler ever does, and the source's user cannot: that is the
+// contract in spec 6.7.2 holding, not a limitation to work around.
 func seed(t *testing.T, src source.Source) time.Time {
 	t.Helper()
 
@@ -307,11 +304,8 @@ func seed(t *testing.T, src source.Source) time.Time {
 
 	conn, err := clickhouse.Open(&clickhouse.Options{
 		Addr: []string{src.Address},
-		Auth: clickhouse.Auth{
-			Database: src.Database,
-			Username: src.Username,
-			Password: src.Password,
-		},
+		// Matches compose.yaml. Dev only, and the stack binds localhost.
+		Auth: clickhouse.Auth{Database: src.Database, Username: "ruler", Password: "ruler"},
 	})
 	if err != nil {
 		t.Fatalf("opening seed connection: %v", err)

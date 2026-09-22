@@ -118,6 +118,14 @@ func runRun(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		}
 	}
 
+	// The contract check runs before the evaluation connections are opened,
+	// so a refused source is never connected to at all. Unlike the findings
+	// above it does not refuse to start: a source failing the contract is
+	// refused on its own, and every other source carries on (spec 6.7.3).
+	if refused := refusedSources(ctx, *sourcesPath, set, root, stderr, log); len(refused) > 0 {
+		refuseSources(set, refused)
+	}
+
 	queriers, err := openQueriers(set)
 	if err != nil {
 		printf(stderr, "%s\n", err)

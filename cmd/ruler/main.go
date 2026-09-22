@@ -9,7 +9,6 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"sort"
 	"syscall"
 
 	"github.com/dennisme/clickhouse-ruler/internal/lint"
@@ -75,6 +74,8 @@ func check(args []string, stdout, stderr io.Writer) int {
 	configPath := fs.String("config", "", "path to a policy file, defaults to ruler.yaml beside the rules directory if present")
 	format := fs.String("format", lint.FormatText, "output format: text or github")
 	explain := fs.Bool("explain", false, "print each rule's resolved policy and where every setting came from")
+	online := fs.Bool("online", false,
+		"also run the checks that need a ClickHouse connection, connecting as each source's own user")
 
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
@@ -105,6 +106,13 @@ func check(args []string, stdout, stderr io.Writer) int {
 
 	set, ruleProblems := ruleset.Load(dir, sources, root)
 	problems = append(problems, ruleProblems...)
+
+	// Every source in the file, not only the ones a rule matched. The finding
+	// belongs to the pull request that changed the sources file, in front of
+	// the people who own it (spec 6.7.3).
+	if *online {
+		problems = append(problems, checkPrivileges(context.Background(), *sourcesPath, sources.Sources, root)...)
+	}
 
 	if err := lint.Format(stdout, *format, problems); err != nil {
 		printf(stderr, "%s\n", err)
@@ -154,7 +162,10 @@ func loadPolicy(path, dir string) (*policy.Policy, []lint.Problem, error) {
 	case explicit:
 		return nil, nil, fmt.Errorf("reading policy: %w", err)
 	default:
-		return policy.Defaults(), nil, nil
+		// An empty policy rather than the defaults: For falls back to them
+		// anyway, and passing them as a scope would make every default
+		// severity a floor that a source's own policy could not turn off.
+		return &policy.Policy{}, nil, nil
 	}
 
 	p, problems := policy.Parse(path, data)
@@ -186,13 +197,10 @@ func explainSet(w io.Writer, set *ruleset.Set, root *policy.Policy) {
 			}
 		}
 
-		names := make([]string, 0, len(merged.Checks))
-		for name := range merged.Checks {
-			names = append(names, name)
-		}
-		sort.Strings(names)
-
-		for _, name := range names {
+		// Every configurable check, not only the ones a file mentioned: an
+		// author asking why a check blocks them is not helped by a list that
+		// omits the checks nobody configured.
+		for _, name := range policy.Names() {
 			s := merged.For(name)
 			origin := "default"
 			if s.File != "" {

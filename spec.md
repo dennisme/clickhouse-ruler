@@ -852,9 +852,12 @@ not implement authorization, the database does.
 
 That holds only while a query reads the tables it names. `remote()`, `url()`,
 `s3()` and friends read data the row policies never see, so the guarantee
-depends on those being refused: see the table function check in 7.3 and the
-profile in 6.7. A tenancy claim that a table function can walk around is not a
-tenancy claim.
+depends on those being refused, and on being refused by the database: the
+SOURCES privileges are revoked on the user, per the contract in 6.7.2. The
+tier 1 check in 7.3 reports the same mistake earlier and is not what makes the
+guarantee hold (6.7.1). A tenancy claim that a table function can walk around
+is not a tenancy claim, and neither is one that depends on a linter having
+run.
 
 `CODEOWNERS` gates the two halves separately, which is the split in 6.10. The
 sources file is an admin path: adding a cluster, a user or a source is
@@ -935,6 +938,184 @@ than at evaluation time.
 Client side, at rule load and in CI: see section 7.
 
 A runaway rule hurts one team's quota, not the cluster.
+
+### 6.7.1 Where the line is
+
+"Lint predicts, the database enforces" is the right instinct and too vague to
+build on, because it leaves every individual check able to claim it is the
+guarantee. The line is drawn once, here, and section 7 inherits it:
+
+**A check we cannot make sound belongs to the database. A check the database
+cannot make at all belongs to us. Nothing is a guarantee in both places.**
+
+Measured against ClickHouse 25.8.2 with a user holding `readonly = 2`, a
+profile with constraints, and `GRANT SELECT` on one table.
+
+**Ours, and only ours.** No server-side equivalent exists, so the check is the
+whole control and there is no backstop behind it:
+
+| Check | Why the database cannot do it |
+|---|---|
+| `{{ .From }}` and `{{ .To }}` present | an unbounded query is valid SQL |
+| `window` and `for` against the group interval | not a database concept |
+| no `SELECT *` | result columns are alert identity (6.3), which the cluster knows nothing about |
+| no `now()`, `today()`, `rand()` | see below: there is no server list of these |
+| no `numbers()`, `generateRandom()`, `zeros()` | see below: no privilege gates them |
+| annotation variables resolve to real output columns | the alert is ours, not the query's |
+| attribute key presence (7.3 tier 2) | a missing map key is not an error to ClickHouse |
+| predicted cost against the eval interval | the cluster sees one query, not its schedule |
+
+Two of those rows were assumptions until they were tested, and both came back
+worse than expected.
+
+**There is no server-side source of truth for determinism.**
+`system.functions` carries no `is_deterministic` column, so the banned function
+list is ours to curate and therefore ours to keep current. It is configurable
+for that reason: a list we maintain will be incomplete, and an operator who
+finds the gap should not have to wait for a release.
+
+**Generator table functions are gated by nothing.** `remote()`, `url()`,
+`file()` and `s3()` are refused by privilege, but `numbers()` and
+`generateRandom()` need no grant at all: as the locked-down user,
+`SELECT count() FROM generateRandom(...)` ran until `max_execution_time` cut it
+off. So the allowlist in 7.3 is the only preventive control for this class, and
+the database's only answer is to time the query out after it has already cost
+something. That makes the allowlist genuinely load-bearing, unlike the rest of
+it.
+
+**The database's, and only the database's.** We check these for fast feedback,
+and the check is never what makes them true:
+
+| Property | What actually enforces it | Observed |
+|---|---|---|
+| which tables and rows are readable | `GRANT SELECT` scoped to the source's table, plus row policies | reading an ungranted table in the same database is `ACCESS_DENIED`, `merge('otel','.*')` cannot reach it either, and `system` tables come back filtered to granted objects or refused outright |
+| no external data | revoke every SOURCES privilege | `remote()`, `url()` and `file()` each fail naming the missing grant |
+| no mutation | no `INSERT` or DDL grant, plus `readonly = 2` | `INSERT` and `CREATE TABLE` are refused on the grant, before `readonly` is consulted |
+| cost ceilings cannot be raised | profile constraints | `SELECT ... SETTINGS max_execution_time = 9999` throws `SETTING_CONSTRAINT_VIOLATION`, and `readonly` reports itself as const |
+| one team cannot starve the others | `max_concurrent_queries_for_user` | not measured |
+
+So the tier 1 checks that refuse `remote()`, or a table outside the source's
+own, are demoted: they are CI failing fast on a mistake, not the thing standing
+between one team and another team's data. 6.6 should be read with that
+correction. Its claim holds because of the grants, and it held in the probe
+with no checker running at all.
+
+**This is what unblocks tier 1.** 6.9 asks what `table:` means on a sharded
+cluster before tier 1 can use it, on the assumption that getting it wrong is a
+tenancy hole. Under the line above it is not: `table:` carries no security
+meaning, so a wrong answer produces a wrong lint finding and nothing more.
+Tier 1 proceeds on the single-node reading and 6.9 stays open.
+
+### 6.7.2 The ClickHouse user contract
+
+Everything in the right-hand column above is true only if the operator created
+the user that way, and nothing checks that they did. A contract that exists
+only as prose in this file is one that fails silently, on someone else's
+cluster, in the direction of too much access.
+
+So the contract ships as a reference `CREATE USER` and profile, and is
+verified rather than assumed:
+
+- **Grants.** `SELECT` on exactly the source's table and nothing else. No
+  SOURCES privileges. No `INSERT`, no DDL, no `CREATE TEMPORARY TABLE`, which
+  `remote()` needs in addition to `REMOTE`.
+- **Profile.** `readonly = 2`, the settings of 6.7, and a constraint on each of
+  them so a query cannot raise what the ruler sends.
+- **Row policies**, where a source is narrower than its table.
+
+**A user can read enough about itself to check this, with one wrinkle.**
+`system.settings` exposes `value`, `min`, `max` and `readonly` per setting, so
+the effective constraints are readable from the session with no extra
+privilege. `SHOW GRANTS`, however, reports role membership rather than what the
+roles contain: a user granted `REMOTE` through a role shows only
+`GRANT the_role TO the_user`. Expanding it means walking `enabledRoles()` and
+issuing `SHOW GRANTS FOR` each one, recursively, and roles are how an operator
+of any size grants in the first place.
+
+**So privileges are verified by probe, not by reading grant text.** The check
+issues the queries that are supposed to be refused, against endpoints that
+cannot do anything if they are not: `url('http://127.0.0.1:1/', ...)` is
+denied on the missing privilege before any connection is attempted, and a
+denial is the passing result. A probe cannot be fooled by a role, by an
+implicit grant, or by a future release changing which privilege covers what.
+Reading grants infers; running the query observes.
+
+Settings constraints are read from `system.settings` rather than probed,
+because a probe there would mean sending a query designed to exceed a limit.
+
+**Probe both directions.** A refused probe proves a privilege is absent; it
+says nothing about whether the source can read its own table. `SELECT 1 FROM
+<table> LIMIT 0` on the same round trip proves the grant that has to be there,
+so an under-granted user is a finding in CI rather than an `ACCESS_DENIED` on
+the first evaluation at three in the morning.
+
+**Assert on the error code, not the message.** `497 ACCESS_DENIED` is a pass.
+Any other error is inconclusive and reports as inconclusive, because a probe
+that treats "it failed somehow" as proof will pass a cluster that was merely
+unreachable. No error at all is the finding.
+
+### 6.7.3 When the contract is checked, and what that leaves open
+
+Once per source, in three places, and never in the evaluation path:
+
+- `ruler check`, per source. This is the one that matters, because the finding
+  lands in the pull request changing the sources file, in front of the people
+  who own it.
+- `ruler run` at startup, per source, while connections are being opened
+  anyway.
+- On hot reload, once that exists, since a reload already reconciles sources.
+
+Not per evaluation. Grants do not change between two ticks in any way worth
+paying for, and four refused queries on every tick would be load on the cluster
+and latency in front of a page. The cost as written is a handful of statements
+per source at load, each refused before it does any work: the `url()` probe
+never opens a socket.
+
+Behaviour on failure follows the check's severity, which 7.6 already makes
+runtime behaviour rather than CI output. At `error` the source is refused and
+its rules do not evaluate. At `warn` it loads and logs which assertions failed.
+At `off` the probes are not sent at all.
+
+**What this leaves open, stated rather than hidden.** An operator who grants
+`REMOTE` an hour after startup is not noticed until the next check or reload.
+That is acceptable because of 6.7.1 and would not be acceptable without it: the
+probe is a report, and the grants are the control. The window where the report
+is stale is a window where the database is still refusing the query.
+
+### 6.7.4 What the operator owns
+
+The line in 6.7.1 is only honest if the half on the other side of it is
+written down, so this is the part to read before pointing a ruler at a cluster.
+The tool cannot do any of it, and no check failing quietly means it was done.
+
+**Decide what the source's user may read, and grant exactly that.** Not the
+database, the table. Every check in section 7 is scoped to the source's own
+table, so a wider grant is invisible to the tool and equally invisible in a
+diff of the rules repository.
+
+**Decide whether a row policy is needed.** A source narrower than its table,
+one team's rows out of a shared table, is a row policy and nothing else. No
+rule file can express it, and no check can detect that it is missing, because
+a query returning another team's rows looks exactly like a query returning its
+own.
+
+**Put a constraint on every limit, not just a value.** A limit the ruler sends
+without a constraint behind it is a default a rule can raise in one clause.
+This is the one the probe reads rather than tests, so it is also the one most
+likely to be half done: a profile with the settings and no `<constraints>`
+block reports the right values and enforces nothing.
+
+**Decide what happens when the contract cannot be met.** Managed ClickHouse
+that will not expose settings profiles is a real constraint, not a reason to
+turn the check off wholesale. Drop the assertion that cannot hold, keep the
+rest, and write down what is now unenforced. 7.6's assertion list exists for
+this.
+
+**Expect the loud failures and the silent one to look nothing alike.** Too few
+grants is an `ACCESS_DENIED` on every evaluation, counted and logged. Too many
+grants is silence: every rule evaluates correctly and the boundary is simply
+not there. The check exists for the second case, which is why its severity
+governs the report and never the guarantee (7.6).
 
 ### 6.8 Evaluation delay
 
@@ -1323,15 +1504,26 @@ Tier 1, metadata only, reads no table data:
 - banned constructs. `now()`, `today()` and `rand()` inside rule SQL break
   window alignment and make replays lie. `FINAL` and `clusterAllReplicas` are
   cost bombs. The statement must be a single `SELECT` or `WITH`, because a
-  second statement is a second thing nobody reviewed.
-- table functions are a tenancy escape, not only a cost problem. `remote()`,
-  `cluster()`, `url()`, `file()` and `s3()` read data that is not in the table
-  the source names, so row policies never see it. 6.6 claims a team cannot
-  query data it does not own no matter what SQL it writes, and that claim only
-  holds if these are refused. Allowlist rather than blocklist: a name nobody
-  thought of should fail closed.
-- databases and tables outside the source's own are refused, for the same
-  reason.
+  second statement is a second thing nobody reviewed. The list of
+  nondeterministic functions is ours to curate and configurable to extend:
+  `system.functions` has no `is_deterministic` column to read it from (6.7.1).
+- table functions. Two kinds, and only one of them has a backstop.
+  `remote()`, `cluster()`, `url()`, `file()` and `s3()` read data the row
+  policies never see, and the database refuses them on the SOURCES privileges
+  (6.7.2), so the check here is early feedback on a mistake rather than the
+  control. `numbers()`, `generateRandom()` and `zeros()` are the other kind:
+  no privilege gates them at all, so this check is the only thing that
+  prevents one and the database can only time it out afterwards. Allowlist
+  rather than blocklist either way: a name nobody thought of should fail
+  closed.
+- databases and tables outside the source's own are refused. Also early
+  feedback: the grants are what stop it (6.7.1), which is why this check may
+  read `table:` naively without that being a tenancy question (6.9).
+- `source/privileges`, the source's own user against the contract in 6.7.2.
+  Not a check on the rule at all: it asserts that the guarantees the other
+  checks are allowed to stop making are actually in place. Probes for the
+  privileges, reads `system.settings` for the constraints, and reports each
+  assertion by name so a finding says which half of the contract is missing.
 - no `SELECT *`. The result columns become labels, so a schema change silently
   changes an alert's identity and every instance refingerprints.
 - join count and subquery depth against a ceiling, as a proxy for cost that
@@ -1483,6 +1675,33 @@ and where they take a list of keys that list is configurable too:
   rule can run depends on which ruler is asking, so the same repository is
   legitimately unmatched on one ruler and fine on another (6.10, 10.2).
   Default `warn`.
+- `source/privileges`, a source whose ClickHouse user does not meet the
+  contract in 6.7.2, and which assertions are required. Default `warn`, with
+  the full list required. The assertions are the check's `keys` list, the same
+  field every other check with a list uses, so the merge in 7.7 needs no new
+  rule for them.
+
+**`source/privileges` is configurable for the same reason the others are, not
+because the contract is optional.** An operator can drop the assertion their
+cluster cannot satisfy and keep the rest, rather than turning the whole check
+off to get past it. That is the shape that survives a real estate: a managed ClickHouse that
+will not expose settings profiles is a reason to stop asserting constraints,
+and no reason at all to stop asserting that the SOURCES privileges are
+revoked. Union across scopes (7.7) still applies, so the platform baseline
+cannot be dropped by a team.
+
+It defaults to `warn` rather than `error` because a ruler pointed at an
+existing cluster will fail it on day one, and a check that blocks the first
+run gets turned off rather than fixed. What makes `warn` defensible here and
+not merely lenient is that the finding is about the operator's own file: the
+person who sees it is the person who can fix it, and nobody is waiting behind
+them. An operator who wants the contract enforced raises it to `error`, and
+one who is satisfied it holds by other means turns it `off`.
+
+The severity governs the report, never the guarantee. A cluster where this
+check is `off` is exactly as safe as one where it is `error` and passing;
+what changes is whether anyone is told. That is the difference between this
+and every other check in the list, where severity decides whether a rule runs.
 
 **Severity is an escalation path, not a noise level.** This is the part that
 decides everything else:
@@ -1580,6 +1799,13 @@ neither contains the other: payments uses several sources, and `otel_traces`
 is used by several teams. That is a lattice rather than a tree, and it is why
 a maximum is the right merge. A tree would force one axis inside the other and
 then force a winner between them.
+
+**The shipped defaults are not a scope.** They are what a check falls back to
+when no file configures it, and they take no part in the maximum. Treating
+them as a scope makes `severity: off` unreachable, because the default warning
+wins every merge: the one setting that means "nobody is asked" can then be
+written and silently not take effect. Their key lists do still apply, so a
+scope can add a required key and cannot drop one.
 
 **New check settings must be monotonic or they do not belong here.** Severity
 and key lists both have an unambiguous stricter direction. A setting without
@@ -2082,6 +2308,42 @@ instances must stay distinct per source. That is a fingerprint question
   Re-asserting from a read-only snapshot of `alert.State` was the alternative,
   and it is not here: it means claiming an alert is still true when the ruler
   cannot check. See 6.5.
+- **A check we cannot make sound belongs to the database; a check the database
+  cannot make at all belongs to us.** Drawn once in 6.7.1 so that no individual
+  check can claim to be the guarantee. Tenancy, mutation, external data and the
+  cost ceilings are the grants and the profile; time bounds, `SELECT *`,
+  nondeterminism, generator table functions, annotation variables and predicted
+  cost are the checker. The tier 1 checks that refuse `remote()` or a foreign
+  table are demoted to fast feedback, which is also what lets `table:` be read
+  naively and unblocks tier 1 ahead of 6.9.
+- **The banned-function list is ours to curate.** `system.functions` has no
+  `is_deterministic` column, measured on 25.8.2, so there is nothing to read it
+  from and the list will be incomplete. Configurable for that reason. See
+  6.7.1.
+- **Generator table functions are the one place the allowlist is load
+  bearing.** `numbers()` and `generateRandom()` need no privilege, so unlike
+  `remote()` and `url()` there is no grant behind the check, and the database's
+  only answer is a timeout after the cost is spent. See 6.7.1.
+- **The user contract is verified by probe, not by reading grants.**
+  `SHOW GRANTS` reports role membership rather than what the roles contain, so
+  a user granted `REMOTE` through a role reads as unprivileged. The check
+  issues the queries that are supposed to be refused, against endpoints that
+  cannot act if they are not, and treats the denial as the pass. Constraints
+  are still read from `system.settings`, which does expose the effective
+  `min`, `max` and `readonly`. See 6.7.2.
+- **The contract is checked once per source, never per evaluation.** In
+  `ruler check`, at startup and on reload. Grants do not change between two
+  ticks in any way worth four refused queries of latency in front of a page,
+  and a stale report is safe because the grants are the control rather than
+  the report (6.7.1). Both directions are probed: the privileges that must be
+  absent, and the one grant that must be present, so an under-granted source
+  fails in CI instead of on its first evaluation. See 6.7.3.
+- **`source/privileges` is a configurable check with a required-assertion
+  list, defaulting to `warn`.** Its severity governs the report and never the
+  guarantee, which is what separates it from every other check: a cluster
+  where it is `off` is as safe as one where it passes. `warn` because a ruler
+  pointed at an existing cluster fails it on day one, and a check that blocks
+  the first run gets switched off rather than fixed. See 7.6.
 - **`clickhouse_ruler_alerts_sent_total` counts alerts, and there is no batch counter.**
   The name tracks a Prometheus metric that counts alerts, so counting batches
   read wrong on any dashboard carried over. "How much traffic is Alertmanager
@@ -2105,7 +2367,11 @@ instances must stay distinct per source. That is a fingerprint question
    rest of 6.9 is outstanding: `address` takes a single node, the cost caps
    are per shard rather than per query, and `evaluation_delay` has to cover
    the slowest shard. Proving any of it needs a second ClickHouse node in the
-   compose stack, since one node cannot reproduce the failure.
+   compose stack, since one node cannot reproduce the failure. What `table:`
+   means on a sharded cluster is no longer a blocker for tier 1: under 6.7.1
+   it carries no security meaning, so a wrong answer is a wrong finding rather
+   than a tenancy hole. It is still a correctness question for the checks that
+   read it.
 5. **Generating the route tree with free-form labels.** 6.5 says the tree is
    generated from the repository, keyed on `team`. With teams inventing rule
    labels and operators inventing source `labels` (6.10.1), what the generator

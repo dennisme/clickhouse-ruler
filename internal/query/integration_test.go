@@ -9,6 +9,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ClickHouse/clickhouse-go/v2"
+	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+
 	"github.com/dennisme/clickhouse-ruler/internal/rule"
 	"github.com/dennisme/clickhouse-ruler/internal/source"
 )
@@ -24,14 +27,15 @@ func testSource(t *testing.T) source.Source {
 	if address == "" {
 		t.Fatal("RULER_CLICKHOUSE_ADDR is not set, run these through `just integration`")
 	}
-	// Credentials match compose.yaml. They are dev-only and the compose stack
-	// is bound to localhost.
+	// The restricted user from deploy/clickhouse/init/02-ruler-user.sql, so
+	// the evaluation path runs under the contract in spec 6.7.2 rather than
+	// as an administrator. Seeding uses `ruler`, since writing is not
+	// something the ruler ever does.
 	return source.Source{
 		Name:             "otel_traces",
 		Address:          address,
 		Database:         "otel",
-		Username:         "ruler",
-		Password:         "ruler",
+		Username:         "ruler_payments",
 		Table:            "otel_traces",
 		TimestampColumn:  "Timestamp",
 		EvaluationDelay:  0,
@@ -50,7 +54,7 @@ func openQuerier(t *testing.T, src source.Source) *Querier {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	t.Cleanup(func() { q.Close() })
+	t.Cleanup(func() { _ = q.Close() })
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
@@ -70,17 +74,38 @@ type span struct {
 	env string
 }
 
+// adminConn writes the fixture rows.
+//
+// It is a second connection on purpose. The source's own user cannot write,
+// which is the contract working rather than an inconvenience, so a test that
+// seeds through the Querier would be testing a user the ruler never uses.
+func adminConn(t *testing.T, address string) driver.Conn {
+	t.Helper()
+
+	// Matches compose.yaml. Dev only, and the stack binds to localhost.
+	conn, err := clickhouse.Open(&clickhouse.Options{
+		Addr: []string{address},
+		Auth: clickhouse.Auth{Database: "otel", Username: "ruler", Password: "ruler"},
+	})
+	if err != nil {
+		t.Fatalf("opening admin connection: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	return conn
+}
+
 func seed(t *testing.T, q *Querier, spans []span) {
 	t.Helper()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	if err := q.conn.Exec(ctx, "TRUNCATE TABLE otel.otel_traces"); err != nil {
+	conn := adminConn(t, q.src.Address)
+	if err := conn.Exec(ctx, "TRUNCATE TABLE otel.otel_traces"); err != nil {
 		t.Fatalf("truncate: %v", err)
 	}
 
-	batch, err := q.conn.PrepareBatch(ctx,
+	batch, err := conn.PrepareBatch(ctx,
 		"INSERT INTO otel.otel_traces (Timestamp, TraceId, SpanId, ServiceName, SpanName, Duration, StatusCode, ResourceAttributes, SpanAttributes)")
 	if err != nil {
 		t.Fatalf("prepare batch: %v", err)
