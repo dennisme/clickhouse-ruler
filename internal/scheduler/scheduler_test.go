@@ -14,12 +14,18 @@ import (
 	"github.com/dennisme/clickhouse-ruler/internal/source"
 )
 
+// testRetention outlasts every timeline in these tests, and testResend is the
+// pair a Scheduler derives it from.
+const testRetention = time.Hour
+
+var testResend = Resend{Interval: time.Minute, Tolerance: notify.DefaultResendTolerance}
+
 func testGroup(name string, interval time.Duration) rule.Group {
 	return rule.Group{Name: name, Interval: interval}
 }
 
 // A rule matching no source is not evaluated, and 6.10 says that has to be
-// visible rather than silent: it must show up in ruler_rules_unmatched.
+// visible rather than silent: it must show up in clickhouse_ruler_rules_unmatched.
 func TestNewCountsRulesWithNoMatchedSourceAsUnmatched(t *testing.T) {
 	set := &ruleset.Set{
 		Rules: []ruleset.Rule{
@@ -35,11 +41,11 @@ func TestNewCountsRulesWithNoMatchedSourceAsUnmatched(t *testing.T) {
 	cadence := notify.NewCadence(&recordingSender{}, time.Minute, notify.DefaultResendTolerance)
 	clock := newFakeClock(time.Unix(0, 0))
 
-	New(set, map[string]Querier{"src1": &fakeQuerier{}}, cadence, metrics, clock, 0, nil)
+	New(set, map[string]Querier{"src1": &fakeQuerier{}}, cadence, metrics, clock, 0, nil, testResend)
 
 	got := testutil.ToFloat64(metrics.RulesUnmatched.WithLabelValues("f.yaml:g1"))
 	if got != 1 {
-		t.Fatalf("ruler_rules_unmatched = %v, want 1", got)
+		t.Fatalf("clickhouse_ruler_rules_unmatched = %v, want 1", got)
 	}
 }
 
@@ -61,7 +67,7 @@ func TestNewStaggersGroupsSharingAnInterval(t *testing.T) {
 	cadence := notify.NewCadence(&recordingSender{}, time.Minute, notify.DefaultResendTolerance)
 	clock := newFakeClock(time.Unix(0, 0))
 
-	sched := New(set, map[string]Querier{"src1": &fakeQuerier{}}, cadence, metrics, clock, 0, nil)
+	sched := New(set, map[string]Querier{"src1": &fakeQuerier{}}, cadence, metrics, clock, 0, nil, testResend)
 
 	if len(sched.groups) != 2 {
 		t.Fatalf("got %d groups, want 2", len(sched.groups))
@@ -95,7 +101,7 @@ func TestAlertsActiveIsLabelledByGroupAndRule(t *testing.T) {
 	clock := newFakeClock(time.Unix(0, 0))
 
 	sched := New(set, map[string]Querier{"src1": &fakeQuerier{samples: oneSample()}},
-		cadence, metrics, clock, 0, nil)
+		cadence, metrics, clock, 0, nil, testResend)
 
 	// Evaluate both groups once, directly, so the gauge is written without
 	// having to drive the tickers.
@@ -109,7 +115,7 @@ func TestAlertsActiveIsLabelledByGroupAndRule(t *testing.T) {
 	for _, group := range []string{"a.yaml:g1", "b.yaml:g2"} {
 		got := testutil.ToFloat64(metrics.AlertsActive.WithLabelValues(group, "SharedName", "firing"))
 		if got != 1 {
-			t.Errorf("ruler_alerts_active{rule_group=%q,state=\"firing\"} = %v, want 1", group, got)
+			t.Errorf("clickhouse_ruler_alerts_active{rule_group=%q,state=\"firing\"} = %v, want 1", group, got)
 		}
 	}
 }
@@ -122,6 +128,6 @@ func TestShutdownBeforeStartIsANoop(t *testing.T) {
 	cadence := notify.NewCadence(&recordingSender{}, time.Minute, notify.DefaultResendTolerance)
 	clock := newFakeClock(time.Unix(0, 0))
 
-	sched := New(&ruleset.Set{}, map[string]Querier{}, cadence, metrics, clock, 0, nil)
+	sched := New(&ruleset.Set{}, map[string]Querier{}, cadence, metrics, clock, 0, nil, testResend)
 	sched.Shutdown(time.Second)
 }

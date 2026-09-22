@@ -16,7 +16,7 @@ import (
 // this reachable: a query grouping by a cluster column, against a source whose
 // labels already set cluster, collapses every row onto one identity.
 func TestEvalFailsWhenTwoRowsReachOneIdentity(t *testing.T) {
-	s := New(testRule(0, 0), nil, dc("traces_dc1", "dc1"))
+	s := New(testRule(0, 0), nil, dc("traces_dc1", "dc1"), testRetention)
 
 	got, _, err := s.Eval(t0, []Sample{
 		{Labels: map[string]string{"ServiceName": "checkout", "cluster": "reported-a"}, Value: 1200},
@@ -43,7 +43,7 @@ func TestEvalFailsWhenTwoRowsReachOneIdentity(t *testing.T) {
 // does, so a duplicate that appears for one tick cannot reset or half-advance
 // anything. Nothing may be tracked from the failed evaluation.
 func TestEvalLeavesStateIntactWhenItFails(t *testing.T) {
-	s := New(testRule(time.Minute, 0), nil, dc("traces_dc1", "dc1"))
+	s := New(testRule(time.Minute, 0), nil, dc("traces_dc1", "dc1"), testRetention)
 
 	if _, _, err := s.Eval(t0, []Sample{
 		{Labels: map[string]string{"ServiceName": "checkout", "cluster": "reported-a"}, Value: 1200},
@@ -77,7 +77,7 @@ func TestEvalLeavesStateIntactWhenItFails(t *testing.T) {
 // A collision cannot be produced by chance, so the hash is replaced for this
 // test only. The real fingerprint is untouched.
 func TestEvalKeepsCollidingLabelSetsApart(t *testing.T) {
-	s := New(testRule(time.Minute, 0), nil, testSource())
+	s := New(testRule(time.Minute, 0), nil, testSource(), testRetention)
 	s.hash = func(map[string]string) uint64 { return 1 }
 
 	// checkout starts its `for` timer half a minute before payments does.
@@ -125,7 +125,7 @@ func TestEvalKeepsCollidingLabelSetsApart(t *testing.T) {
 // has to compare label sets rather than trust the fingerprint. Without that,
 // every collision would be reported as a rule the author has to fix.
 func TestEvalDoesNotMistakeACollisionForADuplicate(t *testing.T) {
-	s := New(testRule(0, 0), nil, testSource())
+	s := New(testRule(0, 0), nil, testSource(), testRetention)
 	s.hash = func(map[string]string) uint64 { return 1 }
 
 	alerts, _, err := s.Eval(t0, []Sample{sample("checkout", 1200), sample("payments", 1300)})
@@ -142,9 +142,9 @@ func TestEvalDoesNotMistakeACollisionForADuplicate(t *testing.T) {
 // diff. Fingerprint order stops being a total order once two instances share
 // one, so something has to break the tie.
 func TestEvalOrdersCollidingInstancesDeterministically(t *testing.T) {
-	forward := New(testRule(0, 0), nil, testSource())
+	forward := New(testRule(0, 0), nil, testSource(), testRetention)
 	forward.hash = func(map[string]string) uint64 { return 1 }
-	reverse := New(testRule(0, 0), nil, testSource())
+	reverse := New(testRule(0, 0), nil, testSource(), testRetention)
 	reverse.hash = func(map[string]string) uint64 { return 1 }
 
 	samples := []Sample{sample("checkout", 1200), sample("payments", 1300), sample("cart", 1400)}

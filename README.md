@@ -206,7 +206,7 @@ runs anyway.
 | `--listen` | `:9090` | address for `/metrics`, `/-/healthy`, `/-/ready` |
 | `--query-concurrency` | `8` | rule queries allowed against ClickHouse at once, across every group; `0` is unbounded |
 | `--resend-interval` | `100s` | how often a still-firing alert is re-posted |
-| `--resend-tolerance` | `4` | how many resend periods a firing alert stays valid for, so how many consecutive failed evaluations or sends it survives. `4` is Prometheus' own number. Minimum `2` |
+| `--resend-tolerance` | `4` | how many resend periods a firing alert stays valid for, so how many consecutive failed evaluations or sends it survives, and how long a resolved alert is retried for. `4` is Prometheus' own number. Minimum `2` |
 | `--shutdown-timeout` | `30s` | how long an in-flight evaluation gets to finish once shutdown starts |
 | `--log-level` | `info` | `debug`, `info`, `warn` or `error` |
 
@@ -219,28 +219,28 @@ series per rule.
 
 | Metric | Type | Labels |
 | --- | --- | --- |
-| `ruler_rule_evaluations_total` | counter | `rule_group`, `rule` |
-| `ruler_rule_evaluation_failures_total` | counter | `rule_group`, `rule` |
-| `ruler_annotation_failures_total` | counter | `rule_group`, `rule`, `annotation` |
-| `ruler_rule_evaluation_duration_seconds` | histogram | `rule_group` |
-| `ruler_rule_group_iterations_total` | counter | `rule_group` |
-| `ruler_rule_group_iterations_missed_total` | counter | `rule_group` |
-| `ruler_rule_group_last_evaluation_timestamp_seconds` | gauge | `rule_group` |
-| `ruler_rule_group_last_duration_seconds` | gauge | `rule_group` |
-| `ruler_alerts_active` | gauge | `rule_group`, `rule`, `state` |
-| `ruler_alerts_sent_total` | counter | `alertmanager` |
-| `ruler_alerts_send_failures_total` | counter | `alertmanager` |
-| `ruler_notification_latency_seconds` | histogram | none |
-| `ruler_rules_unmatched` | gauge | `rule_group` |
+| `clickhouse_ruler_rule_evaluations_total` | counter | `rule_group`, `rule` |
+| `clickhouse_ruler_rule_evaluation_failures_total` | counter | `rule_group`, `rule` |
+| `clickhouse_ruler_annotation_failures_total` | counter | `rule_group`, `rule`, `annotation` |
+| `clickhouse_ruler_rule_evaluation_duration_seconds` | histogram | `rule_group` |
+| `clickhouse_ruler_rule_group_iterations_total` | counter | `rule_group` |
+| `clickhouse_ruler_rule_group_iterations_missed_total` | counter | `rule_group` |
+| `clickhouse_ruler_rule_group_last_evaluation_timestamp_seconds` | gauge | `rule_group` |
+| `clickhouse_ruler_rule_group_last_duration_seconds` | gauge | `rule_group` |
+| `clickhouse_ruler_alerts_active` | gauge | `rule_group`, `rule`, `state` |
+| `clickhouse_ruler_alerts_sent_total` | counter | `alertmanager` |
+| `clickhouse_ruler_alerts_send_failures_total` | counter | `alertmanager` |
+| `clickhouse_ruler_notification_latency_seconds` | histogram | none |
+| `clickhouse_ruler_rules_unmatched` | gauge | `rule_group` |
 
-`ruler_annotation_failures_total` is separate from the evaluation failures on
+`clickhouse_ruler_annotation_failures_total` is separate from the evaluation failures on
 purpose: an annotation that will not render still pages, carrying the template
 error in place of the annotation, so it is the rule author's bug rather than a
 failed evaluation.
 
-Two are worth alerting on. `ruler_rule_group_iterations_missed_total` rising
+Two are worth alerting on. `clickhouse_ruler_rule_group_iterations_missed_total` rising
 means an evaluation took longer than its group interval, so alerts are silently
-late. `ruler_rules_unmatched` staying above zero means this ruler loaded rules
+late. `clickhouse_ruler_rules_unmatched` staying above zero means this ruler loaded rules
 that match none of its sources and will never evaluate them, which is expected
 during a rollout and a problem if it persists.
 
@@ -449,6 +449,8 @@ Working:
   expiry rather than inheriting Alertmanager's `resolve_timeout`. How much
   failure that expiry tolerates is `--resend-tolerance`, defaulting to what
   Prometheus gives itself
+- Resolved alerts are retried rather than sent once, so a notification that
+  fails does not leave Alertmanager showing an alert that has recovered
 - Metrics on `/metrics`, with `/-/healthy` and `/-/ready`, and structured logs
   naming the rule and source behind every failure
 - A ClickHouse and Alertmanager compose stack, with an end to end test that

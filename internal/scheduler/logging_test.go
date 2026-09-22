@@ -81,7 +81,7 @@ func TestEvalGroupLogsWhichRuleAndSourceFailed(t *testing.T) {
 
 	sched := New(oneRuleSet("Broken", source.Source{Name: "src1"}), map[string]Querier{"src1": q},
 		notify.NewCadence(&recordingSender{}, time.Minute, notify.DefaultResendTolerance),
-		NewMetrics(prometheus.NewRegistry()), newFakeClock(time.Unix(0, 0)), 0, log)
+		NewMetrics(prometheus.NewRegistry()), newFakeClock(time.Unix(0, 0)), 0, log, testResend)
 
 	sched.groups[0].Eval(context.Background(), time.Unix(0, 0))
 
@@ -101,7 +101,7 @@ func TestEvalGroupLogsWhichRuleAndSourceFailed(t *testing.T) {
 }
 
 // Result.SendError was set and then dropped, so an operator reading
-// ruler_alerts_send_failures_total had nothing saying which rule could not be
+// clickhouse_ruler_alerts_send_failures_total had nothing saying which rule could not be
 // delivered.
 func TestEvalGroupLogsASendFailure(t *testing.T) {
 	log, buf := logBuffer()
@@ -110,7 +110,7 @@ func TestEvalGroupLogsASendFailure(t *testing.T) {
 	sched := New(oneRuleSet("Undeliverable", source.Source{Name: "src1"}),
 		map[string]Querier{"src1": &fakeQuerier{samples: oneSample()}},
 		notify.NewCadence(sender, time.Minute, notify.DefaultResendTolerance),
-		NewMetrics(prometheus.NewRegistry()), newFakeClock(time.Unix(0, 0)), 0, log)
+		NewMetrics(prometheus.NewRegistry()), newFakeClock(time.Unix(0, 0)), 0, log, testResend)
 
 	sched.groups[0].Eval(context.Background(), time.Unix(0, 0))
 
@@ -146,7 +146,7 @@ func TestEvalGroupLogsOncePerRuleRegardlessOfInstanceCount(t *testing.T) {
 	sched := New(oneRuleSet("Noisy", source.Source{Name: "src1"}),
 		map[string]Querier{"src1": &fakeQuerier{samples: samples}},
 		notify.NewCadence(sender, time.Minute, notify.DefaultResendTolerance),
-		NewMetrics(prometheus.NewRegistry()), newFakeClock(time.Unix(0, 0)), 0, log)
+		NewMetrics(prometheus.NewRegistry()), newFakeClock(time.Unix(0, 0)), 0, log, testResend)
 
 	sched.groups[0].Eval(context.Background(), time.Unix(0, 0))
 
@@ -167,7 +167,7 @@ func TestShutdownLogsWhenTheTimeoutExpires(t *testing.T) {
 	clock := newFakeClock(time.Unix(0, 0))
 	sched := New(oneRuleSet("Slow", source.Source{Name: "src1"}), map[string]Querier{"src1": q},
 		notify.NewCadence(&recordingSender{}, time.Minute, notify.DefaultResendTolerance),
-		NewMetrics(prometheus.NewRegistry()), clock, 0, log)
+		NewMetrics(prometheus.NewRegistry()), clock, 0, log, testResend)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -237,7 +237,7 @@ func TestEvalGroupLogsADuplicateLabelSet(t *testing.T) {
 	metrics := NewMetrics(prometheus.NewRegistry())
 	sched := New(oneRuleSet("Collapsed", src), map[string]Querier{"src1": q},
 		notify.NewCadence(&recordingSender{}, time.Minute, notify.DefaultResendTolerance),
-		metrics, newFakeClock(time.Unix(0, 0)), 0, log)
+		metrics, newFakeClock(time.Unix(0, 0)), 0, log, testResend)
 
 	sched.groups[0].Eval(context.Background(), time.Unix(0, 0))
 
@@ -257,7 +257,7 @@ func TestEvalGroupLogsADuplicateLabelSet(t *testing.T) {
 
 	got := testutil.ToFloat64(metrics.EvaluationFailuresTotal.WithLabelValues("f.yaml:g1", "Collapsed"))
 	if got != 1 {
-		t.Errorf("ruler_rule_evaluation_failures_total = %v, want 1", got)
+		t.Errorf("clickhouse_ruler_rule_evaluation_failures_total = %v, want 1", got)
 	}
 }
 
@@ -286,7 +286,7 @@ func TestEvalGroupLogsABrokenAnnotationWithoutFailingTheSend(t *testing.T) {
 	metrics := NewMetrics(prometheus.NewRegistry())
 	sched := New(set, map[string]Querier{"src1": &fakeQuerier{samples: samples}},
 		notify.NewCadence(sender, time.Minute, notify.DefaultResendTolerance),
-		metrics, newFakeClock(time.Unix(0, 0)), 0, log)
+		metrics, newFakeClock(time.Unix(0, 0)), 0, log, testResend)
 
 	sched.groups[0].Eval(context.Background(), time.Unix(0, 0))
 
@@ -303,14 +303,14 @@ func TestEvalGroupLogsABrokenAnnotationWithoutFailingTheSend(t *testing.T) {
 	})
 
 	if got := testutil.ToFloat64(metrics.AlertsSendFailures.WithLabelValues("")); got != 0 {
-		t.Errorf("ruler_alerts_send_failures_total = %v, want 0: this is not a delivery problem", got)
+		t.Errorf("clickhouse_ruler_alerts_send_failures_total = %v, want 0: this is not a delivery problem", got)
 	}
 	// This name tracks Prometheus' own, which counts evaluations that did not
 	// happen. An evaluation that delivered alerts with one ugly annotation is
 	// not one of those, or a dashboard carried over from a Prometheus ruler
 	// reads high (spec 8.2).
 	if got := testutil.ToFloat64(metrics.EvaluationFailuresTotal.WithLabelValues("f.yaml:g1", "BrokenSummary")); got != 0 {
-		t.Errorf("ruler_rule_evaluation_failures_total = %v, want 0: the evaluation produced alerts", got)
+		t.Errorf("clickhouse_ruler_rule_evaluation_failures_total = %v, want 0: the evaluation produced alerts", got)
 	}
 
 	// It still has to be alertable, or a rule pages error strings for a month
@@ -318,7 +318,7 @@ func TestEvalGroupLogsABrokenAnnotationWithoutFailingTheSend(t *testing.T) {
 	got := testutil.ToFloat64(
 		metrics.AnnotationFailures.WithLabelValues("f.yaml:g1", "BrokenSummary", "summary"))
 	if got != 1 {
-		t.Errorf("ruler_annotation_failures_total = %v, want 1", got)
+		t.Errorf("clickhouse_ruler_annotation_failures_total = %v, want 1", got)
 	}
 	// Counted once for the rule, not once per instance (spec 8.3).
 	if got := testutil.ToFloat64(

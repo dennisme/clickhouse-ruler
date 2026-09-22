@@ -47,7 +47,7 @@ func assertAlertSet(t *testing.T, got []Alert, wants map[string]want) {
 // resolves on its own. This is the behaviour the row-per-instance model exists
 // for and that a single scalar threshold cannot express.
 func TestInstancesAdvanceIndependently(t *testing.T) {
-	s := New(testRule(5*time.Minute, 0), nil, testSource())
+	s := New(testRule(5*time.Minute, 0), nil, testSource(), testRetention)
 
 	assertAlertSet(t, evalOK(t, s, t0, []Sample{sample("checkout", 1200)}), map[string]want{
 		"checkout": {phase: PhasePending, value: 1200, activeAt: t0},
@@ -87,14 +87,22 @@ func TestInstancesAdvanceIndependently(t *testing.T) {
 		"cart": {phase: PhaseFiring, value: 1200, activeAt: cartActive, firedAt: cartFired},
 	})
 
-	// Only cart is left, and checkout is not resolved a second time.
+	// cart carries on, and checkout's resolve is asserted again while it is
+	// retained, at the time it actually resolved rather than a new one.
 	assertAlertSet(t, evalOK(t, s, t0.Add(8*time.Minute), []Sample{sample("cart", 1250)}), map[string]want{
+		"checkout": {
+			phase:      PhaseResolved,
+			value:      1300,
+			activeAt:   t0,
+			firedAt:    checkoutFired,
+			resolvedAt: cartFired,
+		},
 		"cart": {phase: PhaseFiring, value: 1250, activeAt: cartActive, firedAt: cartFired},
 	})
 }
 
 func TestReturnOrderIsSortedByFingerprint(t *testing.T) {
-	s := New(testRule(0, 0), nil, testSource())
+	s := New(testRule(0, 0), nil, testSource(), testRetention)
 
 	got := evalOK(t, s, t0, []Sample{
 		sample("checkout", 1),
@@ -125,8 +133,8 @@ func TestEvalIsDeterministicAcrossStates(t *testing.T) {
 	}
 	reversed := []Sample{samples[2], samples[1], samples[0]}
 
-	first := evalOK(t, New(testRule(0, 0), nil, testSource()), t0, samples)
-	second := evalOK(t, New(testRule(0, 0), nil, testSource()), t0, reversed)
+	first := evalOK(t, New(testRule(0, 0), nil, testSource(), testRetention), t0, samples)
+	second := evalOK(t, New(testRule(0, 0), nil, testSource(), testRetention), t0, reversed)
 
 	if len(first) != len(second) {
 		t.Fatalf("lengths differ: %d vs %d", len(first), len(second))
@@ -149,7 +157,7 @@ func TestLabelPrecedence(t *testing.T) {
 	r.Labels["tier"] = "rule"
 	r.Labels["severity"] = "warning"
 
-	s := New(r, map[string]string{"tier": "group", "region": "us-east"}, testSource())
+	s := New(r, map[string]string{"tier": "group", "region": "us-east"}, testSource(), testRetention)
 
 	got := evalOK(t, s, t0, []Sample{{
 		Labels: map[string]string{"ServiceName": "checkout", "severity": "critical"},

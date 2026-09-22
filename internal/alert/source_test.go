@@ -21,8 +21,8 @@ func TestSourcesProduceDistinctFingerprints(t *testing.T) {
 	now := time.Date(2026, 9, 20, 12, 0, 0, 0, time.UTC)
 	r := testRule(0, 0)
 
-	one := evalOK(t, New(r, nil, dc("traces_dc1", "dc1")), now, []Sample{sample("checkout", 1)})
-	two := evalOK(t, New(r, nil, dc("traces_dc2", "dc2")), now, []Sample{sample("checkout", 1)})
+	one := evalOK(t, New(r, nil, dc("traces_dc1", "dc1"), testRetention), now, []Sample{sample("checkout", 1)})
+	two := evalOK(t, New(r, nil, dc("traces_dc2", "dc2"), testRetention), now, []Sample{sample("checkout", 1)})
 
 	if len(one) != 1 || len(two) != 1 {
 		t.Fatalf("expected one alert each, got %d and %d", len(one), len(two))
@@ -47,8 +47,8 @@ func TestOneSourceResolvingLeavesTheOtherFiring(t *testing.T) {
 	now := time.Date(2026, 9, 20, 12, 0, 0, 0, time.UTC)
 	r := testRule(0, 0)
 
-	dc1 := New(r, nil, dc("traces_dc1", "dc1"))
-	dc2 := New(r, nil, dc("traces_dc2", "dc2"))
+	dc1 := New(r, nil, dc("traces_dc1", "dc1"), testRetention)
+	dc2 := New(r, nil, dc("traces_dc2", "dc2"), testRetention)
 
 	evalOK(t, dc1, now, []Sample{sample("checkout", 1)})
 	evalOK(t, dc2, now, []Sample{sample("checkout", 1)})
@@ -71,7 +71,7 @@ func TestOneSourceResolvingLeavesTheOtherFiring(t *testing.T) {
 func TestSourceLabelsBeatResultColumns(t *testing.T) {
 	now := time.Date(2026, 9, 20, 12, 0, 0, 0, time.UTC)
 
-	got := evalOK(t, New(testRule(0, 0), nil, dc("traces_dc1", "dc1")), now, []Sample{{
+	got := evalOK(t, New(testRule(0, 0), nil, dc("traces_dc1", "dc1"), testRetention), now, []Sample{{
 		Labels: map[string]string{"ServiceName": "checkout", "cluster": "lies", "source": "lies"},
 		Value:  1,
 	}})

@@ -100,6 +100,11 @@ type State struct {
 	annotations map[string]*template.Template
 	parseErrs   map[string]error
 
+	// retention is how long a resolved instance is kept so its notification can
+	// be retried. Retention has to outlive delivery, or the guarantee that a
+	// failed send is retried covers firing alerts and quietly not resolves.
+	retention time.Duration
+
 	// hash identifies an instance by its labels. It is a field so a test can
 	// force the collision that cannot be produced by chance; nothing outside
 	// this package can change it, and the real fingerprint is what New sets.
@@ -109,7 +114,12 @@ type State struct {
 // New builds the state for one rule against one source. Group labels are the
 // weakest, then the rule's own labels; the source's are applied per evaluation
 // because they outrank the query's own columns.
-func New(r rule.Rule, groupLabels map[string]string, src source.Source) *State {
+//
+// resolvedRetention is how long a resolved instance is kept and re-asserted
+// after it resolves, so a resolve whose notification failed still has attempts
+// left. The caller derives it from how long delivery can take (spec 6.5); a
+// zero or negative value keeps the old behaviour of returning a resolve once.
+func New(r rule.Rule, groupLabels map[string]string, src source.Source, resolvedRetention time.Duration) *State {
 	base := make(map[string]string, len(groupLabels)+len(r.Labels)+1)
 	for k, v := range groupLabels {
 		base[k] = v
@@ -128,12 +138,14 @@ func New(r rule.Rule, groupLabels map[string]string, src source.Source) *State {
 		parseErrs:   parseErrs,
 		active:      map[uint64][]*instance{},
 		hash:        fingerprint,
+		retention:   resolvedRetention,
 	}
 }
 
-// Eval advances every instance by one evaluation and returns the pending and
-// firing instances along with any that resolved on this evaluation. A
-// resolved instance is returned once and then forgotten.
+// Eval advances every instance by one evaluation and returns every instance it
+// still tracks: pending, firing, and resolved ones inside their retention
+// window. A resolve is returned on every evaluation of that window, so a
+// notification that failed has further attempts (spec 6.5).
 //
 // An error means the evaluation did not happen: nothing is tracked, no timer
 // moves, and the caller has the same state it had before. That is deliberately
@@ -235,27 +247,47 @@ func (s *State) resolveLabels(samples []Sample) ([]labelled, error) {
 // track finds the instance this row belongs to, creating it if the row is new.
 // Labels are compared rather than trusted to the fingerprint, so two label
 // sets that hash alike get an instance each.
+//
+// A label set that matches a resolved instance is a condition that came back,
+// not the old alert continuing. It gets a new instance, so its `for` timer runs
+// again from now and the recovery that was already reported stays reported.
 func (s *State) track(l labelled, now time.Time) *instance {
-	for _, inst := range s.active[l.fp] {
-		if sameLabels(inst.Labels, l.labels) {
+	insts := s.active[l.fp]
+	for i, inst := range insts {
+		if !sameLabels(inst.Labels, l.labels) {
+			continue
+		}
+		if inst.Phase != PhaseResolved {
 			return inst
 		}
+		fresh := newInstance(l, now)
+		insts[i] = fresh
+		return fresh
 	}
 
-	inst := &instance{Alert: Alert{
+	inst := newInstance(l, now)
+	s.active[l.fp] = append(s.active[l.fp], inst)
+	return inst
+}
+
+func newInstance(l labelled, now time.Time) *instance {
+	return &instance{Alert: Alert{
 		Fingerprint: l.fp,
 		Labels:      l.labels,
 		Phase:       PhasePending,
 		ActiveAt:    now,
 	}}
-	s.active[l.fp] = append(s.active[l.fp], inst)
-	return inst
 }
 
 // expire handles instances the latest evaluation did not return.
+//
+// A resolved instance is kept for the retention window rather than deleted on
+// the way out, so it is returned on every evaluation in that window and the
+// caller gets to try delivering the resolve again. Deleting it in the same step
+// that first reported it meant a single failed notification lost the resolve
+// outright: no retry, and Alertmanager holding a firing alert for something
+// that had recovered.
 func (s *State) expire(now time.Time, present map[*instance]bool) []Alert {
-	var resolved []Alert
-
 	for fp, insts := range s.active {
 		kept := insts[:0]
 		for _, inst := range insts {
@@ -264,8 +296,16 @@ func (s *State) expire(now time.Time, present map[*instance]bool) []Alert {
 				continue
 			}
 			// A pending instance was never notified, so it leaves without a
-			// resolve for something nobody was told about.
+			// resolve for something nobody was told about, and with nothing to
+			// retain because there is nothing to retry.
 			if inst.Phase == PhasePending {
+				continue
+			}
+			if inst.Phase == PhaseResolved {
+				if now.Sub(inst.ResolvedAt) > s.retention {
+					continue
+				}
+				kept = append(kept, inst)
 				continue
 			}
 			if now.Sub(inst.lastSeen) < s.rule.KeepFiringFor {
@@ -275,7 +315,7 @@ func (s *State) expire(now time.Time, present map[*instance]bool) []Alert {
 
 			inst.Phase = PhaseResolved
 			inst.ResolvedAt = now
-			resolved = append(resolved, inst.Alert)
+			kept = append(kept, inst)
 		}
 
 		if len(kept) == 0 {
@@ -285,7 +325,17 @@ func (s *State) expire(now time.Time, present map[*instance]bool) []Alert {
 		s.active[fp] = kept
 	}
 
-	return s.snapshot(resolved)
+	return s.snapshot()
+}
+
+// tracked is how many instances the state holds, resolved ones included. Used
+// by tests to prove the retention window actually frees them.
+func (s *State) tracked() int {
+	n := 0
+	for _, insts := range s.active {
+		n += len(insts)
+	}
+	return n
 }
 
 // labelsFor builds an instance's final label set. A result column overrides a
@@ -315,26 +365,25 @@ func (s *State) labelsFor(smpl Sample) map[string]string {
 	return labels
 }
 
-// snapshot returns the still-tracked instances together with the ones that
-// resolved, in fingerprint order so a caller sees the same sequence for the
-// same state.
+// snapshot returns every tracked instance, pending, firing, and resolved ones
+// still inside their retention window, in fingerprint order so a caller sees
+// the same sequence for the same state.
 //
 // Two instances sharing a fingerprint make that order incomplete, so the label
 // set breaks the tie. Without it the order of a colliding pair would follow
 // Go's randomized map iteration, and a batch whose order changes from tick to
 // tick is needlessly hard to read in a log or a diff.
-func (s *State) snapshot(resolved []Alert) []Alert {
-	if len(s.active) == 0 && len(resolved) == 0 {
+func (s *State) snapshot() []Alert {
+	if len(s.active) == 0 {
 		return nil
 	}
 
-	out := make([]Alert, 0, len(s.active)+len(resolved))
+	out := make([]Alert, 0, len(s.active))
 	for _, insts := range s.active {
 		for _, inst := range insts {
 			out = append(out, inst.Alert)
 		}
 	}
-	out = append(out, resolved...)
 
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].Fingerprint != out[j].Fingerprint {

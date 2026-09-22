@@ -35,7 +35,7 @@ func TestAlertsSentTotalCountsAlertsNotBatches(t *testing.T) {
 
 	got := testutil.ToFloat64(metrics.AlertsSentTotal.WithLabelValues(am))
 	if got != 3 {
-		t.Errorf("ruler_alerts_sent_total = %v, want 3", got)
+		t.Errorf("clickhouse_ruler_alerts_sent_total = %v, want 3", got)
 	}
 }
 
@@ -51,9 +51,9 @@ func TestAlertsSentTotalIgnoresAFailedBatch(t *testing.T) {
 	}
 
 	if got := testutil.ToFloat64(metrics.AlertsSentTotal.WithLabelValues(am)); got != 0 {
-		t.Errorf("ruler_alerts_sent_total = %v, want 0", got)
+		t.Errorf("clickhouse_ruler_alerts_sent_total = %v, want 0", got)
 	}
 	if got := testutil.ToFloat64(metrics.AlertsSendFailures.WithLabelValues(am)); got != 1 {
-		t.Errorf("ruler_alerts_send_failures_total = %v, want 1", got)
+		t.Errorf("clickhouse_ruler_alerts_send_failures_total = %v, want 1", got)
 	}
 }

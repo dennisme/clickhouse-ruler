@@ -776,6 +776,33 @@ Templates are compiled once per rule rather than per evaluation, because they
 are fixed for the rule's lifetime and a rule returning a thousand rows would
 otherwise re-parse each annotation a thousand times every tick.
 
+**A resolve is retried, because it is the one notification with nothing behind
+it.** A firing alert that fails to send is re-sent on the next evaluation, and
+on the one after, for as long as the condition holds. A resolve had exactly one
+attempt: the state machine reported it and forgot it in the same step, so a
+single failed notification lost it, leaving Alertmanager holding a firing alert
+for something that had recovered until its `endsAt` ran out. The
+notification-failure guarantee above covered firing alerts and quietly not
+resolves.
+
+So a resolved instance is kept and re-asserted for a retention window. Its
+resolve time does not move while it is retained: repeating it says the same
+thing again rather than resolving twice, and Alertmanager deduplicates identical
+alerts. A condition that comes back inside the window is a new instance with its
+own `for` timer, not the old one continuing, because the recovery already
+happened and was already reported.
+
+**The window is derived, not chosen.** It is the resend tolerance times
+whichever of the resend interval and the group interval is longer, which is the
+same span a firing alert's validity is stamped with, because both answer how
+long delivery can still be in progress. Prometheus hard codes 15 minutes for
+this; deriving it means an operator who widens either resend setting cannot
+silently re-open the bug. Six and a half minutes at the defaults.
+
+This is memory only, as it is in Prometheus. Retention buys surviving a failed
+send, not surviving a restart: a ruler that stops mid-window forgets the resolve
+either way, and that is 12.2's problem rather than this one's.
+
 Alertmanager owns grouping, silences, inhibition, and routing. The ruler does
 not.
 
@@ -1131,7 +1158,7 @@ fire on the same second and stampede ClickHouse.
 
 **An overrunning evaluation must not queue.** When an evaluation takes longer
 than the interval, the boundaries that passed while it ran are skipped and
-counted in `ruler_rule_group_iterations_missed_total` (8.2), not run late. A
+counted in `clickhouse_ruler_rule_group_iterations_missed_total` (8.2), not run late. A
 backlog is how a ruler silently falls behind, and the counter is what makes
 falling behind visible instead.
 
@@ -1612,7 +1639,21 @@ the security model.
 ### 8.2 Metric names
 
 Names track the Prometheus ruler's own metrics wherever an equivalent exists,
-so existing dashboards and existing operator knowledge carry over.
+so existing dashboards and existing operator knowledge carry over. That is
+about the suffix: `_rule_group_iterations_missed_total` means here what it
+means there.
+
+The prefix is deliberately ours. Every name is namespaced
+`clickhouse_ruler_`, not `ruler_`, because `ruler` is a component name rather
+than a product name and the ecosystem already uses it: Mimir and Cortex expose
+`cortex_ruler_*`, Loki exposes `loki_ruler_*`. A series called
+`ruler_alerts_sent_total` in a Prometheus scraping more than one thing does not
+say whose it is. The `job` label answers that while you are looking at the
+series, and stops answering it the moment a name is pasted into an alert
+expression, a recording rule, or a screenshot in an incident channel, which is
+where a metric name has to speak for itself. Carrying a Prometheus dashboard
+over already means rewriting the prefix, so this costs nothing that was free
+before.
 
 Go runtime and process collectors come from `client_golang` defaults.
 
@@ -1620,20 +1661,20 @@ Evaluation:
 
 | Metric | Type | Labels |
 | --- | --- | --- |
-| `ruler_rule_evaluations_total` | counter | `rule_group`, `rule` |
-| `ruler_rule_evaluation_failures_total` | counter | `rule_group`, `rule` |
-| `ruler_annotation_failures_total` | counter | `rule_group`, `rule`, `annotation` |
-| `ruler_rule_evaluation_duration_seconds` | histogram | `rule_group` |
-| `ruler_rule_group_iterations_total` | counter | `rule_group` |
-| `ruler_rule_group_iterations_missed_total` | counter | `rule_group` |
-| `ruler_rule_group_last_evaluation_timestamp_seconds` | gauge | `rule_group` |
-| `ruler_rule_group_last_duration_seconds` | gauge | `rule_group` |
+| `clickhouse_ruler_rule_evaluations_total` | counter | `rule_group`, `rule` |
+| `clickhouse_ruler_rule_evaluation_failures_total` | counter | `rule_group`, `rule` |
+| `clickhouse_ruler_annotation_failures_total` | counter | `rule_group`, `rule`, `annotation` |
+| `clickhouse_ruler_rule_evaluation_duration_seconds` | histogram | `rule_group` |
+| `clickhouse_ruler_rule_group_iterations_total` | counter | `rule_group` |
+| `clickhouse_ruler_rule_group_iterations_missed_total` | counter | `rule_group` |
+| `clickhouse_ruler_rule_group_last_evaluation_timestamp_seconds` | gauge | `rule_group` |
+| `clickhouse_ruler_rule_group_last_duration_seconds` | gauge | `rule_group` |
 
 A missed iteration means the evaluation took longer than the group interval.
 It is the single most important operational signal here, because alerts are
 then silently late.
 
-`ruler_rule_evaluation_failures_total` counts evaluations that did not happen,
+`clickhouse_ruler_rule_evaluation_failures_total` counts evaluations that did not happen,
 which is what the Prometheus metric it is named after counts. An annotation
 that would not render is not one of those: the evaluation produced alerts and
 they were delivered, carrying the template error where the annotation should be
@@ -1648,19 +1689,19 @@ Alert state and delivery:
 
 | Metric | Type | Labels |
 | --- | --- | --- |
-| `ruler_alerts_active` | gauge | `rule_group`, `rule`, `state` (pending, firing) |
-| `ruler_alerts_sent_total` | counter | `alertmanager` |
-| `ruler_alerts_send_failures_total` | counter | `alertmanager` |
-| `ruler_notification_latency_seconds` | histogram | none |
+| `clickhouse_ruler_alerts_active` | gauge | `rule_group`, `rule`, `state` (pending, firing) |
+| `clickhouse_ruler_alerts_sent_total` | counter | `alertmanager` |
+| `clickhouse_ruler_alerts_send_failures_total` | counter | `alertmanager` |
+| `clickhouse_ruler_notification_latency_seconds` | histogram | none |
 
-`ruler_alerts_active` carries the group because an alert name may repeat
+`clickhouse_ruler_alerts_active` carries the group because an alert name may repeat
 across groups (7.6), and without it two same-named rules would report into one
 series. It remains a count per rule, never a series per instance (8.3).
 
-`ruler_alerts_sent_total` counts alerts, not batches, so it reads the same way
+`clickhouse_ruler_alerts_sent_total` counts alerts, not batches, so it reads the same way
 as the Prometheus metric it is named after. The latency histogram already
 carries a count per send, so there is no separate batch counter.
-`ruler_alerts_send_failures_total` counts a failed batch once however many
+`clickhouse_ruler_alerts_send_failures_total` counts a failed batch once however many
 alerts it held, because it delivered none of them.
 
 ClickHouse query cost. Nothing else in this space exposes these, and they are
@@ -1668,10 +1709,10 @@ what make the guard rails in 6.7 observable rather than theoretical:
 
 | Metric | Type | Labels |
 | --- | --- | --- |
-| `ruler_query_read_rows_total` | counter | `rule`, `team` |
-| `ruler_query_read_bytes_total` | counter | `rule`, `team` |
-| `ruler_query_memory_usage_bytes` | histogram | `rule` |
-| `ruler_query_duration_seconds` | histogram | `rule` |
+| `clickhouse_ruler_query_read_rows_total` | counter | `rule`, `team` |
+| `clickhouse_ruler_query_read_bytes_total` | counter | `rule`, `team` |
+| `clickhouse_ruler_query_memory_usage_bytes` | histogram | `rule` |
+| `clickhouse_ruler_query_duration_seconds` | histogram | `rule` |
 
 Source these from the ClickHouse Go driver's progress callbacks rather than
 from `system.query_log`. The driver reports rows and bytes read during the
@@ -1685,12 +1726,12 @@ Validation and config, used by watch mode:
 
 | Metric | Type | Labels |
 | --- | --- | --- |
-| `ruler_problem` | gauge | `rule`, `check`, `severity` |
-| `ruler_rules_unmatched` | gauge | `rule_group` |
-| `ruler_config_last_reload_successful` | gauge | none |
-| `ruler_config_last_reload_timestamp_seconds` | gauge | none |
+| `clickhouse_ruler_problem` | gauge | `rule`, `check`, `severity` |
+| `clickhouse_ruler_rules_unmatched` | gauge | `rule_group` |
+| `clickhouse_ruler_config_last_reload_successful` | gauge | none |
+| `clickhouse_ruler_config_last_reload_timestamp_seconds` | gauge | none |
 
-`ruler_problem` is the `pint` analog. `ruler_rules_unmatched` counts rules this
+`clickhouse_ruler_problem` is the `pint` analog. `clickhouse_ruler_rules_unmatched` counts rules this
 ruler loaded that match no source it holds, so it will never evaluate them
 (6.10). Expected to be non-zero on a per-data-centre ruler reading a shared
 repository, and expected to return to zero after a cluster rollout finishes.
@@ -1698,7 +1739,7 @@ Alerting on it staying raised is how the soft failure in 6.10 stops being
 ignored: the check warns at authoring time, this catches the case where nobody
 read the warning.
 
-Of these four, only `ruler_rules_unmatched` exists. The other three belong to
+Of these four, only `clickhouse_ruler_rules_unmatched` exists. The other three belong to
 `ruler watch`, and so does the query cost table above, which needs a driver
 progress callback inside `internal/query`.
 
@@ -1708,7 +1749,7 @@ Label metrics by rule and group only. **Never by alert instance.**
 
 A rule returning 10,000 rows produces 10,000 alert instances and must still
 produce exactly one metric series per rule. Getting this wrong turns the ruler
-into the cardinality problem it exists to avoid. The `ruler_alerts_active`
+into the cardinality problem it exists to avoid. The `clickhouse_ruler_alerts_active`
 gauge is a count, not a series per instance.
 
 ### 8.4 Logging
@@ -1867,7 +1908,7 @@ Borrowed from `pint`:
   the pull request, and comments inline on the diff.
 - `ruler` runs the eval loop and sends to Alertmanager.
 - `ruler watch` re-validates live rules continuously and exports a
-  `ruler_problem` gauge. Catches rules that *became* broken after a schema
+  `clickhouse_ruler_problem` gauge. Catches rules that *became* broken after a schema
   change, which CI cannot. Alert on your alerts.
 
 Built so far: rule and source parsing with tier 0 checks, the alert state
@@ -1998,13 +2039,23 @@ instances must stay distinct per source. That is a fingerprint question
   and a rule gets the strictest setting that applies to it. The merge is a
   maximum, so no precedence rule exists and no scope can loosen another.
   See 7.7.
+- **A resolve is retried for a derived window, in memory.** A resolved instance
+  is kept and re-asserted for the resend tolerance times the period it is
+  re-sent on, so a failed resolve has further attempts instead of one. Derived
+  rather than copied from Prometheus' 15 minutes, so widening a resend setting
+  widens the window with it. No persistence: surviving a restart is a separate
+  question. See 6.5.
 - **Annotations are rendered at evaluation time and stored on the alert.** A
   resolved alert then says what it said when it fired, a broken template is an
   evaluation problem rather than a delivery one, and one unrenderable annotation
   cannot block a batch. See 6.5.
-- **`ruler_rule_evaluation_failures_total` counts evaluations that did not
+- **Metrics are namespaced `clickhouse_ruler_`, never bare `ruler_`.** `ruler`
+  is a component name that Mimir, Cortex and Loki also expose, so the bare
+  prefix does not say which ruler produced the series once it leaves the
+  browser it was read in. See 8.2.
+- **`clickhouse_ruler_rule_evaluation_failures_total` counts evaluations that did not
   happen, and nothing else.** A degraded evaluation that still delivered its
-  alerts is `ruler_annotation_failures_total`, a separate counter, because this
+  alerts is `clickhouse_ruler_annotation_failures_total`, a separate counter, because this
   name tracks Prometheus' own and a dashboard carried over from a Prometheus
   ruler has to keep reading true. See 8.2.
 - **A broken annotation template never stops a page.** Each annotation renders
@@ -2031,10 +2082,10 @@ instances must stay distinct per source. That is a fingerprint question
   Re-asserting from a read-only snapshot of `alert.State` was the alternative,
   and it is not here: it means claiming an alert is still true when the ruler
   cannot check. See 6.5.
-- **`ruler_alerts_sent_total` counts alerts, and there is no batch counter.**
+- **`clickhouse_ruler_alerts_sent_total` counts alerts, and there is no batch counter.**
   The name tracks a Prometheus metric that counts alerts, so counting batches
   read wrong on any dashboard carried over. "How much traffic is Alertmanager
-  taking" is a real question, but `ruler_notification_latency_seconds` already
+  taking" is a real question, but `clickhouse_ruler_notification_latency_seconds` already
   has an observation count per send, so a second counter would be a third way
   to ask something nothing is asking yet. See 8.2.
 
@@ -2076,15 +2127,7 @@ instances must stay distinct per source. That is a fingerprint question
    needs per-source capacity that nothing collects yet. See 6.11 for the
    current behaviour and why it was left here.
 
-8. **A resolved alert is forgotten before it is known to have been sent.**
-   `State.expire` returns a resolved instance once and deletes it in the same
-   step, so if that notification fails the resolve is gone: no retry, and
-   Alertmanager holds the alert firing until `resolve_timeout` expires it.
-   Prometheus keeps resolved alerts in memory for a further 15 minutes for
-   exactly this reason, and keeps resending them. Retention has to outlive
-   delivery, or the notification-failure guarantee in 6.5 covers firing
-   alerts but quietly not resolves.
-9. **Nothing checks that two rules cannot produce the same alert.** 7.6
+8. **Nothing checks that two rules cannot produce the same alert.** 7.6
     scopes `rule/name` uniqueness to the group, on the reasoning that group
     labels and `source` already separate two same-named rules in the
     fingerprint. That reasoning is an assumption about how the files happen
