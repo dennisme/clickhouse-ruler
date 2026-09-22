@@ -1438,6 +1438,56 @@ is too large to chase. Cost of this decision: there is no meaningful fully
 offline mode. That is acceptable, because anyone running this tool already has
 a ClickHouse connection by definition.
 
+**There is no upstream package for this, and that is deliberate on their
+side.** Neither official Go driver carries a parser: `clickhouse-go` and
+`ch-go` speak the protocol and nothing more. Asked directly to extract the
+parser as a standalone library with Go bindings, the way `pg_query_go` wraps
+Postgres, ClickHouse declined: "ClickHouse uses an in-memory AST
+representation, but it's just a C++ data structure and it's hard to use in
+foreign code", and the recommendation was `EXPLAIN AST`, `EXPLAIN SYNTAX`,
+`EXPLAIN QUERY TREE` and `clickhouse format` instead. That is this section,
+arrived at from the other direction.
+
+The same answer names the limit we live with: `EXPLAIN AST` "prints the tree
+in some format. However, it's impossible to convert it back to the query."
+Fine here, because the checks ask questions of the tree and never rebuild SQL
+from it. It is also why 7.4's replay builds its own statement rather than
+editing the author's.
+
+**The alternative is a second implementation of the dialect, and it is a
+replacement rather than a complement.** `AfterShip/clickhouse-sql-parser` is
+MIT, actively maintained, and parses ClickHouse SQL to a typed Go AST with
+round-trip formatting and source spans. Adopting it would buy a genuinely
+offline mode and findings that point at a column inside the rule rather than
+at the rule's first line.
+
+What it costs is the thing this section is about. Our parse answers what *this
+cluster* thinks the query is; a library answers what the library thinks. When
+the two disagree only the first one matters, because the first one is what
+runs the query, and the disagreements arrive silently as the dialect grows.
+Users in that discussion report its syntax compatibility as limited, which is
+the same finding from the other end.
+
+**The risk we take instead is version coupling.** `EXPLAIN AST` output has no
+stability guarantee, and the reader in `internal/query/ast.go` depends on its
+indentation and node names.
+
+What holds that down is the integration tests, which run every check through a
+live `EXPLAIN AST` at the version pinned in `compose.yaml` and assert on the
+answer, so a format change fails the build rather than quietly reporting
+nothing. The captured fixtures do not protect against it and are not there for
+that: a stale capture keeps parsing perfectly long after the server has moved
+on. They exist so the reader can be tested without a container, and they are
+captured rather than hand-written so that what they describe was true of a
+real server once.
+
+If the coupling ever becomes a real cost, the parser above is the fallback,
+and it is also what an offline mode would be built on.
+
+Sources: [ClickHouse discussion 60267, on a standalone SQL parser
+library](https://github.com/ClickHouse/ClickHouse/discussions/60267),
+[AfterShip/clickhouse-sql-parser](https://github.com/AfterShip/clickhouse-sql-parser).
+
 This also rules out the obvious shortcut of matching keywords against the
 query text. Searching for `DROP` or `INSERT` in a string flags a column named
 `dropped_spans` and a literal `'INSERT failed'`, and it misses the same words
@@ -2369,6 +2419,14 @@ instances must stay distinct per source. That is a fingerprint question
   cannot act if they are not, and treats the denial as the pass. Constraints
   are still read from `system.settings`, which does expose the effective
   `min`, `max` and `readonly`. See 6.7.2.
+- **No upstream package parses ClickHouse SQL in Go, and upstream declined to
+  ship one.** The official drivers carry no parser, and the request to expose
+  ClickHouse's own was answered with "use EXPLAIN". The alternative,
+  `AfterShip/clickhouse-sql-parser`, is a second implementation of the dialect
+  that answers what a library thinks the query is rather than what the cluster
+  thinks, and only the second one runs it. The cost we take instead is
+  depending on an output format with no stability guarantee, held down by
+  fixtures captured from a real server. See 7.2.
 - **Tier 1 reads the parsed query, not its text.** `EXPLAIN AST` returns the
   tree ClickHouse itself built, so a table function is found by sitting under
   a `TableExpression` rather than by matching a name, and a nested one inside
@@ -2500,3 +2558,6 @@ instances must stay distinct per source. That is a fingerprint question
 - [grafana-operator alert rule group CRD](https://grafana.github.io/grafana-operator/docs/examples/alertrulegroup/full-notification-configuration/)
 - [Cloudflare pint](https://github.com/cloudflare/pint)
 - [burningalchemist/sql_exporter](https://github.com/burningalchemist/sql_exporter)
+- [ClickHouse discussion 60267, on exposing the SQL parser as a library](https://github.com/ClickHouse/ClickHouse/discussions/60267)
+- [AfterShip/clickhouse-sql-parser](https://github.com/AfterShip/clickhouse-sql-parser)
+- [ClickHouse EXPLAIN reference](https://clickhouse.com/docs/sql-reference/statements/explain)
