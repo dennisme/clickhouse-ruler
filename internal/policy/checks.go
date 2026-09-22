@@ -1,6 +1,10 @@
 package policy
 
-import "github.com/dennisme/clickhouse-ruler/internal/lint"
+import (
+	"sort"
+
+	"github.com/dennisme/clickhouse-ruler/internal/lint"
+)
 
 // Problems this package reports about a policy file itself.
 const (
@@ -23,7 +27,26 @@ const (
 	// single data centre's sources will legitimately match nothing for most of
 	// a shared repository (spec 6.10, 10.2).
 	CheckSourceMatch = "rule/source-match"
+
+	// CheckSourcePrivileges is a check on a source's ClickHouse user rather
+	// than on any rule, and its severity governs the report and never the
+	// guarantee: the grants are what stop a query, so a cluster where this is
+	// off is exactly as safe as one where it passes. What changes is whether
+	// anybody is told (spec 6.7.1, 7.6).
+	CheckSourcePrivileges = "source/privileges"
 )
+
+// privilegeAssertions is the default requirement: the whole contract.
+//
+// The names are query.Assertions(), repeated here because that package cannot
+// be imported from this one without a cycle. A test in the query package
+// fails if the two lists ever disagree.
+var privilegeAssertions = []string{
+	"constraints",
+	"readonly",
+	"sources-revoked",
+	"table-readable",
+}
 
 // fixed lists the checks whose severity nobody may change. A rule failing one
 // of these cannot do its job: it will not parse, has no identity, has nothing
@@ -73,8 +96,18 @@ var defaults = map[string]Setting{
 	// author (spec 7.6).
 	CheckAnnotationsTemplate: {Severity: lint.SeverityWarning},
 	CheckSourceMatch:         {Severity: lint.SeverityWarning},
-	CheckRuleFor:             {Severity: lint.SeverityWarning},
-	CheckRuleWindow:          {Severity: lint.SeverityWarning},
+
+	// A warning by default because a ruler pointed at an existing cluster
+	// fails this on its first run, and a check that blocks the first run gets
+	// switched off rather than fixed. The finding is about the operator's own
+	// file, so the person who sees it is the person who can act on it and
+	// nobody is waiting behind them (spec 7.6).
+	CheckSourcePrivileges: {
+		Severity: lint.SeverityWarning,
+		Keys:     privilegeAssertions,
+	},
+	CheckRuleFor:    {Severity: lint.SeverityWarning},
+	CheckRuleWindow: {Severity: lint.SeverityWarning},
 }
 
 // Fixed reports whether a check's severity is not configurable.
@@ -84,6 +117,18 @@ func Fixed(check string) bool { return fixed[check] }
 func Configurable(check string) bool {
 	_, ok := defaults[check]
 	return ok
+}
+
+// Names lists every configurable check, sorted, so `ruler check --explain`
+// can report a rule's resolved policy in full rather than only the checks
+// some file happened to mention.
+func Names() []string {
+	out := make([]string, 0, len(defaults))
+	for name := range defaults {
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // Defaults returns the shipped policy, used when no file configures anything.

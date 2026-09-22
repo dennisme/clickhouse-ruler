@@ -97,3 +97,41 @@ func TestMergeWithNoScopesGivesDefaults(t *testing.T) {
 		t.Errorf("severity = %v, want the default warning", s)
 	}
 }
+
+// The shipped defaults are what a check falls back to when nothing configures
+// it, not a floor every scope is raised to. Treating them as a floor made
+// `severity: off` unreachable: the default warning always won, so the one
+// setting that means "nobody is asked" could be written and never took
+// effect (spec 7.6).
+func TestMergeLetsAnOperatorTurnACheckOff(t *testing.T) {
+	got := Merge(scope("ruler.yaml", lint.SeverityOff)).For(CheckLabelsRequired)
+
+	if got.Severity != lint.SeverityOff {
+		t.Errorf("severity = %v, want off", got.Severity)
+	}
+}
+
+// Turning one check off leaves every other check at its default.
+func TestMergeLeavesUnconfiguredChecksAtTheirDefaults(t *testing.T) {
+	got := Merge(scope("ruler.yaml", lint.SeverityOff))
+
+	if s := got.For(CheckAnnotationsRunbook).Severity; s != lint.SeverityWarning {
+		t.Errorf("annotations/runbook severity = %v, want the default warning", s)
+	}
+}
+
+// A scope may add keys and may not drop the shipped ones, so a check turned
+// up by one scope still requires everything the defaults asked for.
+func TestMergeKeepsDefaultKeys(t *testing.T) {
+	got := Merge(scope("ruler.yaml", lint.SeverityError, "tier")).For(CheckLabelsRequired)
+
+	want := []string{"severity", "team", "tier"}
+	if len(got.Keys) != len(want) {
+		t.Fatalf("keys = %v, want %v", got.Keys, want)
+	}
+	for i, k := range want {
+		if got.Keys[i] != k {
+			t.Fatalf("keys = %v, want %v", got.Keys, want)
+		}
+	}
+}

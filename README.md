@@ -179,13 +179,37 @@ the comparison below scores no on it regardless of how its rules are stored.
 This is modelled on Cloudflare's `pint`, with one difference: `pint` can only
 advise, because Cloudflare does not own Prometheus. We do, so we can enforce.
 
-**Strictness is the operator's call.** A rule that omits a runbook still runs,
-so by default that is a warning, and a warning is the contributor's to act on.
-Raising it to an error means a repo owner has to be involved to unblock
-someone, which is worth reserving for cases that deserve it. This is modelled
-on Cloudflare's `pint`, with one difference:
-`pint` can only advise, because Cloudflare does not own Prometheus. We do, so
-we can enforce.
+**Strictness is the operator's call.** A missing runbook does not stop a rule
+from evaluating correctly, so by default it is a warning, and a warning is the
+contributor's to act on. Raising it to an error means a repo owner has to be
+involved to unblock someone, which is worth reserving for cases that deserve
+it.
+
+**Half of this is the database's job, and the split is deliberate.** Which
+tables and rows a rule can read, whether it can reach data through `remote()`
+or `url()`, whether it can write, and whether it can raise the limits the
+ruler sends are all enforced by the ClickHouse user the source connects as.
+No check makes them true, and none is trusted to: the checks that refuse a
+table function or a foreign table are CI failing fast on a mistake, not the
+thing standing between one team and another team's data.
+
+That leaves a gap worth closing, because the contract is invisible when it is
+not met. A user with too few grants fails loudly on every evaluation. A user
+with too many fails silently: every rule evaluates perfectly, and nobody finds
+out until someone writes the query that reads around the row policies. So
+`source/privileges` checks the user itself, once per source, at check time and
+at startup. It probes the queries that are supposed to be refused, reads the
+settings constraints out of `system.settings`, and confirms the one grant that
+has to be there. `deploy/clickhouse/init/02-ruler-user.sql` is the reference
+user, and the integration tests connect as it.
+
+**This one check is not an instance of the paragraph above it.** It takes a
+severity like any other, and that severity decides whether anybody is told,
+never whether the guarantee holds: the grants are what stop a query, so a
+cluster where this check is off is exactly as safe as one where it passes. It
+is a warning by default for a different reason than a missing runbook is. A
+ruler pointed at an existing cluster fails it on the first run, and a check
+that blocks the first run gets switched off rather than fixed.
 
 ## Running it
 
@@ -195,7 +219,13 @@ ruler run --rules ./rules --sources ./rules/sources.yaml \
 ```
 
 An error-severity finding refuses to start. A warning is printed and the ruler
-runs anyway.
+runs anyway. A source failing the user contract at error severity is refused
+on its own instead: its rules stop evaluating and every other source carries
+on.
+
+`ruler check` stays offline unless it is asked not to. `--online` runs the
+checks that need a connection, connecting as each source's own user, because
+that user is what is being checked.
 
 | Flag | Default | What it does |
 | --- | --- | --- |
@@ -430,6 +460,11 @@ Working:
   per source. `--explain` names the file that set each one
 - Rule file parsing, with line numbers on every finding and strict unknown
   field rejection
+- The ClickHouse user contract: `source/privileges` checks each source's user
+  for revoked table-function privileges, `readonly = 2`, a constraint behind
+  every limit the ruler sends, and the grant on its own table. Probed rather
+  than read out of `SHOW GRANTS`, which reports role membership instead of
+  what the roles contain
 - Nine offline checks: seven on a rule file, plus the two needing the sources
   file (which sources the labels match, and whether the query sets a protected
   label)
@@ -458,9 +493,9 @@ Working:
 
 Not built yet:
 
-- No checks that read the database. Every check today reads the rule file, so
-  a query that references a dropped column, scans a terabyte, or returns
-  nothing at all still passes. Spec 7.3 tiers 1 and 2.
+- No checks that read the query. `source/privileges` connects, but nothing
+  inspects the SQL: a rule referencing a dropped column, scanning a terabyte,
+  or returning nothing at all still passes. Spec 7.3 tiers 1 and 2.
 - No `ruler watch`, so rules are not reloaded without a restart.
 - No ClickHouse query cost metrics. Rows and bytes read per rule need a driver
   progress callback. Spec 8.2.
@@ -484,6 +519,7 @@ its own to list every recipe.
 
 ```bash
 go run ./cmd/ruler check --sources rules/sources.yaml rules/
+go run ./cmd/ruler check --online --sources rules/sources.yaml rules/
 just init               # mise tool versions and pre-commit hooks
 just check              # lint, unit tests with -race, markdownlint
 just test               # unit tests with -race, no container needed

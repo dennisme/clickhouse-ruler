@@ -91,3 +91,44 @@ func TestDefaultsAreWarnings(t *testing.T) {
 		t.Errorf("rule/expr severity = %v, want error, it is not configurable", got)
 	}
 }
+
+// The contract in spec 6.7.2 is configurable the same way every other check
+// with a list is: a severity and a list of what it requires. An operator on a
+// managed cluster that will not expose settings profiles drops the one
+// assertion they cannot satisfy, rather than turning the whole check off and
+// losing the tenancy half with it (spec 7.6).
+func TestSourcePrivilegesDefaults(t *testing.T) {
+	got := Defaults().For(CheckSourcePrivileges)
+
+	if got.Severity != lint.SeverityWarning {
+		t.Errorf("severity = %v, want warning", got.Severity)
+	}
+	if len(got.Keys) != 4 {
+		t.Errorf("keys = %v, want every assertion required by default", got.Keys)
+	}
+	if !Configurable(CheckSourcePrivileges) {
+		t.Error("source/privileges must be configurable")
+	}
+	if Fixed(CheckSourcePrivileges) {
+		t.Error("source/privileges must not be a correctness check")
+	}
+}
+
+// Severity takes the maximum and the assertion list is unioned, so a source
+// cannot drop an assertion the instance policy requires.
+func TestSourcePrivilegesMergeIsStrictest(t *testing.T) {
+	instance := &Policy{Checks: map[string]Setting{
+		CheckSourcePrivileges: {Severity: lint.SeverityError, Keys: []string{"sources-revoked"}},
+	}}
+	source := &Policy{Checks: map[string]Setting{
+		CheckSourcePrivileges: {Severity: lint.SeverityOff, Keys: []string{"readonly"}},
+	}}
+
+	got := Merge(instance, source).For(CheckSourcePrivileges)
+	if got.Severity != lint.SeverityError {
+		t.Errorf("severity = %v, want error: a source cannot soften the instance policy", got.Severity)
+	}
+	if len(got.Keys) != 4 {
+		t.Errorf("keys = %v, want the default four unioned with both scopes", got.Keys)
+	}
+}

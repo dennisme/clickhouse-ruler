@@ -98,6 +98,10 @@ type Source struct {
 	lines lint.Lines
 }
 
+// Line is where this source was declared, so a finding about it can be
+// attached to the line of the diff that introduced it.
+func (s Source) Line() int { return s.lines.Of("name") }
+
 // String redacts the password so that printing a Source with %v or %s cannot
 // leak it into a log.
 func (s Source) String() string {

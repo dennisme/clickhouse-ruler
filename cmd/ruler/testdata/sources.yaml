@@ -6,8 +6,10 @@ sources:
     labels: {team: payments}
     address: 127.0.0.1:9000
     database: otel
-    username: ruler
-    password_env: RULER_CLICKHOUSE_PASSWORD
+    # The restricted user from deploy/clickhouse/init/02-ruler-user.sql. It
+    # has no password: the contract is about grants and constraints, and a
+    # local stack bound to localhost has nothing to authenticate against.
+    username: ruler_payments
     table: otel_traces
     timestamp_column: Timestamp
     evaluation_delay: 0s

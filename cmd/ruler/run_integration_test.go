@@ -137,7 +137,6 @@ func TestRunEndToEndFiringAlertReachesAlertmanager(t *testing.T) {
 	if amURL == "" || chAddr == "" {
 		t.Fatal("RULER_ALERTMANAGER_URL and RULER_CLICKHOUSE_ADDR must be set, run `just integration`")
 	}
-	t.Setenv("RULER_CLICKHOUSE_PASSWORD", "ruler")
 
 	s := startSink(t)
 
