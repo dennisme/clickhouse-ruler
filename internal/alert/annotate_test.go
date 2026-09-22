@@ -24,7 +24,7 @@ func TestEvalKeepsTheAnnotationsThatRendered(t *testing.T) {
 		"summary":     "{{ .NoSuchColumn }} is slow",
 		"runbook_url": "https://runbooks.internal/high-p99",
 		"description": "p99 is {{ .value }}ms",
-	}), nil, testSource())
+	}), nil, testSource(), testRetention)
 
 	alerts, failures, err := s.Eval(t0, []Sample{sample("checkout", 1200)})
 	if err != nil {
@@ -61,7 +61,7 @@ func TestEvalKeepsTheAnnotationsThatRendered(t *testing.T) {
 func TestEvalReportsABrokenAnnotationOncePerEvaluation(t *testing.T) {
 	s := New(annotatedRule(map[string]string{
 		"summary": "{{ .NoSuchColumn }} is slow",
-	}), nil, testSource())
+	}), nil, testSource(), testRetention)
 
 	samples := make([]Sample, 0, 500)
 	for i := 0; i < 500; i++ {
@@ -86,7 +86,7 @@ func TestEvalReportsABrokenAnnotationOncePerEvaluation(t *testing.T) {
 func TestResolvedAlertKeepsTheAnnotationsItFiredWith(t *testing.T) {
 	s := New(annotatedRule(map[string]string{
 		"summary": "p99 is {{ .value }}ms",
-	}), nil, testSource())
+	}), nil, testSource(), testRetention)
 
 	if _, _, err := s.Eval(t0, []Sample{sample("checkout", 1200)}); err != nil {
 		t.Fatalf("Eval: %v", err)
@@ -111,7 +111,7 @@ func TestResolvedAlertKeepsTheAnnotationsItFiredWith(t *testing.T) {
 func TestFiringAlertAnnotationsFollowTheLatestValue(t *testing.T) {
 	s := New(annotatedRule(map[string]string{
 		"summary": "p99 is {{ .value }}ms",
-	}), nil, testSource())
+	}), nil, testSource(), testRetention)
 
 	if _, _, err := s.Eval(t0, []Sample{sample("checkout", 1200)}); err != nil {
 		t.Fatalf("Eval: %v", err)
@@ -132,7 +132,7 @@ func TestFiringAlertAnnotationsFollowTheLatestValue(t *testing.T) {
 // A rule with no annotations must not grow an empty map, because that would
 // marshal into the payload as an empty object where the field should be absent.
 func TestEvalLeavesAnnotationsNilWhenTheRuleHasNone(t *testing.T) {
-	s := New(testRule(0, 0), nil, testSource())
+	s := New(testRule(0, 0), nil, testSource(), testRetention)
 
 	alerts, failures, err := s.Eval(t0, []Sample{sample("checkout", 1200)})
 	if err != nil {

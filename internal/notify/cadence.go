@@ -64,8 +64,9 @@ type Cadence struct {
 	interval  time.Duration
 	tolerance int
 
-	mu       sync.Mutex
-	lastSent map[uint64]time.Time
+	mu        sync.Mutex
+	lastSent  map[uint64]time.Time
+	lastSwept time.Time
 }
 
 // NewCadence builds a Cadence that re-sends a firing alert every interval and
@@ -109,7 +110,7 @@ func (c *Cadence) Send(ctx context.Context, now time.Time, evalInterval time.Dur
 	if err := c.sender.Send(ctx, due); err != nil {
 		return err
 	}
-	c.record(now, due)
+	c.record(now, evalInterval, due)
 	return nil
 }
 
@@ -129,15 +130,44 @@ func (c *Cadence) dueAt(now time.Time, evalInterval time.Duration, alerts []aler
 			// enough does not page; pending is never due.
 			continue
 		case alert.PhaseFiring:
-			if sent, ok := c.lastSent[a.Fingerprint]; ok && now.Sub(sent) < c.interval {
+			if !c.due(now, a, a.FiredAt) {
 				continue
 			}
 			// The alert is a copy, so this never reaches alert.State.
 			a.ValidUntil = now.Add(validity)
+		case alert.PhaseResolved:
+			// A resolved instance is returned on every evaluation of its
+			// retention window (spec 6.5), so it needs the same throttle a
+			// firing alert has or it would post on every tick.
+			if !c.due(now, a, a.ResolvedAt) {
+				continue
+			}
 		}
 		due = append(due, a)
 	}
 	return due
+}
+
+// due decides whether an alert is worth posting now.
+//
+// since is when this instance entered the phase it is in: when it fired, or
+// when it resolved. An alert is due if nothing has been sent for it since then,
+// which is what makes a new phase reach Alertmanager immediately, and otherwise
+// once the resend interval has elapsed.
+//
+// Keying only on the fingerprint would be wrong for both edges. A resolve would
+// wait behind the firing alert it replaces, and a condition that recovers and
+// comes back would page late, because a recurrence reuses the fingerprint of
+// the resolve still being retained.
+func (c *Cadence) due(now time.Time, a alert.Alert, since time.Time) bool {
+	sent, ok := c.lastSent[a.Fingerprint]
+	if !ok {
+		return true
+	}
+	if sent.Before(since) {
+		return true
+	}
+	return now.Sub(sent) >= c.interval
 }
 
 // validity is how far ahead a firing alert's expiry is set, measured from the
@@ -154,18 +184,55 @@ func (c *Cadence) validity(evalInterval time.Duration) time.Duration {
 // record marks what was actually delivered. It runs only after a successful
 // send, so a failure leaves the alert due again on the very next evaluation
 // rather than waiting out a full cadence interval.
-func (c *Cadence) record(now time.Time, due []alert.Alert) {
+//
+// A resolved alert is recorded like a firing one. It used to be deleted here,
+// on the reasoning that alert.State returned a resolve once and there was
+// nothing left to throttle; retention made that false, and the entry now has to
+// survive as long as the instance is being re-asserted.
+func (c *Cadence) record(now time.Time, evalInterval time.Duration, due []alert.Alert) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	for _, a := range due {
 		switch a.Phase {
-		case alert.PhaseFiring:
+		case alert.PhaseFiring, alert.PhaseResolved:
 			c.lastSent[a.Fingerprint] = now
-		case alert.PhaseResolved:
-			// Eval only ever returns a resolved instance once, so there is
-			// nothing left to throttle and holding the entry would leak.
-			delete(c.lastSent, a.Fingerprint)
 		}
 	}
+	c.prune(now, evalInterval)
+}
+
+// prune drops entries for instances that cannot be re-asserted again.
+//
+// alert.State keeps a resolved instance for as long as delivery could still be
+// failing, which is the same span this computes as a validity: the tolerance
+// times whichever of the cadence and the group interval is longer (spec 6.5).
+// Once nothing has been sent for a fingerprint in longer than that, its instance
+// is gone from every State and the entry is dead weight. Without this the map
+// would hold one entry per alert the process has ever sent.
+//
+// Swept at most once per interval rather than on every send, because the sweep
+// is O(tracked fingerprints) and a send is not.
+func (c *Cadence) prune(now time.Time, evalInterval time.Duration) {
+	if now.Sub(c.lastSwept) < c.interval {
+		return
+	}
+	c.lastSwept = now
+
+	// One interval of slack, so an entry is never dropped in the same window it
+	// could still be re-sent in.
+	cutoff := c.validity(evalInterval) + c.interval
+	for fp, sent := range c.lastSent {
+		if now.Sub(sent) > cutoff {
+			delete(c.lastSent, fp)
+		}
+	}
+}
+
+// entries is how many fingerprints the cadence is throttling. Used by tests to
+// prove the pruning above actually happens.
+func (c *Cadence) entries() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return len(c.lastSent)
 }

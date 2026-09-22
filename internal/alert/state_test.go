@@ -9,6 +9,10 @@ import (
 
 var t0 = time.Date(2026, 9, 19, 12, 0, 0, 0, time.UTC)
 
+// testRetention outlasts every timeline in these tests, so a resolved instance
+// stays tracked unless the test is specifically about the window closing.
+const testRetention = time.Hour
+
 func testRule(forDuration, keepFiringFor time.Duration) rule.Rule {
 	return rule.Rule{
 		Alert:         "HighP99Latency",
@@ -92,7 +96,7 @@ func formatAlerts(alerts []Alert) string {
 }
 
 func TestPendingUntilForElapses(t *testing.T) {
-	s := New(testRule(5*time.Minute, 0), nil, testSource())
+	s := New(testRule(5*time.Minute, 0), nil, testSource(), testRetention)
 
 	assertAlerts(t, evalOK(t, s, t0, []Sample{sample("checkout", 1200)}), []want{
 		{service: "checkout", phase: PhasePending, value: 1200, activeAt: t0},
@@ -115,7 +119,7 @@ func TestPendingUntilForElapses(t *testing.T) {
 }
 
 func TestForZeroFiresOnFirstEvaluation(t *testing.T) {
-	s := New(testRule(0, 0), nil, testSource())
+	s := New(testRule(0, 0), nil, testSource(), testRetention)
 
 	assertAlerts(t, evalOK(t, s, t0, []Sample{sample("checkout", 1200)}), []want{
 		{service: "checkout", phase: PhaseFiring, value: 1200, activeAt: t0, firedAt: t0},
@@ -123,7 +127,7 @@ func TestForZeroFiresOnFirstEvaluation(t *testing.T) {
 }
 
 func TestFinalLabelsMergeRuleAndSample(t *testing.T) {
-	s := New(testRule(0, 0), nil, testSource())
+	s := New(testRule(0, 0), nil, testSource(), testRetention)
 
 	got := evalOK(t, s, t0, []Sample{sample("checkout", 1200)})
 	if len(got) != 1 {

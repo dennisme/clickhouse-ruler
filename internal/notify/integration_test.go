@@ -165,7 +165,7 @@ func TestEndToEndFiringAlertReachesAlertmanager(t *testing.T) {
 		}
 
 		// for is 0 in the fixture, so the first evaluation fires immediately.
-		got, annotationErrs, err := alert.New(r.Rule, labels, src).Eval(now, samples)
+		got, annotationErrs, err := alert.New(r.Rule, labels, src, time.Hour).Eval(now, samples)
 		if err != nil {
 			t.Fatalf("evaluating %s: %v", src.Name, err)
 		}

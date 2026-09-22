@@ -88,10 +88,10 @@ func TestCadenceResendsAFiringAlertOnceItsCadenceElapses(t *testing.T) {
 	}
 }
 
-// A resolved alert has to reach Alertmanager regardless of cadence: it is
-// notified once, by construction of alert.State, and holding it back would
-// leave Alertmanager showing an alert that is no longer true.
-func TestCadenceAlwaysSendsAResolvedAlert(t *testing.T) {
+// A resolve is not held behind the cadence of the firing alert it replaces. The
+// instance has recovered, and every evaluation Alertmanager spends not knowing
+// that is one where it shows an alert that is no longer true.
+func TestCadenceSendsAResolveWithoutWaitingForTheInterval(t *testing.T) {
 	s := &recordingSender{}
 	c := NewCadence(s, time.Minute, DefaultResendTolerance)
 
@@ -100,7 +100,9 @@ func TestCadenceAlwaysSendsAResolvedAlert(t *testing.T) {
 		t.Fatalf("Send: %v", err)
 	}
 	// Resolved arrives on the very next evaluation, well inside the cadence.
-	if err := c.Send(context.Background(), now.Add(time.Second), testEvalInterval, []alert.Alert{resolved(1)}); err != nil {
+	res := resolved(1)
+	res.ResolvedAt = now.Add(time.Second)
+	if err := c.Send(context.Background(), now.Add(time.Second), testEvalInterval, []alert.Alert{res}); err != nil {
 		t.Fatalf("Send: %v", err)
 	}
 
@@ -223,5 +225,96 @@ func TestCadenceStampsValidityFromTheConfiguredTolerance(t *testing.T) {
 func TestDefaultResendToleranceMatchesPrometheus(t *testing.T) {
 	if DefaultResendTolerance != 4 {
 		t.Errorf("DefaultResendTolerance = %d, want 4", DefaultResendTolerance)
+	}
+}
+
+// A retained resolve is returned on every evaluation for its whole window, so
+// without a throttle it would post on every tick. It is re-asserted on the
+// resend interval, like a firing alert.
+func TestCadenceThrottlesARetainedResolve(t *testing.T) {
+	s := &recordingSender{}
+	c := NewCadence(s, time.Minute, DefaultResendTolerance)
+
+	now := time.Now()
+	a := resolved(1)
+	a.ResolvedAt = now
+
+	for _, at := range []time.Time{now, now.Add(10 * time.Second), now.Add(30 * time.Second)} {
+		if err := c.Send(context.Background(), at, testEvalInterval, []alert.Alert{a}); err != nil {
+			t.Fatalf("Send: %v", err)
+		}
+	}
+	if len(s.calls) != 1 {
+		t.Fatalf("got %d calls inside one interval, want 1", len(s.calls))
+	}
+
+	if err := c.Send(context.Background(), now.Add(time.Minute), testEvalInterval, []alert.Alert{a}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	if len(s.calls) != 2 {
+		t.Fatalf("got %d calls, want 2: the resolve is due again after the interval", len(s.calls))
+	}
+}
+
+// The same fingerprint comes back when a condition recurs, and the new instance
+// is a new alert. It must not be throttled behind the resolve that preceded it,
+// or a real recovery and re-fire would page late by up to a resend interval.
+func TestCadenceSendsARecurrenceImmediatelyAfterAResolve(t *testing.T) {
+	s := &recordingSender{}
+	c := NewCadence(s, 5*time.Minute, DefaultResendTolerance)
+
+	now := time.Now()
+	res := resolved(1)
+	res.ResolvedAt = now
+	if err := c.Send(context.Background(), now, testEvalInterval, []alert.Alert{res}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+
+	// Fires again a second later, which is well inside the resend interval.
+	again := firing(1)
+	again.FiredAt = now.Add(time.Second)
+	if err := c.Send(context.Background(), now.Add(time.Second), testEvalInterval, []alert.Alert{again}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+
+	if len(s.calls) != 2 {
+		t.Fatalf("got %d calls, want 2: the re-fire must not wait for the interval", len(s.calls))
+	}
+	if s.calls[1][0].Phase != alert.PhaseFiring {
+		t.Errorf("second call phase = %v, want firing", s.calls[1][0].Phase)
+	}
+}
+
+// lastSent used to be deleted the moment an alert resolved, on the reasoning
+// that a resolve was returned once. Retention makes that false, so the entry
+// now outlives the resolve and something has to remove it, or the map grows for
+// the life of the process.
+func TestCadenceDoesNotKeepEntriesForever(t *testing.T) {
+	s := &recordingSender{}
+	c := NewCadence(s, time.Minute, DefaultResendTolerance)
+
+	now := time.Now()
+	for fp := uint64(1); fp <= 100; fp++ {
+		a := resolved(fp)
+		a.ResolvedAt = now
+		if err := c.Send(context.Background(), now, testEvalInterval, []alert.Alert{a}); err != nil {
+			t.Fatalf("Send: %v", err)
+		}
+	}
+	if got := c.entries(); got != 100 {
+		t.Fatalf("got %d tracked fingerprints, want 100", got)
+	}
+
+	// Far beyond any window in which those fingerprints could still be
+	// re-asserted, and one unrelated alert keeps arriving.
+	later := now.Add(time.Hour)
+	keep := resolved(999)
+	keep.ResolvedAt = later
+	if err := c.Send(context.Background(), later, testEvalInterval, []alert.Alert{keep}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+
+	if got := c.entries(); got != 1 {
+		t.Errorf("got %d tracked fingerprints, want 1: the dead ones must be pruned", got)
 	}
 }

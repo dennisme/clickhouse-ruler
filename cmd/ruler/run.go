@@ -129,10 +129,14 @@ func runRun(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	metrics := scheduler.NewMetrics(reg)
 	clock := scheduler.NewRealClock()
 
-	client := notify.NewClient(*alertmanagerURL)
-	cadence := scheduler.NewCadence(client, *alertmanagerURL, *resendInterval, *resendTolerance, metrics, clock)
+	// Both the cadence and each rule's resolved-alert retention are sized from
+	// these two, so they are passed as the pair they are (spec 6.5).
+	resend := scheduler.Resend{Interval: *resendInterval, Tolerance: *resendTolerance}
 
-	sched := scheduler.New(set, toQuerierMap(queriers), cadence, metrics, clock, *queryConcurrency, log)
+	client := notify.NewClient(*alertmanagerURL)
+	cadence := scheduler.NewCadence(client, *alertmanagerURL, resend, metrics, clock)
+
+	sched := scheduler.New(set, toQuerierMap(queriers), cadence, metrics, clock, *queryConcurrency, log, resend)
 
 	httpSrv := &http.Server{Addr: *listen, Handler: scheduler.Handler(reg), ReadHeaderTimeout: 5 * time.Second}
 	go func() {

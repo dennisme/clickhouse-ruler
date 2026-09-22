@@ -22,7 +22,7 @@ func BenchmarkEvalWithAnnotations(b *testing.B) {
 		"summary":     "{{ .ServiceName }} p99 is {{ .value }}ms",
 		"runbook_url": "https://runbooks.internal/high-p99",
 	}
-	s := New(r, nil, testSource())
+	s := New(r, nil, testSource(), testRetention)
 	samples := benchSamples(1000)
 
 	for i := 0; i < b.N; i++ {
@@ -33,7 +33,7 @@ func BenchmarkEvalWithAnnotations(b *testing.B) {
 }
 
 func BenchmarkEvalWithoutAnnotations(b *testing.B) {
-	s := New(testRule(0, 0), nil, testSource())
+	s := New(testRule(0, 0), nil, testSource(), testRetention)
 	samples := benchSamples(1000)
 
 	for i := 0; i < b.N; i++ {

@@ -74,7 +74,7 @@ type Result struct {
 	SendError error
 
 	// Pending and Firing are counts of currently tracked instances across
-	// every matched source, for the ruler_alerts_active gauge. Counts only:
+	// every matched source, for the clickhouse_ruler_alerts_active gauge. Counts only:
 	// labelling that gauge by alert instance would turn the ruler into the
 	// cardinality problem it exists to avoid (spec 8.3).
 	Pending int
@@ -100,10 +100,13 @@ type RuleEval struct {
 
 // NewRuleEval builds the per-source state up front, from the sources the
 // rule already matched at load time (spec 6.10).
-func NewRuleEval(r ruleset.Rule, queriers map[string]Querier, cadence *notify.Cadence, queries semaphore) *RuleEval {
+// resolvedRetention is how long each source's state keeps a resolved instance
+// so its notification can be retried, derived from how long delivery can take
+// rather than picked (spec 6.5).
+func NewRuleEval(r ruleset.Rule, queriers map[string]Querier, cadence *notify.Cadence, queries semaphore, resolvedRetention time.Duration) *RuleEval {
 	states := make(map[string]*alert.State, len(r.Sources))
 	for _, src := range r.Sources {
-		states[src.Name] = alert.New(r.Rule, r.Labels, src)
+		states[src.Name] = alert.New(r.Rule, r.Labels, src, resolvedRetention)
 	}
 	return &RuleEval{rule: r, queriers: queriers, cadence: cadence, states: states, queries: queries}
 }

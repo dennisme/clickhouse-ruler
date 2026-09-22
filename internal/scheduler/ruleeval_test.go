@@ -70,7 +70,7 @@ func TestRuleEvalKeepsForTimerAcrossEvaluations(t *testing.T) {
 	r := testRule(time.Minute)
 	q := &fakeQuerier{samples: oneSample()}
 	sender := &recordingSender{}
-	eval := NewRuleEval(r, map[string]Querier{"src1": q}, notify.NewCadence(sender, 5*time.Minute, notify.DefaultResendTolerance), newSemaphore(0))
+	eval := NewRuleEval(r, map[string]Querier{"src1": q}, notify.NewCadence(sender, 5*time.Minute, notify.DefaultResendTolerance), newSemaphore(0), testRetention)
 
 	now := time.Now()
 	eval.Evaluate(context.Background(), now)
@@ -96,7 +96,7 @@ func TestRuleEvalLeavesStateIntactAcrossAQueryFailure(t *testing.T) {
 	r := testRule(time.Minute)
 	q := &fakeQuerier{samples: oneSample()}
 	sender := &recordingSender{}
-	eval := NewRuleEval(r, map[string]Querier{"src1": q}, notify.NewCadence(sender, 5*time.Minute, notify.DefaultResendTolerance), newSemaphore(0))
+	eval := NewRuleEval(r, map[string]Querier{"src1": q}, notify.NewCadence(sender, 5*time.Minute, notify.DefaultResendTolerance), newSemaphore(0), testRetention)
 
 	now := time.Now()
 	eval.Evaluate(context.Background(), now)
@@ -124,7 +124,7 @@ func TestRuleEvalSurvivesAnAlertmanagerOutage(t *testing.T) {
 	r := testRule(0)
 	q := &fakeQuerier{samples: oneSample()}
 	sender := &recordingSender{err: errors.New("alertmanager unreachable")}
-	eval := NewRuleEval(r, map[string]Querier{"src1": q}, notify.NewCadence(sender, 5*time.Minute, notify.DefaultResendTolerance), newSemaphore(0))
+	eval := NewRuleEval(r, map[string]Querier{"src1": q}, notify.NewCadence(sender, 5*time.Minute, notify.DefaultResendTolerance), newSemaphore(0), testRetention)
 
 	now := time.Now()
 	res := eval.Evaluate(context.Background(), now)
@@ -143,11 +143,11 @@ func TestRuleEvalSurvivesAnAlertmanagerOutage(t *testing.T) {
 }
 
 // A rule matching no source must not be treated as a query error, that
-// condition is reported separately as ruler_rules_unmatched (spec 8.2).
+// condition is reported separately as clickhouse_ruler_rules_unmatched (spec 8.2).
 func TestRuleEvalWithNoMatchedSourcesDoesNothing(t *testing.T) {
 	r := ruleset.Rule{Rule: rule.Rule{Alert: "Unmatched"}, Labels: map[string]string{}}
 	sender := &recordingSender{}
-	eval := NewRuleEval(r, map[string]Querier{}, notify.NewCadence(sender, time.Minute, notify.DefaultResendTolerance), newSemaphore(0))
+	eval := NewRuleEval(r, map[string]Querier{}, notify.NewCadence(sender, time.Minute, notify.DefaultResendTolerance), newSemaphore(0), testRetention)
 
 	res := eval.Evaluate(context.Background(), time.Now())
 	if len(res.SourceErrors) != 0 {
@@ -170,7 +170,7 @@ func TestRuleEvalReportsWhichSourceFailedAndWhy(t *testing.T) {
 		"src1": &fakeQuerier{samples: oneSample()},
 		"src2": &fakeQuerier{err: refused},
 	}
-	eval := NewRuleEval(r, queriers, notify.NewCadence(&recordingSender{}, time.Minute, notify.DefaultResendTolerance), newSemaphore(0))
+	eval := NewRuleEval(r, queriers, notify.NewCadence(&recordingSender{}, time.Minute, notify.DefaultResendTolerance), newSemaphore(0), testRetention)
 
 	res := eval.Evaluate(context.Background(), time.Now())
 	if len(res.SourceErrors) != 1 {
@@ -188,7 +188,7 @@ func TestRuleEvalReportsWhichSourceFailedAndWhy(t *testing.T) {
 // every tick. It reports like any other failed source so it can be logged.
 func TestRuleEvalReportsASourceWithNoQuerier(t *testing.T) {
 	eval := NewRuleEval(testRule(0), map[string]Querier{},
-		notify.NewCadence(&recordingSender{}, time.Minute, notify.DefaultResendTolerance), newSemaphore(0))
+		notify.NewCadence(&recordingSender{}, time.Minute, notify.DefaultResendTolerance), newSemaphore(0), testRetention)
 
 	res := eval.Evaluate(context.Background(), time.Now())
 	if len(res.SourceErrors) != 1 {
@@ -199,5 +199,55 @@ func TestRuleEvalReportsASourceWithNoQuerier(t *testing.T) {
 	}
 	if res.SourceErrors[0].Err == nil {
 		t.Error("Err is nil, want a reason")
+	}
+}
+
+// The point of retaining a resolve. A notification that fails used to lose the
+// resolve outright, because State returned it once and deleted it in the same
+// step: no retry, and Alertmanager left holding a firing alert for something
+// that had recovered.
+func TestRuleEvalRetriesAResolveAfterAFailedSend(t *testing.T) {
+	r := testRule(0)
+	q := &fakeQuerier{samples: oneSample()}
+	sender := &recordingSender{}
+	eval := NewRuleEval(r, map[string]Querier{"src1": q},
+		notify.NewCadence(sender, time.Millisecond, notify.DefaultResendTolerance),
+		newSemaphore(0), testRetention)
+
+	now := time.Now()
+	eval.Evaluate(context.Background(), now)
+	if len(sender.calls) != 1 {
+		t.Fatalf("got %d calls, want the firing alert sent", len(sender.calls))
+	}
+
+	// The condition recovers, and Alertmanager is unreachable for that tick.
+	sender.err = errors.New("alertmanager unreachable")
+	q.samples = nil
+	res := eval.Evaluate(context.Background(), now.Add(time.Second))
+	if res.SendError == nil {
+		t.Fatal("want a send error while alertmanager is down")
+	}
+	// recordingSender records the attempt it failed, so the retry has to be
+	// counted from here rather than read off the end of the slice.
+	attempted := len(sender.calls)
+
+	// Alertmanager comes back. The resolve has to still be there.
+	sender.err = nil
+	eval.Evaluate(context.Background(), now.Add(2*time.Second))
+
+	if len(sender.calls) != attempted+1 {
+		t.Fatalf("got %d attempts, want one more than %d: the resolve was never retried",
+			len(sender.calls), attempted)
+	}
+	last := sender.calls[len(sender.calls)-1]
+	if len(last) != 1 {
+		t.Fatalf("last batch = %v, want one alert", last)
+	}
+	if last[0].Phase != alert.PhaseResolved {
+		t.Errorf("phase = %v, want resolved: the resolve was lost", last[0].Phase)
+	}
+	if !last[0].ResolvedAt.Equal(now.Add(time.Second)) {
+		t.Errorf("ResolvedAt = %v, want %v: it resolved then, not on the retry",
+			last[0].ResolvedAt, now.Add(time.Second))
 	}
 }

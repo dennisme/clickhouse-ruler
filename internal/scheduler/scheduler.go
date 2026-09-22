@@ -31,7 +31,7 @@ type namedEval struct {
 
 // New builds a Scheduler for set. Every rule with at least one matched
 // source gets its own RuleEval sharing queriers; a rule matching none is
-// counted in ruler_rules_unmatched and never evaluated (spec 6.10).
+// counted in clickhouse_ruler_rules_unmatched and never evaluated (spec 6.10).
 //
 // Group starts are staggered across their own interval, deterministically by
 // group identity, so that many groups on the same interval do not all fire
@@ -43,7 +43,7 @@ type namedEval struct {
 // more rules added to it, until it began missing iterations.
 // A nil log discards every line, so a caller that does not care about output
 // does not have to build a handler.
-func New(set *ruleset.Set, queriers map[string]Querier, cadence *notify.Cadence, metrics *Metrics, clock Clock, queryConcurrency int, log *slog.Logger) *Scheduler {
+func New(set *ruleset.Set, queriers map[string]Querier, cadence *notify.Cadence, metrics *Metrics, clock Clock, queryConcurrency int, log *slog.Logger, resend Resend) *Scheduler {
 	type groupKey struct{ file, name string }
 
 	if log == nil {
@@ -86,7 +86,7 @@ func New(set *ruleset.Set, queriers map[string]Querier, cadence *notify.Cadence,
 				unmatched++
 				continue
 			}
-			evals = append(evals, namedEval{rule: r.Alert, eval: NewRuleEval(r, queriers, cadence, queries)})
+			evals = append(evals, namedEval{rule: r.Alert, eval: NewRuleEval(r, queriers, cadence, queries, resend.retention(interval))})
 		}
 		metrics.RulesUnmatched.WithLabelValues(groupName).Set(float64(unmatched))
 
