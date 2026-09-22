@@ -1,6 +1,9 @@
 package policy
 
-import "sort"
+import (
+	"slices"
+	"sort"
+)
 
 // Merge combines policy from every scope that applies to a rule, taking the
 // strictest setting for each check.
@@ -33,9 +36,15 @@ func Merge(scopes ...*Policy) *Policy {
 		for name, incoming := range scope.Checks {
 			current, ok := out.Checks[name]
 			if !ok {
+				// An allowlist starts from the first scope that sets one, not
+				// from the shipped empty list: intersecting with empty would
+				// refuse everything however the scopes were configured.
 				current = Setting{Keys: defaults[name].Keys}
+				if Allowlist(name) {
+					current.Keys = incoming.Keys
+				}
 			}
-			out.Checks[name] = strictest(current, incoming)
+			out.Checks[name] = strictest(current, incoming, Allowlist(name))
 		}
 	}
 	return out
@@ -46,7 +55,7 @@ func Merge(scopes ...*Policy) *Policy {
 // When two scopes set the same severity the earlier one keeps the origin.
 // Effective policy is identical either way; only which scope --explain names
 // differs, and naming one that genuinely set it is accurate enough.
-func strictest(current, incoming Setting) Setting {
+func strictest(current, incoming Setting, allowlist bool) Setting {
 	merged := current
 
 	// The origin has to follow the severity, otherwise --explain would name a
@@ -56,8 +65,30 @@ func strictest(current, incoming Setting) Setting {
 		merged.File = incoming.File
 		merged.Line = incoming.Line
 	}
-	merged.Keys = union(current.Keys, incoming.Keys)
+	if allowlist {
+		merged.Keys = intersect(current.Keys, incoming.Keys)
+	} else {
+		merged.Keys = union(current.Keys, incoming.Keys)
+	}
 	return merged
+}
+
+// intersect keeps only the entries both lists permit, sorted so the result
+// does not depend on map iteration order.
+func intersect(a, b []string) []string {
+	in := make(map[string]bool, len(a))
+	for _, k := range a {
+		in[k] = true
+	}
+
+	out := make([]string, 0, len(b))
+	for _, k := range b {
+		if in[k] {
+			out = append(out, k)
+		}
+	}
+	sort.Strings(out)
+	return slices.Compact(out)
 }
 
 // union merges two key lists, sorted so the result does not depend on map

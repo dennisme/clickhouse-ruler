@@ -135,3 +135,55 @@ func TestMergeKeepsDefaultKeys(t *testing.T) {
 		}
 	}
 }
+
+// A required list gets stricter as it grows, so scopes union it. An allowlist
+// gets stricter as it shrinks, so scopes intersect it: unioning one would let
+// a source permit a table function the instance policy refused, and no scope
+// may loosen another (spec 7.7).
+func TestMergeIntersectsAnAllowlist(t *testing.T) {
+	instance := &Policy{Checks: map[string]Setting{
+		CheckRuleTableFunction: {Severity: lint.SeverityError, Keys: []string{"merge", "numbers"}},
+	}}
+	source := &Policy{Checks: map[string]Setting{
+		CheckRuleTableFunction: {Severity: lint.SeverityError, Keys: []string{"numbers", "remote"}},
+	}}
+
+	got := Merge(instance, source).For(CheckRuleTableFunction)
+	if len(got.Keys) != 1 || got.Keys[0] != "numbers" {
+		t.Errorf("keys = %v, want only the one both scopes allow", got.Keys)
+	}
+}
+
+// Intersection is a meet the way union is a join, so the merge is still
+// commutative and there is still no precedence rule to remember.
+func TestMergeAllowlistIsOrderIndependent(t *testing.T) {
+	a := &Policy{Checks: map[string]Setting{
+		CheckRuleTableFunction: {Severity: lint.SeverityError, Keys: []string{"merge", "numbers"}},
+	}}
+	b := &Policy{Checks: map[string]Setting{
+		CheckRuleTableFunction: {Severity: lint.SeverityError, Keys: []string{"numbers"}},
+	}}
+
+	ab := Merge(a, b).For(CheckRuleTableFunction).Keys
+	ba := Merge(b, a).For(CheckRuleTableFunction).Keys
+	if len(ab) != len(ba) || ab[0] != ba[0] {
+		t.Errorf("keys depend on order: %v vs %v", ab, ba)
+	}
+}
+
+// The shipped allowlist is empty, so a scope that permits a function is the
+// only reason one is ever allowed, and one scope alone cannot widen it past
+// what another scope permits.
+func TestMergeAllowlistStartsEmpty(t *testing.T) {
+	if keys := Defaults().For(CheckRuleTableFunction).Keys; len(keys) != 0 {
+		t.Errorf("default allowlist = %v, want empty: every table function is refused", keys)
+	}
+
+	got := Merge(&Policy{Checks: map[string]Setting{
+		CheckRuleTableFunction: {Severity: lint.SeverityError, Keys: []string{"numbers"}},
+	}}).For(CheckRuleTableFunction)
+
+	if len(got.Keys) != 1 || got.Keys[0] != "numbers" {
+		t.Errorf("keys = %v, want the one the only scope permitted", got.Keys)
+	}
+}

@@ -317,7 +317,7 @@ but is not the same as asking ClickHouse what the query does. The checks that
 need a connection, `EXPLAIN` for cost and plan, `system.columns` for whether
 the table still has the column, `DESCRIBE` for whether an annotation
 references a label the query actually returns, are specified in
-[spec 7.3](spec.md) and are not built. That is the next piece of work, and
+[spec 7.3](spec/validation.md) and are not built. That is the next piece of work, and
 until it lands this column reads "file checks today" rather than yes.
 
 ### SigNoz and ClickStack
@@ -460,6 +460,10 @@ Working:
   per source. `--explain` names the file that set each one
 - Rule file parsing, with line numbers on every finding and strict unknown
   field rejection
+- Query checks that read the SQL rather than the file: a rule that will not
+  parse, carries a second statement, selects `*`, reads through a table
+  function, or calls `now()` is reported before it ever runs. Found in the
+  tree ClickHouse itself parsed, never by matching words in the query text
 - The ClickHouse user contract: `source/privileges` checks each source's user
   for revoked table-function privileges, `readonly = 2`, a constraint behind
   every limit the ruler sends, and the grant on its own table. Probed rather
@@ -493,9 +497,10 @@ Working:
 
 Not built yet:
 
-- No checks that read the query. `source/privileges` connects, but nothing
-  inspects the SQL: a rule referencing a dropped column, scanning a terabyte,
-  or returning nothing at all still passes. Spec 7.3 tiers 1 and 2.
+- The query checks stop at the parse tree. A rule referencing a dropped
+  column, setting its own `SETTINGS`, reading a table outside its source,
+  scanning a terabyte, or returning nothing at all still passes. Spec 7.3,
+  the rest of tier 1 and all of tier 2.
 - No `ruler watch`, so rules are not reloaded without a restart.
 - No ClickHouse query cost metrics. Rows and bytes read per rule need a driver
   progress callback. Spec 8.2.
@@ -548,7 +553,7 @@ ClickHouse, with real SQL and real rows.
 ## Design
 
 The full design, the research behind it, and the decisions that are still open
-are in [spec.md](spec.md).
+are in [spec.md](spec.md), which indexes the rest of the spec under `spec/`.
 
 ## License
 

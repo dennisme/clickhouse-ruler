@@ -28,6 +28,12 @@ const (
 	// a shared repository (spec 6.10, 10.2).
 	CheckSourceMatch = "rule/source-match"
 
+	// Tier 1 checks. They read the query through ClickHouse rather than the
+	// file, so they need a connection (spec 7.3).
+	CheckRuleSelectStar       = "rule/select-star"
+	CheckRuleTableFunction    = "rule/table-function"
+	CheckRuleNondeterministic = "rule/nondeterministic"
+
 	// CheckSourcePrivileges is a check on a source's ClickHouse user rather
 	// than on any rule, and its severity governs the report and never the
 	// guarantee: the grants are what stop a query, so a cluster where this is
@@ -64,10 +70,18 @@ var fixed = map[string]bool{
 	"rule/name":                true,
 	"rule/group-name":          true,
 	"rule/expr":                true,
-	"rule/protected-label":     true,
-	checkPolicyUnknown:         true,
-	checkPolicyFixed:           true,
-	checkPolicySeverity:        true,
+
+	// A rule whose SQL will not parse cannot run, and neither can one
+	// carrying a second statement. rule/inspect is fixed for a different
+	// reason: it is the ruler reporting that it could not ask, not a finding
+	// anyone can configure away (spec 7.3).
+	"rule/syntax":  true,
+	"rule/inspect": true,
+
+	"rule/protected-label": true,
+	checkPolicyUnknown:     true,
+	checkPolicyFixed:       true,
+	checkPolicySeverity:    true,
 }
 
 // defaults are the shipped settings for every configurable check.
@@ -108,7 +122,62 @@ var defaults = map[string]Setting{
 	},
 	CheckRuleFor:    {Severity: lint.SeverityWarning},
 	CheckRuleWindow: {Severity: lint.SeverityWarning},
+
+	// A rule with SELECT * evaluates correctly today and refingerprints every
+	// instance the moment a column is added, which is a warning's worth of
+	// wrong: nothing stops the rule working, and the author is the one who
+	// can fix it.
+	CheckRuleSelectStar: {Severity: lint.SeverityWarning},
+
+	// The one check here that defaults to an error, because it is the only
+	// preventive control rather than early feedback. remote() and url() are
+	// refused by the grants behind them, but numbers() and generateRandom()
+	// are gated by no privilege at all, and the database's only answer is to
+	// time the query out once the cost is already spent (spec 6.7.1).
+	//
+	// The allowlist ships empty, so every table function is refused and an
+	// operator permits the one they actually need.
+	CheckRuleTableFunction: {Severity: lint.SeverityError},
+
+	// Curated because there is nothing to read it from: system.functions has
+	// no is_deterministic column. A list we maintain will be incomplete, so
+	// an operator who finds the gap can extend it rather than wait for a
+	// release (spec 6.7.1).
+	CheckRuleNondeterministic: {
+		Severity: lint.SeverityWarning,
+		Keys:     nondeterministicFunctions,
+	},
 }
+
+// nondeterministicFunctions break window alignment and make a replay lie: a
+// rule reading `now()` is not reading the window the ruler asked for, and the
+// same query run twice over the same window does not agree with itself.
+var nondeterministicFunctions = []string{
+	"generateuuidv4",
+	"now",
+	"now64",
+	"rand",
+	"rand32",
+	"rand64",
+	"randcanonical",
+	"today",
+	"uptime",
+	"yesterday",
+}
+
+// allowlists are the checks whose list permits rather than requires.
+//
+// The direction matters to the merge. A required list gets stricter as it
+// grows, so scopes union it; an allowlist gets stricter as it shrinks, so
+// scopes intersect it. Unioning one would let a source permit a table
+// function the instance policy refused, and no scope may loosen another
+// (spec 7.7).
+var allowlists = map[string]bool{
+	CheckRuleTableFunction: true,
+}
+
+// Allowlist reports whether a check's list permits rather than requires.
+func Allowlist(check string) bool { return allowlists[check] }
 
 // Fixed reports whether a check's severity is not configurable.
 func Fixed(check string) bool { return fixed[check] }

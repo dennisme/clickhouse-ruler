@@ -107,11 +107,17 @@ func check(args []string, stdout, stderr io.Writer) int {
 	set, ruleProblems := ruleset.Load(dir, sources, root)
 	problems = append(problems, ruleProblems...)
 
-	// Every source in the file, not only the ones a rule matched. The finding
-	// belongs to the pull request that changed the sources file, in front of
-	// the people who own it (spec 6.7.3).
 	if *online {
-		problems = append(problems, checkPrivileges(context.Background(), *sourcesPath, sources.Sources, root)...)
+		ctx := context.Background()
+
+		// Every source in the file, not only the ones a rule matched. The
+		// finding belongs to the pull request that changed the sources file,
+		// in front of the people who own it (spec 6.7.3).
+		problems = append(problems, checkPrivileges(ctx, *sourcesPath, sources.Sources, root)...)
+
+		// Rules are the other way round: only the sources they matched, since
+		// a rule is read through the cluster it will run on.
+		problems = append(problems, inspectRules(ctx, set, root)...)
 	}
 
 	if err := lint.Format(stdout, *format, problems); err != nil {
