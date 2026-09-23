@@ -259,3 +259,143 @@ func TestByNameLooksUpSources(t *testing.T) {
 		t.Error("ByName found a source that does not exist")
 	}
 }
+
+// An exemption is how a source owner says a finding is expected on this
+// cluster. It is not a severity and takes no part in the policy merge, so a
+// scope still cannot loosen another (spec 7.7).
+func TestParseReadsExemptions(t *testing.T) {
+	f, problems := parseFixture(t, "exemptions.yaml")
+	if len(problems) != 0 {
+		t.Fatalf("expected no problems, got %v", problems)
+	}
+
+	src := f.Sources[0]
+	if len(src.Exemptions) != 2 {
+		t.Fatalf("got %d exemptions, want 2", len(src.Exemptions))
+	}
+
+	got := src.Exemptions[0]
+	if got.Check != "rule/foreign-table" {
+		t.Errorf("check = %q, want rule/foreign-table", got.Check)
+	}
+	if !strings.Contains(got.Reason, "system.parts") {
+		t.Errorf("reason = %q, want the operator's own words", got.Reason)
+	}
+	if want := time.Date(2026, 12, 1, 0, 0, 0, 0, time.UTC); !got.Until.Equal(want) {
+		t.Errorf("until = %s, want %s", got.Until, want)
+	}
+	// A timestamp is as good as a date, so an operator can expire one at a
+	// deploy rather than at midnight.
+	if want := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC); !src.Exemptions[1].Until.Equal(want) {
+		t.Errorf("until = %s, want %s", src.Exemptions[1].Until, want)
+	}
+}
+
+func TestExempts(t *testing.T) {
+	f, _ := parseFixture(t, "exemptions.yaml")
+	src := f.Sources[0]
+
+	before := time.Date(2026, 11, 30, 0, 0, 0, 0, time.UTC)
+	after := time.Date(2026, 12, 2, 0, 0, 0, 0, time.UTC)
+
+	if !src.Exempts("rule/foreign-table", before) {
+		t.Error("an exemption inside its window did not apply")
+	}
+	// An expired exemption stops applying rather than lingering, which is the
+	// whole point of requiring a date.
+	if src.Exempts("rule/foreign-table", after) {
+		t.Error("an expired exemption still applied")
+	}
+	if src.Exempts("rule/table-function", before) {
+		t.Error("a check nobody exempted was exempted")
+	}
+}
+
+// An expired exemption is a finding of its own, so it fails loudly on a date
+// somebody chose rather than rotting quietly in the file.
+func TestExpiredExemptions(t *testing.T) {
+	f, _ := parseFixture(t, "exemptions.yaml")
+
+	if got := f.ExpiredExemptions(time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)); len(got) != 0 {
+		t.Fatalf("got %v, want none: both exemptions are live", got)
+	}
+
+	got := f.ExpiredExemptions(time.Date(2026, 12, 2, 0, 0, 0, 0, time.UTC))
+	if len(got) != 2 {
+		t.Fatalf("got %d problems, want one per expired exemption: %v", len(got), got)
+	}
+	for _, p := range got {
+		if p.Severity != lint.SeverityError {
+			t.Errorf("severity = %v, want error", p.Severity)
+		}
+		if p.Subject != "otel_shared" {
+			t.Errorf("subject = %q, want the source name", p.Subject)
+		}
+		if p.File != "testdata/exemptions.yaml" || p.Line == 0 {
+			t.Errorf("location = %s:%d, want the exemption's own line", p.File, p.Line)
+		}
+		if !strings.Contains(p.Text, "expired") {
+			t.Errorf("text = %q, want it to say the exemption expired", p.Text)
+		}
+	}
+}
+
+// Every field is required, the check has to be one that exists, and a
+// correctness check cannot be exempted at all: softening those is what the
+// fixed list in policy exists to prevent (spec 7.6).
+func TestParseRejectsBadExemptions(t *testing.T) {
+	_, problems := parseFixture(t, "exemption_problems.yaml")
+
+	wantBySubject := map[string]string{
+		"no_check":      "check is empty",
+		"fixed_check":   "correctness check",
+		"unknown_check": "unknown check",
+		"no_reason":     "reason is empty",
+		"no_until":      "until is empty",
+		"bad_until":     "until must be a date",
+		"unknown_field": "unknown field",
+	}
+
+	if len(problems) != len(wantBySubject) {
+		t.Fatalf("got %d problems, want one per source: %v", len(problems), problems)
+	}
+	for _, p := range problems {
+		want, ok := wantBySubject[p.Subject]
+		if !ok {
+			t.Errorf("unexpected problem for %q: %v", p.Subject, p)
+			continue
+		}
+		if !strings.Contains(p.Text, want) {
+			t.Errorf("%s: text = %q, want it to carry %q", p.Subject, p.Text, want)
+		}
+		if p.Severity != lint.SeverityError {
+			t.Errorf("%s: severity = %v, want error", p.Subject, p.Severity)
+		}
+	}
+}
+
+// The documented boundary: `until` is the first instant no longer covered,
+// and a bare date is midnight UTC wherever the check runs. An exemption whose
+// expiry moved with the machine's timezone would be a finding that depends on
+// where it was evaluated.
+func TestExemptsExpiresAtMidnightUTC(t *testing.T) {
+	f, _ := parseFixture(t, "exemptions.yaml")
+	src := f.Sources[0]
+
+	lastCovered := time.Date(2026, 11, 30, 23, 59, 59, 0, time.UTC)
+	if !src.Exempts("rule/foreign-table", lastCovered) {
+		t.Error("the last second before the expiry was not covered")
+	}
+
+	midnight := time.Date(2026, 12, 1, 0, 0, 0, 0, time.UTC)
+	if src.Exempts("rule/foreign-table", midnight) {
+		t.Error("until is exclusive: the instant itself is already expired")
+	}
+
+	// The same instant written in another zone is the same instant, so where
+	// the check runs cannot change the answer.
+	sydney := time.FixedZone("AEDT", 11*60*60)
+	if src.Exempts("rule/foreign-table", midnight.In(sydney)) {
+		t.Error("the expiry moved with the reader's timezone")
+	}
+}

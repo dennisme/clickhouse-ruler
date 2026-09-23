@@ -95,6 +95,11 @@ type Source struct {
 	// strictest setting across scopes.
 	Policy *policy.Policy
 
+	// Exemptions drop a finding this cluster expects, for a stated reason and
+	// until a stated date. The one thing in this file that loosens rather
+	// than tightens, which is why it sits outside the merge (spec 7.7).
+	Exemptions []Exemption
+
 	lines lint.Lines
 }
 
@@ -215,6 +220,8 @@ func parseSource(r *lint.Reader, n *yaml.Node, env func(string) (string, bool), 
 			s.Labels = r.StringMap(e.Value, "labels", "labels", s.lines.Keys())
 		case "checks":
 			s.Policy = policy.ParseNode(r, e.Value)
+		case "exempt":
+			s.Exemptions = parseExemptions(r, e.Value)
 		default:
 			r.UnknownField(e.Key, "source")
 		}

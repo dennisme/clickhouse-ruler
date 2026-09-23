@@ -10,6 +10,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"syscall"
+	"time"
 
 	"github.com/dennisme/clickhouse-ruler/internal/lint"
 	"github.com/dennisme/clickhouse-ruler/internal/policy"
@@ -149,6 +150,12 @@ func loadSources(path string) (*source.File, []lint.Problem, error) {
 		return nil, nil, fmt.Errorf("reading sources: %w", err)
 	}
 	f, problems := source.Parse(path, data, nil)
+
+	// Expiry is state rather than shape, so it is read here with a clock
+	// rather than at parse time. Both commands load sources through this, so
+	// an exemption that has run out fails CI and refuses to start.
+	problems = append(problems, f.ExpiredExemptions(time.Now())...)
+
 	return f, problems, nil
 }
 
@@ -200,6 +207,14 @@ func explainSet(w io.Writer, set *ruleset.Set, root *policy.Policy) {
 		} else {
 			for _, src := range r.Sources {
 				printf(w, "  source   %s (%s)\n", src.Name, src.Address)
+
+				// An exemption is the one thing that drops a finding rather
+				// than raising one, so it has to be readable here or a check
+				// that stopped reporting looks like a check that passed.
+				for _, e := range src.Exemptions {
+					printf(w, "    exempt %s until %s: %s\n",
+						e.Check, e.Until.Format(time.DateOnly), e.Reason)
+				}
 			}
 		}
 

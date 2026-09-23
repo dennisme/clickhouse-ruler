@@ -158,3 +158,72 @@ func TestCheckStaysOfflineForQueryChecks(t *testing.T) {
 		t.Errorf("output reports a query check without --online: %s", out)
 	}
 }
+
+// The whole point of an exemption, end to end: a rule that really does fail a
+// check against a real cluster stops being reported for it, because the
+// source owner said this cluster expects it.
+func TestCheckOnlineHonoursASourceExemption(t *testing.T) {
+	dir := t.TempDir()
+	rules := writeRule(t, dir, `SELECT * FROM otel.otel_traces
+WHERE Timestamp >= {{ .From }} AND Timestamp < {{ .To }}`)
+
+	sources := writeSources(t, dir, "ruler_payments")
+	body, err := os.ReadFile(sources) //nolint:gosec // a path this test just wrote
+	if err != nil {
+		t.Fatalf("reading sources: %v", err)
+	}
+	exempting := string(body) + `    exempt:
+      - check: rule/select-star
+        reason: this table's schema is frozen until it is retired
+        until: 2099-01-01
+`
+	if err := os.WriteFile(sources, []byte(exempting), 0o600); err != nil {
+		t.Fatalf("writing sources: %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"check", "--sources", sources, "--online", rules}, &stdout, &stderr)
+	out := stdout.String() + stderr.String()
+
+	if code != exitOK {
+		t.Errorf("exit = %d, want %d: %s", code, exitOK, out)
+	}
+	if strings.Contains(out, "rule/select-star") {
+		t.Errorf("the exempted check was still reported: %s", out)
+	}
+}
+
+// The same rule, the same cluster, an expired exemption: the finding comes
+// back and the expiry is reported on top of it.
+func TestCheckOnlineReportsAnExpiredExemption(t *testing.T) {
+	dir := t.TempDir()
+	rules := writeRule(t, dir, `SELECT * FROM otel.otel_traces
+WHERE Timestamp >= {{ .From }} AND Timestamp < {{ .To }}`)
+
+	sources := writeSources(t, dir, "ruler_payments")
+	body, err := os.ReadFile(sources) //nolint:gosec // a path this test just wrote
+	if err != nil {
+		t.Fatalf("reading sources: %v", err)
+	}
+	expired := string(body) + `    exempt:
+      - check: rule/select-star
+        reason: this table's schema was frozen while it was retired
+        until: 2020-01-01
+`
+	if err := os.WriteFile(sources, []byte(expired), 0o600); err != nil {
+		t.Fatalf("writing sources: %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"check", "--sources", sources, "--online", rules}, &stdout, &stderr)
+	out := stdout.String() + stderr.String()
+
+	if code != exitFinding {
+		t.Errorf("exit = %d, want %d: %s", code, exitFinding, out)
+	}
+	for _, want := range []string{"source/exemption", "rule/select-star"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output should carry %q: %s", want, out)
+		}
+	}
+}

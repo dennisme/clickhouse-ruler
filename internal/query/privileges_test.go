@@ -292,14 +292,20 @@ func TestAssertionsMatchPolicyDefaults(t *testing.T) {
 // same set, or a finding arrives under a name no policy can resolve. They are
 // spelled twice because policy cannot import this package without a cycle.
 func TestCheckNamesAreKnownToPolicy(t *testing.T) {
-	configurable := []string{CheckSelectStar, CheckTableFunction, CheckNondeterministic}
+	configurable := []string{
+		CheckSelectStar,
+		CheckTableFunction,
+		CheckNondeterministic,
+		CheckForeignTable,
+		CheckComplexity,
+	}
 	for _, name := range configurable {
 		if !policy.Configurable(name) {
 			t.Errorf("%s is not configurable in policy, so its severity cannot be resolved", name)
 		}
 	}
 
-	for _, name := range []string{CheckSyntax, CheckInspect} {
+	for _, name := range []string{CheckSyntax, CheckInspect, CheckSettings} {
 		if !policy.Fixed(name) {
 			t.Errorf("%s must be fixed: there is no severity to resolve for it", name)
 		}

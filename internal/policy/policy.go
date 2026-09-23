@@ -10,7 +10,9 @@
 package policy
 
 import (
+	"slices"
 	"sort"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 
@@ -127,9 +129,32 @@ func parseSetting(r *lint.Reader, s *Setting, n *yaml.Node, name string) {
 			s.Line = e.Key.Line
 		case "keys":
 			s.Keys = parseKeys(r, e.Value)
+			checkLimits(r, e.Value, name)
 		default:
 			r.UnknownField(e.Key, "check "+name)
 		}
+	}
+}
+
+// checkLimits reports a ceiling that will not parse, for the checks whose
+// keys are ceilings. Silence would leave an operator believing they had set a
+// limit the check never reads.
+func checkLimits(r *lint.Reader, n *yaml.Node, check string) {
+	names, ok := limitChecks[check]
+	if !ok {
+		return
+	}
+
+	for _, item := range n.Content {
+		s := Setting{Keys: []string{item.Value}}
+
+		name, _, split := strings.Cut(item.Value, ":")
+		if _, valid := s.Limit(name); split && valid && slices.Contains(names, name) {
+			continue
+		}
+		r.Add(item.Line, checkPolicyLimit, lint.SeverityError,
+			"%s takes ceilings written as name:number, one of %s, got %q",
+			check, strings.Join(names, " or "), item.Value)
 	}
 }
 

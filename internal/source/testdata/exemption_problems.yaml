@@ -1,0 +1,69 @@
+sources:
+  - name: no_check
+    address: clickhouse:9000
+    database: otel
+    username: ruler
+    table: otel_traces
+    timestamp_column: Timestamp
+    exempt:
+      - reason: says nothing about which check
+        until: 2026-12-01
+  - name: fixed_check
+    address: clickhouse:9000
+    database: otel
+    username: ruler
+    table: otel_traces
+    timestamp_column: Timestamp
+    exempt:
+      - check: rule/settings
+        reason: wants the cost controls off
+        until: 2026-12-01
+  - name: unknown_check
+    address: clickhouse:9000
+    database: otel
+    username: ruler
+    table: otel_traces
+    timestamp_column: Timestamp
+    exempt:
+      - check: rule/not-a-check
+        reason: nothing to exempt
+        until: 2026-12-01
+  - name: no_reason
+    address: clickhouse:9000
+    database: otel
+    username: ruler
+    table: otel_traces
+    timestamp_column: Timestamp
+    exempt:
+      - check: rule/select-star
+        until: 2026-12-01
+  - name: no_until
+    address: clickhouse:9000
+    database: otel
+    username: ruler
+    table: otel_traces
+    timestamp_column: Timestamp
+    exempt:
+      - check: rule/select-star
+        reason: forever, which is a check nobody runs
+  - name: bad_until
+    address: clickhouse:9000
+    database: otel
+    username: ruler
+    table: otel_traces
+    timestamp_column: Timestamp
+    exempt:
+      - check: rule/select-star
+        reason: a date nobody can read
+        until: next tuesday
+  - name: unknown_field
+    address: clickhouse:9000
+    database: otel
+    username: ruler
+    table: otel_traces
+    timestamp_column: Timestamp
+    exempt:
+      - check: rule/select-star
+        reason: has a typo in a field name
+        until: 2026-12-01
+        untill: 2027-01-01

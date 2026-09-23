@@ -1,0 +1,20 @@
+sources:
+  - name: otel_shared
+    address: clickhouse-shared:9000
+    database: otel
+    username: ruler_shared
+    table: otel_traces
+    timestamp_column: Timestamp
+    checks:
+      rule/complexity:
+        severity: error
+        keys: [max-joins:1]
+    exempt:
+      - check: rule/foreign-table
+        reason: >-
+          the capacity rules on this cluster read system.parts deliberately;
+          ruler_shared is granted it and nothing else outside otel
+        until: 2026-12-01
+      - check: rule/select-star
+        reason: the schema here is frozen until the table is retired
+        until: 2026-10-01T12:00:00Z

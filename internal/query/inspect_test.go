@@ -95,7 +95,77 @@ func TestInspectTreeWithNoNondeterministicList(t *testing.T) {
 	}
 }
 
-func TestClassifySyntax(t *testing.T) {
+// A SETTINGS clause is refused whatever it sets, so nothing configures this
+// one: the ruler's own limits are what it overrides.
+func TestInspectTreeReportsASettingsClause(t *testing.T) {
+	for _, name := range []string{"ast_settings.txt", "ast_settings_in_subquery.txt"} {
+		got, ok := findingFor(inspectTree(readAST(t, name), checksFor()), CheckSettings)
+		if !ok {
+			t.Fatalf("%s: a SETTINGS clause was not reported", name)
+		}
+		if got.Detail == "" {
+			t.Errorf("%s: the finding says nothing about why", name)
+		}
+	}
+}
+
+func TestInspectTreeReportsAForeignTable(t *testing.T) {
+	c := checksFor()
+	c.Database = "otel"
+
+	got, ok := findingFor(inspectTree(readAST(t, "ast_foreign_table.txt"), c), CheckForeignTable)
+	if !ok {
+		t.Fatal("a table outside the source's database was not reported")
+	}
+	if !contains(got.Detail, "system.parts") {
+		t.Errorf("detail = %q, want it to name the table", got.Detail)
+	}
+
+	// The source's own table is not foreign, whichever database it is in.
+	if _, ok := findingFor(inspectTree(readAST(t, "ast_plain.txt"), c), CheckForeignTable); ok {
+		t.Error("the source's own table was reported as foreign")
+	}
+}
+
+func TestInspectTreeReportsComplexity(t *testing.T) {
+	c := checksFor()
+	c.Complexity = &Complexity{MaxJoins: 1, MaxSubqueries: 1}
+
+	got, ok := findingFor(inspectTree(readAST(t, "ast_joins.txt"), c), CheckComplexity)
+	if !ok {
+		t.Fatal("two joins and two subqueries against a ceiling of one were not reported")
+	}
+	for _, want := range []string{"2 joins", "2 subqueries"} {
+		if !contains(got.Detail, want) {
+			t.Errorf("detail = %q, want it to carry %q", got.Detail, want)
+		}
+	}
+}
+
+func TestInspectTreeComplexityUnderTheCeiling(t *testing.T) {
+	c := checksFor()
+	c.Complexity = &Complexity{MaxJoins: 2, MaxSubqueries: 2}
+
+	if _, ok := findingFor(inspectTree(readAST(t, "ast_joins.txt"), c), CheckComplexity); ok {
+		t.Error("a query at the ceiling was reported; the ceiling is what is permitted")
+	}
+}
+
+// Nil is the check switched off, and a ceiling of zero is an operator meaning
+// no joins at all. They cannot be the same value.
+func TestInspectTreeComplexityOffAndZero(t *testing.T) {
+	if _, ok := findingFor(inspectTree(readAST(t, "ast_joins.txt"), checksFor()), CheckComplexity); ok {
+		t.Error("complexity was reported although no ceiling is configured")
+	}
+
+	c := checksFor()
+	c.Complexity = &Complexity{}
+	if _, ok := findingFor(inspectTree(readAST(t, "ast_joins.txt"), c), CheckComplexity); !ok {
+		t.Error("a ceiling of zero permitted two joins")
+	}
+}
+
+func TestClassifyExplain(t *testing.T) {
 	syntaxErr := func(msg string) error {
 		return &clickhouse.Exception{Code: codeSyntaxError, Message: msg}
 	}
@@ -104,6 +174,7 @@ func TestClassifySyntax(t *testing.T) {
 		name         string
 		err          error
 		wantFinding  bool
+		wantCheck    string
 		wantErr      bool
 		wantInDetail string
 	}{
@@ -129,6 +200,20 @@ func TestClassifySyntax(t *testing.T) {
 			wantErr: true,
 		},
 		{
+			// The profile constraints refuse the clause before the tree is
+			// read, and that refusal is about the rule: reporting it as a
+			// ruler that could not ask would lose the finding entirely
+			// (spec 6.7).
+			name: "a setting the profile constrains",
+			err: &clickhouse.Exception{
+				Code:    codeSettingConstraintViolation,
+				Message: "Setting max_execution_time shouldn't be greater than 60.",
+			},
+			wantFinding:  true,
+			wantCheck:    CheckSettings,
+			wantInDetail: "max_execution_time",
+		},
+		{
 			name:    "some other server error",
 			err:     &clickhouse.Exception{Code: 241, Message: "Memory limit exceeded"},
 			wantErr: true,
@@ -137,7 +222,7 @@ func TestClassifySyntax(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := classifySyntax(tt.err)
+			got, err := classifyExplain(tt.err)
 
 			switch {
 			case tt.wantErr && err == nil:
@@ -151,13 +236,16 @@ func TestClassifySyntax(t *testing.T) {
 			if tt.wantFinding && !contains(got.Detail, tt.wantInDetail) {
 				t.Errorf("detail = %q, want it to carry %q", got.Detail, tt.wantInDetail)
 			}
+			if want := tt.wantCheck; tt.wantFinding && want != "" && got.Check != want {
+				t.Errorf("check = %q, want %s", got.Check, want)
+			}
 		})
 	}
 }
 
-func TestClassifySyntaxUnwraps(t *testing.T) {
+func TestClassifyExplainUnwraps(t *testing.T) {
 	wrapped := fmt.Errorf("checking syntax: %w", &clickhouse.Exception{Code: codeSyntaxError, Message: "Syntax error"})
-	if _, err := classifySyntax(wrapped); err != nil {
+	if _, err := classifyExplain(wrapped); err != nil {
 		t.Errorf("err = %v, want the wrapped exception to be recognised", err)
 	}
 }
