@@ -14,7 +14,7 @@ import (
 func errorSetting() policy.Setting {
 	return policy.Setting{
 		Severity: lint.SeverityError,
-		Keys:     query.Assertions(),
+		Keys:     lint.Assertions(),
 		File:     "ruler.yaml",
 		Line:     7,
 	}
@@ -22,10 +22,10 @@ func errorSetting() policy.Setting {
 
 func TestPrivilegeProblemsReportsEachFailedAssertion(t *testing.T) {
 	results := []query.Assertion{
-		{Name: query.AssertionSourcesRevoked, Status: query.StatusFail, Detail: "URL (the query ran)"},
-		{Name: query.AssertionReadonly, Status: query.StatusPass},
-		{Name: query.AssertionConstraints, Status: query.StatusFail, Detail: "max_execution_time (no constraint)"},
-		{Name: query.AssertionTableReadable, Status: query.StatusPass},
+		{Name: lint.AssertionSourcesRevoked, Status: query.StatusFail, Detail: "URL (the query ran)"},
+		{Name: lint.AssertionReadonly, Status: query.StatusPass},
+		{Name: lint.AssertionConstraints, Status: query.StatusFail, Detail: "max_execution_time (no constraint)"},
+		{Name: lint.AssertionTableReadable, Status: query.StatusPass},
 	}
 
 	problems := privilegeProblems("sources.yaml", "payments_prod", 12, errorSetting(), results)
@@ -34,8 +34,8 @@ func TestPrivilegeProblemsReportsEachFailedAssertion(t *testing.T) {
 	}
 
 	for _, p := range problems {
-		if p.Check != policy.CheckSourcePrivileges {
-			t.Errorf("check = %q, want %q", p.Check, policy.CheckSourcePrivileges)
+		if p.Check != lint.CheckSourcePrivileges {
+			t.Errorf("check = %q, want %q", p.Check, lint.CheckSourcePrivileges)
 		}
 		if p.Severity != lint.SeverityError {
 			t.Errorf("severity = %v, want the configured error", p.Severity)
@@ -54,7 +54,7 @@ func TestPrivilegeProblemsReportsEachFailedAssertion(t *testing.T) {
 
 	// A finding has to say which half of the contract is missing, or an
 	// operator knows only that something about the user is wrong.
-	if !strings.Contains(problems[0].Text, query.AssertionSourcesRevoked) {
+	if !strings.Contains(problems[0].Text, lint.AssertionSourcesRevoked) {
 		t.Errorf("text = %q, want it to name the assertion", problems[0].Text)
 	}
 	if !strings.Contains(problems[0].Text, "URL") {
@@ -67,7 +67,7 @@ func TestPrivilegeProblemsReportsEachFailedAssertion(t *testing.T) {
 // refuse a source that meets the contract perfectly well.
 func TestPrivilegeProblemsNeverBlockOnInconclusive(t *testing.T) {
 	results := []query.Assertion{
-		{Name: query.AssertionReadonly, Status: query.StatusInconclusive, Detail: "clickhouse did not answer"},
+		{Name: lint.AssertionReadonly, Status: query.StatusInconclusive, Detail: "clickhouse did not answer"},
 	}
 
 	problems := privilegeProblems("sources.yaml", "payments_prod", 12, errorSetting(), results)
@@ -84,8 +84,8 @@ func TestPrivilegeProblemsNeverBlockOnInconclusive(t *testing.T) {
 
 func TestPrivilegeProblemsSaysNothingWhenTheContractHolds(t *testing.T) {
 	results := []query.Assertion{
-		{Name: query.AssertionSourcesRevoked, Status: query.StatusPass},
-		{Name: query.AssertionReadonly, Status: query.StatusPass},
+		{Name: lint.AssertionSourcesRevoked, Status: query.StatusPass},
+		{Name: lint.AssertionReadonly, Status: query.StatusPass},
 	}
 
 	if problems := privilegeProblems("sources.yaml", "payments_prod", 12, errorSetting(), results); len(problems) != 0 {
@@ -118,7 +118,7 @@ func TestRefuseSourcesDropsOnlyTheRefused(t *testing.T) {
 // ignored. A source on a cluster an operator has deliberately excluded should
 // see no traffic from this check at all.
 func TestPrivilegesSkippedWhenOff(t *testing.T) {
-	setting := policy.Setting{Severity: lint.SeverityOff, Keys: query.Assertions()}
+	setting := policy.Setting{Severity: lint.SeverityOff, Keys: lint.Assertions()}
 	if privilegesEnabled(setting) {
 		t.Error("privilegesEnabled = true at severity off, want false")
 	}

@@ -95,5 +95,34 @@ compose-down:
     # take other projects' containers and images with it.
     docker compose down -v --remove-orphans --rmi local
 
+# Rewrite the generated regions of the check documentation.
+#
+# The facts on a check's page come from the table in internal/lint/checks.go,
+# so a default changed in code and a page stating the old one cannot both be
+# checked in. The prose outside the markers is never touched.
+generate:
+    env -u GOROOT GOTOOLCHAIN=auto go generate ./...
+
+# Fail if the checked-in documentation is not what the table produces.
+#
+# Same game `golangci-lint fmt --diff` plays above: regenerate, then report
+# rather than rewrite, so drifted docs fail the recipe instead of passing it
+# silently. `just generate` is the one that rewrites.
+generate-check: generate
+    git diff --exit-code -- docs/
+
+# Serve the documentation site locally, rebuilding as files change.
+#
+# Needs the pinned mkdocs-material: `pip install -r requirements-docs.txt`,
+# ideally in a virtualenv. Nothing in `just check` needs it, so a contributor
+# who never touches the docs never installs Python at all.
+docs-serve:
+    mkdocs serve
+
+# Build the site the way the Pages workflow does, --strict included, so a
+# broken cross-reference fails here rather than after a merge.
+docs-build:
+    mkdocs build --strict
+
 # Everything CI runs, in the order CI runs it.
-check: lint build test markdownlint
+check: lint build test generate-check markdownlint

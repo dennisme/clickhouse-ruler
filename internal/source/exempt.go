@@ -7,10 +7,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/dennisme/clickhouse-ruler/internal/lint"
-	"github.com/dennisme/clickhouse-ruler/internal/policy"
 )
-
-const checkExemption = "source/exemption"
 
 // Exemption is a source owner saying that a finding is expected on this
 // cluster, for a stated reason, until a stated date.
@@ -75,15 +72,11 @@ func (f *File) ExpiredExemptions(now time.Time) []lint.Problem {
 			if now.Before(e.Until) {
 				continue
 			}
-			out = append(out, lint.Problem{
-				File:     f.File,
-				Line:     e.Line,
-				Subject:  s.Name,
-				Check:    checkExemption,
-				Severity: lint.SeverityError,
-				Text: fmt.Sprintf("the exemption for %s expired on %s: %s",
-					e.Check, e.Until.Format(time.RFC3339), e.Reason),
-			})
+			p := lint.NewProblem(f.File, e.Line, lint.CheckSourceExemption, lint.SeverityError,
+				fmt.Sprintf("the exemption for %s expired on %s: %s",
+					e.Check, e.Until.Format(time.RFC3339), e.Reason))
+			p.Subject = s.Name
+			out = append(out, p)
 		}
 	}
 	return out
@@ -134,19 +127,19 @@ func parseExemption(r *lint.Reader, n *yaml.Node) (Exemption, bool) {
 	// able to review later, and two of the three things a reviewer needs are
 	// why it was granted and when it ends.
 	if e.Reason == "" {
-		r.Add(lines.Of("reason"), checkExemption, lint.SeverityError,
+		r.Add(lines.Of("reason"), lint.CheckSourceExemption, lint.SeverityError,
 			"reason is empty: an exemption nobody explained cannot be reviewed")
 		ok = false
 	}
 	if until == "" {
-		r.Add(lines.Of("until"), checkExemption, lint.SeverityError,
+		r.Add(lines.Of("until"), lint.CheckSourceExemption, lint.SeverityError,
 			"until is empty: an exemption with no expiry is a check quietly deleted")
 		return e, false
 	}
 
 	parsed, err := parseUntil(until)
 	if err != nil {
-		r.Add(lines.Of("until"), checkExemption, lint.SeverityError,
+		r.Add(lines.Of("until"), lint.CheckSourceExemption, lint.SeverityError,
 			"until must be a date such as 2026-12-01 or an RFC3339 timestamp, got %q", until)
 		return e, false
 	}
@@ -160,16 +153,16 @@ func parseExemption(r *lint.Reader, n *yaml.Node) (Exemption, bool) {
 func checkExemptionCheck(r *lint.Reader, check string, line int) bool {
 	switch {
 	case check == "":
-		r.Add(line, checkExemption, lint.SeverityError,
+		r.Add(line, lint.CheckSourceExemption, lint.SeverityError,
 			"check is empty: an exemption has to name what it exempts")
-	case policy.Fixed(check):
+	case lint.Fixed(check):
 		// The same refusal policy gives a fixed check in a `checks:` block. A
 		// rule failing one cannot do its job, so exempting it produces a rule
 		// that looks fine and never fires.
-		r.Add(line, checkExemption, lint.SeverityError,
+		r.Add(line, lint.CheckSourceExemption, lint.SeverityError,
 			"%q is a correctness check and cannot be exempted: a rule that fails it cannot run", check)
-	case !policy.Configurable(check):
-		r.Add(line, checkExemption, lint.SeverityError, "unknown check %q", check)
+	case !lint.Known(check):
+		r.Add(line, lint.CheckSourceExemption, lint.SeverityError, "unknown check %q", check)
 	default:
 		return true
 	}

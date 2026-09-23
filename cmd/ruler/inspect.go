@@ -76,29 +76,29 @@ func querierFor(open map[string]*query.Querier, src source.Source) (*query.Queri
 func checksFromPolicy(p *policy.Policy, database string) query.Checks {
 	var c query.Checks
 
-	if tf := p.For(policy.CheckRuleTableFunction); tf.Severity != lint.SeverityOff {
+	if tf := p.For(lint.CheckRuleTableFunction); tf.Severity != lint.SeverityOff {
 		c.AllowedTableFunctions = tf.Keys
 	}
-	if nd := p.For(policy.CheckRuleNondeterministic); nd.Severity != lint.SeverityOff {
+	if nd := p.For(lint.CheckRuleNondeterministic); nd.Severity != lint.SeverityOff {
 		c.Nondeterministic = nd.Keys
 	}
-	if ft := p.For(policy.CheckRuleForeignTable); ft.Severity != lint.SeverityOff {
+	if ft := p.For(lint.CheckRuleForeignTable); ft.Severity != lint.SeverityOff {
 		c.Database = database
 	}
-	if cx := p.For(policy.CheckRuleComplexity); cx.Severity != lint.SeverityOff {
-		joins, hasJoins := cx.Limit(policy.LimitJoins)
-		subqueries, hasSubqueries := cx.Limit(policy.LimitSubqueries)
+	if cx := p.For(lint.CheckRuleComplexity); cx.Severity != lint.SeverityOff {
+		joins, hasJoins := cx.Limit(lint.LimitJoins)
+		subqueries, hasSubqueries := cx.Limit(lint.LimitSubqueries)
 
 		// Either ceiling alone is a check worth running, and a missing one
 		// keeps its default rather than becoming zero, which would refuse
 		// every join an operator never said anything about.
 		if hasJoins || hasSubqueries {
-			d := policy.Defaults().For(policy.CheckRuleComplexity)
+			d := policy.Defaults().For(lint.CheckRuleComplexity)
 			if !hasJoins {
-				joins, _ = d.Limit(policy.LimitJoins)
+				joins, _ = d.Limit(lint.LimitJoins)
 			}
 			if !hasSubqueries {
-				subqueries, _ = d.Limit(policy.LimitSubqueries)
+				subqueries, _ = d.Limit(lint.LimitSubqueries)
 			}
 			c.Complexity = &query.Complexity{MaxJoins: joins, MaxSubqueries: subqueries}
 		}
@@ -125,7 +125,7 @@ func inspectionProblems(
 		severity := lint.SeverityError
 		var origin policy.Setting
 
-		if policy.Configurable(f.Check) {
+		if lint.Configurable(f.Check) {
 			origin = merged.For(f.Check)
 			severity = origin.Severity
 		}
@@ -137,20 +137,15 @@ func inspectionProblems(
 		// "the strictest scope wins" stays true of policy. It drops one
 		// check on one source, and only a check that could be configured
 		// anyway: nothing that blocks can be exempted (spec 7.7).
-		if policy.Configurable(f.Check) && src.Exempts(f.Check, now) {
+		if lint.Configurable(f.Check) && src.Exempts(f.Check, now) {
 			continue
 		}
 
-		problems = append(problems, lint.Problem{
-			File:       file,
-			Line:       line,
-			Subject:    alert,
-			Check:      f.Check,
-			Severity:   severity,
-			Text:       fmt.Sprintf("against source %s: %s", src.Name, f.Detail),
-			PolicyFile: origin.File,
-			PolicyLine: origin.Line,
-		})
+		p := lint.NewProblem(file, line, f.Check, severity,
+			fmt.Sprintf("against source %s: %s", src.Name, f.Detail))
+		p.Subject = alert
+		p.PolicyFile, p.PolicyLine = origin.File, origin.Line
+		problems = append(problems, p)
 	}
 	return problems
 }
@@ -160,12 +155,8 @@ func inspectionProblems(
 // contract assertion is: a cluster that did not answer says nothing about the
 // SQL, and blocking on it would let a network blip fail a deploy.
 func inspectionFailed(r ruleset.Rule, sourceName string, err error) lint.Problem {
-	return lint.Problem{
-		File:     r.File,
-		Line:     r.Line(),
-		Subject:  r.Alert,
-		Check:    query.CheckInspect,
-		Severity: lint.SeverityWarning,
-		Text:     fmt.Sprintf("against source %s: could not inspect the query: %s", sourceName, err),
-	}
+	p := lint.NewProblem(r.File, r.Line(), lint.CheckRuleInspect, lint.SeverityWarning,
+		fmt.Sprintf("against source %s: could not inspect the query: %s", sourceName, err))
+	p.Subject = r.Alert
+	return p
 }

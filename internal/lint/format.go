@@ -27,10 +27,19 @@ func Format(w io.Writer, format string, problems []Problem) error {
 	}
 }
 
+// formatText prints one finding per line, with its documentation on the next
+// one. Indented under the finding rather than appended to it: the finding is
+// what a reader scans and the link is what they follow once they have decided
+// to (spec 7.8).
 func formatText(w io.Writer, problems []Problem) error {
 	for _, p := range problems {
 		if _, err := fmt.Fprintln(w, p.String()); err != nil {
 			return err
+		}
+		if url := DocsURL(p.Check); url != "" {
+			if _, err := fmt.Fprintf(w, "  %s\n", url); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -47,12 +56,21 @@ func formatGitHub(w io.Writer, problems []Problem) error {
 			command = "error"
 		}
 
+		// The link goes in the message rather than the title. GitHub renders
+		// the title as a short label and the message as the annotation body,
+		// and an author reading the annotation on their diff is the person
+		// who needs somewhere to go next.
+		text := p.Text
+		if url := DocsURL(p.Check); url != "" {
+			text += " (" + url + ")"
+		}
+
 		_, err := fmt.Fprintf(w, "::%s file=%s,line=%d,title=%s::%s\n",
 			command,
 			escapeProperty(p.File),
 			p.Line,
 			escapeProperty(p.Check),
-			escapeData(p.Text),
+			escapeData(text),
 		)
 		if err != nil {
 			return err

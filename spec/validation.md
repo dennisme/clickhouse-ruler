@@ -627,8 +627,8 @@ Every finding names three things:
 - the rule file and line that triggered it
 - the policy file and line that set the severity, carried on `Problem` as
   `PolicyFile` and `PolicyLine`
-- the check's documentation, by stable anchor. Not built: each check needs a
-  page to point at, written when the check is.
+- the check's documentation, by stable anchor, appended in text output and
+  carried in the annotation body in `github` output.
 
 `ruler check --explain` prints the resolved policy for each rule with the
 origin of every setting, so an author can see that `labels/required` is
@@ -641,11 +641,56 @@ than one, and "which clusters will this actually run against" is the first
 question an author asks. A rule matching nothing prints so explicitly rather
 than printing an empty list.
 
-The documentation link means each check needs a stable page or anchor to point
-at, written when the check is. That is a real deliverable rather than a free
-one, and it is the difference between a finding a contributor can act on alone
-and one that turns into a question for the platform team, which by 7.6 is the
-thing severity is supposed to be rationing.
+A finding naming a check a reader cannot look up turns their own problem into
+a question for whoever owns policy, which by 7.6 is the thing severity is
+supposed to be rationing. So the pages are a deliverable rather than a wish,
+and three things keep them honest.
+
+**Grouped by namespace, not one page per check.** `docs/checks/rule.md`,
+`source.md` and `policy.md`, with a generated `index.md`, published to GitHub
+Pages from `docs/` on every push to `main`. Most of what a page
+has to say is identical for every check in a namespace: how severity resolves,
+what configurable means against fixed, how scopes merge. Writing that once per
+page rather than 38 times leaves only what is specific to each check, which is
+the part worth reading.
+
+**The anchor is written, not inferred.** A slash does not survive GitHub's
+slugifier: it is dropped rather than replaced, so `rule/foreign-table` would
+be reachable only as `ruleforeign-table`. The anchor is an HTML element on the
+line above the heading:
+
+```markdown
+<a id="rule-foreign-table"></a>
+### rule/foreign-table
+```
+
+Not the `{#id}` attribute list a site generator would understand. GitHub
+Flavored Markdown has no attribute lists, so those braces render as text
+inside the heading and every link the ruler emits points at an anchor that was
+never created. An `<a id>` is honoured where the pages live today and still
+works if they are published through a generator later. One helper in
+`internal/lint` builds both the anchor and the URL, so the convention has one
+home rather than two that agree today.
+
+**The facts are generated, the explanations are written.** What a check ships
+as already exists in the check table (7.6), and the resolver reads it from
+there. A page restating a default by hand can be internally consistent and
+still describe a tool that behaves differently. So the severity, keys and list
+direction on each page come from the table, between markers a generator owns,
+and everything outside them is hand written and never touched.
+
+Three gates, because each catches what the others cannot:
+
+- `lint.NewProblem` refuses a check name the table does not know, so the table
+  is a complete catalogue of what can be reported rather than a list somebody
+  remembers to extend.
+- `just generate-check` regenerates and fails on a diff, the same way
+  `golangci-lint fmt --diff` reports rather than rewrites. A default changed in
+  code and a page stating the old one cannot both be checked in.
+- Tests assert that every check has a section, that every section is a check,
+  that each sits on the page its link points at, and that no section is a
+  heading with nothing under it. The last one matters: a generated heading
+  with an empty body satisfies a completeness test and helps nobody.
 
 ### 7.9 Compared with `pint`
 

@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/dennisme/clickhouse-ruler/internal/lint"
 )
 
 func assertions(t *testing.T, username string) map[string]Assertion {
@@ -25,11 +27,11 @@ func assertions(t *testing.T, username string) map[string]Assertion {
 	defer cancel()
 
 	out := map[string]Assertion{}
-	for _, a := range q.Privileges(ctx, Assertions()) {
+	for _, a := range q.Privileges(ctx, lint.Assertions()) {
 		out[a.Name] = a
 	}
-	if len(out) != len(Assertions()) {
-		t.Fatalf("got %d assertions, want %d", len(out), len(Assertions()))
+	if len(out) != len(lint.Assertions()) {
+		t.Fatalf("got %d assertions, want %d", len(out), len(lint.Assertions()))
 	}
 	return out
 }
@@ -53,14 +55,14 @@ func TestPrivilegesOverPrivilegedUser(t *testing.T) {
 	got := assertions(t, "ruler_wide")
 
 	want := map[string]Status{
-		AssertionSourcesRevoked: StatusFail,
-		AssertionReadonly:       StatusFail,
-		AssertionConstraints:    StatusFail,
+		lint.AssertionSourcesRevoked: StatusFail,
+		lint.AssertionReadonly:       StatusFail,
+		lint.AssertionConstraints:    StatusFail,
 
 		// The one thing this user does satisfy. Too many grants and too few
 		// are different findings, and a check that conflated them would say
 		// the wrong thing about half the clusters it runs on.
-		AssertionTableReadable: StatusPass,
+		lint.AssertionTableReadable: StatusPass,
 	}
 
 	for name, wantStatus := range want {
@@ -71,7 +73,7 @@ func TestPrivilegesOverPrivilegedUser(t *testing.T) {
 
 	// A finding has to name what is granted, or an operator knows only that
 	// something is wrong with a user they did not write down in full.
-	if detail := got[AssertionSourcesRevoked].Detail; !strings.Contains(detail, "URL") {
+	if detail := got[lint.AssertionSourcesRevoked].Detail; !strings.Contains(detail, "URL") {
 		t.Errorf("sources-revoked detail = %q, want it to name the privilege", detail)
 	}
 }
@@ -82,7 +84,7 @@ func TestPrivilegesOverPrivilegedUser(t *testing.T) {
 // connection, after the privilege check has already let it through, and that
 // still reports as granted.
 func TestPrivilegesReadsPastAFailedProbeQuery(t *testing.T) {
-	got := assertions(t, "ruler_wide")[AssertionSourcesRevoked]
+	got := assertions(t, "ruler_wide")[lint.AssertionSourcesRevoked]
 
 	if got.Status != StatusFail {
 		t.Fatalf("status = %v (%s), want fail", got.Status, got.Detail)
@@ -106,8 +108,8 @@ func TestPrivilegesRunsOnlyWhatIsRequired(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	got := q.Privileges(ctx, []string{AssertionTableReadable})
-	if len(got) != 1 || got[0].Name != AssertionTableReadable {
+	got := q.Privileges(ctx, []string{lint.AssertionTableReadable})
+	if len(got) != 1 || got[0].Name != lint.AssertionTableReadable {
 		t.Fatalf("got %v, want only table-readable", got)
 	}
 }
@@ -128,7 +130,7 @@ func TestPrivilegesUnderGrantedUser(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	got := q.Privileges(ctx, []string{AssertionTableReadable})
+	got := q.Privileges(ctx, []string{lint.AssertionTableReadable})
 	if len(got) != 1 {
 		t.Fatalf("got %v, want one assertion", got)
 	}

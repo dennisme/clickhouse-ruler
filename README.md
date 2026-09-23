@@ -458,6 +458,11 @@ Working:
 - Configurable check severity. Correctness checks always block; convention
   checks default to warnings and an operator raises them in `ruler.yaml` or
   per source. `--explain` names the file that set each one
+- A page per check family, published at
+  [dennisme.github.io/clickhouse-ruler](https://dennisme.github.io/clickhouse-ruler/checks/)
+  and linked from every finding. What a check ships as is generated from the
+  table the resolver reads, so a page cannot state a default the tool does not
+  have
 - Rule file parsing, with line numbers on every finding and strict unknown
   field rejection
 - Query checks that read the SQL rather than the file: a rule that will not
@@ -520,8 +525,6 @@ Known gaps that will change:
   are per shard. See spec 6.9.
 - Team-scoped policy files are not read. Policy comes from `ruler.yaml` and
   from each source. See spec 7.7.
-- Check documentation has no pages to link to yet, so findings name a check
-  without being able to point at what it means. See spec 7.8.
 
 ## Development
 

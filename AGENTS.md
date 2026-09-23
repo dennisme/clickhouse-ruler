@@ -28,6 +28,8 @@ just fix                # apply every fix golangci-lint can make
 just build              # go build ./... plus a vet of the integration-tagged tests
 just integration-clean  # start the stack, run integration tests, tear it down
 just markdownlint       # markdownlint-cli2 over the docs
+just generate           # rewrite the generated parts of docs/checks
+just docs-serve         # preview the documentation site locally
 just init               # mise tool versions and pre-commit hooks
 ```
 
@@ -72,13 +74,14 @@ Two things that bite:
 | `internal/source` | Sources file parsing, secret loading, label matching, the ClickHouse user contract in `privileges` |
 | `internal/ruleset` | Loading a rules directory and binding each rule to the sources its selector matches |
 | `internal/policy` | Check severity configuration and policy merging |
-| `internal/lint` | Finding types and output formats (text, GitHub workflow commands) |
+| `internal/lint` | The shared vocabulary: the check table in `checks.go`, severities, findings, and output formats (text, GitHub workflow commands) |
 | `internal/query` | Query execution, SQL AST checks, driver-error redaction |
 | `internal/alert` | Alert state machine: pending, firing, resolved, `for`, identity, fingerprints |
 | `internal/scheduler` | Group ticking, concurrency limits, metrics, HTTP surface, shutdown |
 | `internal/notify` | Alertmanager payloads, resend cadence, the HTTP client |
 | `deploy/` | ClickHouse init SQL (including the reference ruler user) and Alertmanager config |
 | `spec/` | Design, validation, operations, research, decisions |
+| `docs/` | The published site: a page per check family, linked from every finding |
 
 ## Conventions
 
@@ -96,6 +99,10 @@ Two things that bite:
   still cannot run. Do not add a second validation path. See spec 7.1.
 - Findings carry a file, a line and a severity. Correctness checks always
   block; convention checks take their severity from policy.
+- Every check is declared once, in the table in `internal/lint/checks.go`,
+  with its default severity, key list and the spec section behind it. Building
+  a finding goes through `lint.NewProblem`, which refuses a name the table
+  does not know, so a check cannot ship without an entry. See spec 7.8.
 - Metrics are labelled by rule and group, never by alert instance. A rule
   returning 10,000 rows still produces one series. See spec 8.3.
 - Passwords never reach a log. ClickHouse driver errors go through

@@ -10,33 +10,8 @@ import (
 
 	"github.com/ClickHouse/clickhouse-go/v2"
 
+	"github.com/dennisme/clickhouse-ruler/internal/lint"
 	"github.com/dennisme/clickhouse-ruler/internal/rule"
-)
-
-// Check names reported by an inspection. They are policy check names, spelled
-// here because policy cannot import this package without a cycle; a test in
-// the policy package fails if the two ever disagree.
-const (
-	// CheckSyntax is a correctness check: a rule whose SQL does not parse
-	// cannot run, and neither can one carrying a second statement.
-	CheckSyntax = "rule/syntax"
-
-	// CheckInspect is not a finding about a rule. It is how the ruler says it
-	// could not ask: a cluster that did not answer has reported nothing about
-	// the SQL, and silence there would read as a rule that passed.
-	CheckInspect = "rule/inspect"
-
-	CheckSelectStar       = "rule/select-star"
-	CheckTableFunction    = "rule/table-function"
-	CheckNondeterministic = "rule/nondeterministic"
-
-	// CheckSettings is a correctness check: the ruler sends
-	// max_execution_time, max_memory_usage and max_rows with every query, and
-	// a rule's own SETTINGS clause overrides them (spec 7.3).
-	CheckSettings = "rule/settings"
-
-	CheckForeignTable = "rule/foreign-table"
-	CheckComplexity   = "rule/complexity"
 )
 
 // codeSyntaxError is ClickHouse's error for a query it could not parse,
@@ -134,12 +109,12 @@ func classifyExplain(err error) (*Finding, error) {
 	if errors.As(err, &ex) {
 		switch ex.Code {
 		case codeSyntaxError:
-			return &Finding{Check: CheckSyntax, Detail: strings.TrimSpace(ex.Message)}, nil
+			return &Finding{Check: lint.CheckRuleSyntax, Detail: strings.TrimSpace(ex.Message)}, nil
 		case codeSettingConstraintViolation:
 			// The clause is the finding, and the server has already named the
 			// setting and the limit it exceeded.
 			return &Finding{
-				Check: CheckSettings,
+				Check: lint.CheckRuleSettings,
 				Detail: "the query sets its own SETTINGS, which the source's profile refused: " +
 					strings.TrimSpace(ex.Message),
 			}, nil
@@ -208,7 +183,7 @@ func inspectTree(root *Node, c Checks) []Finding {
 
 	if selectsEverything(root) {
 		out = append(out, Finding{
-			Check: CheckSelectStar,
+			Check: lint.CheckRuleSelectStar,
 			Detail: "the query selects *, so its result columns are whatever the table has today: " +
 				"adding a column changes every instance's identity and refingerprints the alerts",
 		})
@@ -216,7 +191,7 @@ func inspectTree(root *Node, c Checks) []Finding {
 
 	if used := disallowedTableFunctions(root, c.AllowedTableFunctions); len(used) > 0 {
 		out = append(out, Finding{
-			Check: CheckTableFunction,
+			Check: lint.CheckRuleTableFunction,
 			Detail: fmt.Sprintf("the query reads through %s, which is not in the allowlist; "+
 				"a rule reads its source's table", strings.Join(used, ", ")),
 		})
@@ -224,7 +199,7 @@ func inspectTree(root *Node, c Checks) []Finding {
 
 	if used := functionsNamed(root, nameSet(c.Nondeterministic)); len(used) > 0 {
 		out = append(out, Finding{
-			Check: CheckNondeterministic,
+			Check: lint.CheckRuleNondeterministic,
 			Detail: fmt.Sprintf("the query calls %s, so it does not read the window the ruler asked for "+
 				"and a replay of it cannot agree with itself", strings.Join(used, ", ")),
 		})
@@ -232,7 +207,7 @@ func inspectTree(root *Node, c Checks) []Finding {
 
 	if setsSettings(root) {
 		out = append(out, Finding{
-			Check: CheckSettings,
+			Check: lint.CheckRuleSettings,
 			Detail: "the query sets its own SETTINGS, which replaces the execution time, memory and row " +
 				"limits the ruler sends with every evaluation",
 		})
@@ -240,7 +215,7 @@ func inspectTree(root *Node, c Checks) []Finding {
 
 	if used := foreignTables(root, c.Database); len(used) > 0 {
 		out = append(out, Finding{
-			Check: CheckForeignTable,
+			Check: lint.CheckRuleForeignTable,
 			Detail: fmt.Sprintf("the query reads %s, which is outside the source's %s database, "+
 				"so the rule runs only where its user happens to be granted that table",
 				strings.Join(used, ", "), c.Database),
@@ -248,7 +223,7 @@ func inspectTree(root *Node, c Checks) []Finding {
 	}
 
 	if detail := overComplexity(root, c.Complexity); detail != "" {
-		out = append(out, Finding{Check: CheckComplexity, Detail: detail})
+		out = append(out, Finding{Check: lint.CheckRuleComplexity, Detail: detail})
 	}
 	return out
 }

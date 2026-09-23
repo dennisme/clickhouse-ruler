@@ -47,7 +47,7 @@ func (p *Policy) For(check string) Setting {
 			return s
 		}
 	}
-	if s, ok := defaults[check]; ok {
+	if s, ok := defaultFor(check); ok {
 		return s
 	}
 	// Anything not configurable always runs at error. Correctness checks land
@@ -89,12 +89,12 @@ func parseChecks(r *lint.Reader, p *Policy, n *yaml.Node) {
 		name := e.Key.Value
 
 		switch {
-		case Fixed(name):
-			r.Add(e.Key.Line, checkPolicyFixed, lint.SeverityError,
+		case lint.Fixed(name):
+			r.Add(e.Key.Line, lint.CheckPolicyFixed, lint.SeverityError,
 				"%q is a correctness check and cannot be configured: a rule that fails it cannot run", name)
 			continue
-		case !Configurable(name):
-			r.Add(e.Key.Line, checkPolicyUnknown, lint.SeverityError,
+		case !lint.Configurable(name):
+			r.Add(e.Key.Line, lint.CheckPolicyUnknown, lint.SeverityError,
 				"unknown check %q", name)
 			continue
 		}
@@ -121,7 +121,7 @@ func parseSetting(r *lint.Reader, s *Setting, n *yaml.Node, name string) {
 			}
 			sev, ok := ParseSeverity(raw)
 			if !ok {
-				r.Add(e.Value.Line, checkPolicySeverity, lint.SeverityError,
+				r.Add(e.Value.Line, lint.CheckPolicySeverity, lint.SeverityError,
 					"severity must be off, warn or error, got %q", raw)
 				continue
 			}
@@ -140,10 +140,10 @@ func parseSetting(r *lint.Reader, s *Setting, n *yaml.Node, name string) {
 // keys are ceilings. Silence would leave an operator believing they had set a
 // limit the check never reads.
 func checkLimits(r *lint.Reader, n *yaml.Node, check string) {
-	names, ok := limitChecks[check]
-	if !ok {
+	if !lint.Ceiling(check) {
 		return
 	}
+	names := []string{lint.LimitJoins, lint.LimitSubqueries}
 
 	for _, item := range n.Content {
 		s := Setting{Keys: []string{item.Value}}
@@ -152,7 +152,7 @@ func checkLimits(r *lint.Reader, n *yaml.Node, check string) {
 		if _, valid := s.Limit(name); split && valid && slices.Contains(names, name) {
 			continue
 		}
-		r.Add(item.Line, checkPolicyLimit, lint.SeverityError,
+		r.Add(item.Line, lint.CheckPolicyLimit, lint.SeverityError,
 			"%s takes ceilings written as name:number, one of %s, got %q",
 			check, strings.Join(names, " or "), item.Value)
 	}

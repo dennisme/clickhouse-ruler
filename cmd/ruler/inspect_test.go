@@ -15,13 +15,13 @@ func TestInspectionProblemsCarrySeverityFromPolicy(t *testing.T) {
 	merged := policy.Merge(&policy.Policy{
 		File: "ruler.yaml",
 		Checks: map[string]policy.Setting{
-			policy.CheckRuleSelectStar: {Severity: lint.SeverityError, File: "ruler.yaml", Line: 3},
+			lint.CheckRuleSelectStar: {Severity: lint.SeverityError, File: "ruler.yaml", Line: 3},
 		},
 	})
 
 	findings := []query.Finding{
-		{Check: query.CheckSelectStar, Detail: "the query selects *"},
-		{Check: query.CheckNondeterministic, Detail: "the query calls now"},
+		{Check: lint.CheckRuleSelectStar, Detail: "the query selects *"},
+		{Check: lint.CheckRuleNondeterministic, Detail: "the query calls now"},
 	}
 
 	src := source.Source{Name: "payments_prod"}
@@ -47,10 +47,10 @@ func TestInspectionProblemsCarrySeverityFromPolicy(t *testing.T) {
 		}
 	}
 
-	if got := bySeverity[policy.CheckRuleSelectStar]; got != lint.SeverityError {
+	if got := bySeverity[lint.CheckRuleSelectStar]; got != lint.SeverityError {
 		t.Errorf("select-star severity = %v, want the configured error", got)
 	}
-	if got := bySeverity[policy.CheckRuleNondeterministic]; got != lint.SeverityWarning {
+	if got := bySeverity[lint.CheckRuleNondeterministic]; got != lint.SeverityWarning {
 		t.Errorf("nondeterministic severity = %v, want the default warning", got)
 	}
 }
@@ -58,10 +58,10 @@ func TestInspectionProblemsCarrySeverityFromPolicy(t *testing.T) {
 // A check turned off produces no finding, so nothing it noticed is reported.
 func TestInspectionProblemsDropsChecksTurnedOff(t *testing.T) {
 	merged := policy.Merge(&policy.Policy{Checks: map[string]policy.Setting{
-		policy.CheckRuleNondeterministic: {Severity: lint.SeverityOff},
+		lint.CheckRuleNondeterministic: {Severity: lint.SeverityOff},
 	}})
 
-	findings := []query.Finding{{Check: query.CheckNondeterministic, Detail: "the query calls now"}}
+	findings := []query.Finding{{Check: lint.CheckRuleNondeterministic, Detail: "the query calls now"}}
 
 	src := source.Source{Name: "s"}
 	if problems := inspectionProblems("f.yaml", "A", 1, src, merged, findings, time.Now()); len(problems) != 0 {
@@ -73,7 +73,7 @@ func TestInspectionProblemsDropsChecksTurnedOff(t *testing.T) {
 // run, so there is no severity to resolve and it always blocks.
 func TestInspectionProblemsAlwaysBlocksOnSyntax(t *testing.T) {
 	merged := policy.Merge()
-	findings := []query.Finding{{Check: query.CheckSyntax, Detail: "Syntax error at position 18"}}
+	findings := []query.Finding{{Check: lint.CheckRuleSyntax, Detail: "Syntax error at position 18"}}
 
 	src := source.Source{Name: "s"}
 	problems := inspectionProblems("f.yaml", "A", 1, src, merged, findings, time.Now())
@@ -89,8 +89,8 @@ func TestInspectionProblemsAlwaysBlocksOnSyntax(t *testing.T) {
 // so a check at severity off is never even looked for.
 func TestChecksFromPolicy(t *testing.T) {
 	merged := policy.Merge(&policy.Policy{Checks: map[string]policy.Setting{
-		policy.CheckRuleTableFunction:    {Severity: lint.SeverityError, Keys: []string{"merge"}},
-		policy.CheckRuleNondeterministic: {Severity: lint.SeverityOff},
+		lint.CheckRuleTableFunction:    {Severity: lint.SeverityError, Keys: []string{"merge"}},
+		lint.CheckRuleNondeterministic: {Severity: lint.SeverityOff},
 	}})
 
 	got := checksFromPolicy(merged, "otel")
@@ -110,7 +110,7 @@ func TestChecksFromPolicyCarriesTheSourceDatabase(t *testing.T) {
 	}
 
 	off := policy.Merge(&policy.Policy{Checks: map[string]policy.Setting{
-		policy.CheckRuleForeignTable: {Severity: lint.SeverityOff},
+		lint.CheckRuleForeignTable: {Severity: lint.SeverityOff},
 	}})
 	if got := checksFromPolicy(off, "otel"); got.Database != "" {
 		t.Errorf("database = %q, want none: the check is off", got.Database)
@@ -119,9 +119,9 @@ func TestChecksFromPolicyCarriesTheSourceDatabase(t *testing.T) {
 
 func TestChecksFromPolicyReadsTheComplexityCeilings(t *testing.T) {
 	got := checksFromPolicy(policy.Merge(&policy.Policy{Checks: map[string]policy.Setting{
-		policy.CheckRuleComplexity: {
+		lint.CheckRuleComplexity: {
 			Severity: lint.SeverityWarning,
-			Keys:     []string{policy.LimitJoins + ":1", policy.LimitSubqueries + ":4"},
+			Keys:     []string{lint.LimitJoins + ":1", lint.LimitSubqueries + ":4"},
 		},
 	}}), "otel")
 
@@ -133,7 +133,7 @@ func TestChecksFromPolicyReadsTheComplexityCeilings(t *testing.T) {
 	}
 
 	off := policy.Merge(&policy.Policy{Checks: map[string]policy.Setting{
-		policy.CheckRuleComplexity: {Severity: lint.SeverityOff},
+		lint.CheckRuleComplexity: {Severity: lint.SeverityOff},
 	}})
 	if got := checksFromPolicy(off, "otel"); got.Complexity != nil {
 		t.Errorf("ceilings = %+v, want none: the check is off", *got.Complexity)
@@ -146,14 +146,14 @@ func TestInspectionProblemsHonoursAnExemption(t *testing.T) {
 	src := source.Source{
 		Name: "otel_shared",
 		Exemptions: []source.Exemption{{
-			Check:  policy.CheckRuleForeignTable,
+			Check:  lint.CheckRuleForeignTable,
 			Reason: "system.parts is granted here on purpose",
 			Until:  time.Date(2026, 12, 1, 0, 0, 0, 0, time.UTC),
 		}},
 	}
 	findings := []query.Finding{
-		{Check: query.CheckForeignTable, Detail: "the query reads system.parts"},
-		{Check: query.CheckSelectStar, Detail: "the query selects *"},
+		{Check: lint.CheckRuleForeignTable, Detail: "the query reads system.parts"},
+		{Check: lint.CheckRuleSelectStar, Detail: "the query selects *"},
 	}
 
 	now := time.Date(2026, 9, 22, 0, 0, 0, 0, time.UTC)
@@ -162,7 +162,7 @@ func TestInspectionProblemsHonoursAnExemption(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("got %v, want the exempted finding dropped and the other kept", got)
 	}
-	if got[0].Check != policy.CheckRuleSelectStar {
+	if got[0].Check != lint.CheckRuleSelectStar {
 		t.Errorf("kept %q, want the check nobody exempted", got[0].Check)
 	}
 }
@@ -173,12 +173,12 @@ func TestInspectionProblemsIgnoresAnExpiredExemption(t *testing.T) {
 	src := source.Source{
 		Name: "otel_shared",
 		Exemptions: []source.Exemption{{
-			Check:  policy.CheckRuleForeignTable,
+			Check:  lint.CheckRuleForeignTable,
 			Reason: "system.parts is granted here on purpose",
 			Until:  time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
 		}},
 	}
-	findings := []query.Finding{{Check: query.CheckForeignTable, Detail: "the query reads system.parts"}}
+	findings := []query.Finding{{Check: lint.CheckRuleForeignTable, Detail: "the query reads system.parts"}}
 
 	now := time.Date(2026, 9, 22, 0, 0, 0, 0, time.UTC)
 	if got := inspectionProblems("f.yaml", "A", 1, src, policy.Merge(), findings, now); len(got) != 1 {
@@ -193,11 +193,11 @@ func TestInspectionProblemsNeverExemptsAFixedCheck(t *testing.T) {
 	src := source.Source{
 		Name: "otel_shared",
 		Exemptions: []source.Exemption{{
-			Check: query.CheckSettings,
+			Check: lint.CheckRuleSettings,
 			Until: time.Date(2026, 12, 1, 0, 0, 0, 0, time.UTC),
 		}},
 	}
-	findings := []query.Finding{{Check: query.CheckSettings, Detail: "the query sets its own SETTINGS"}}
+	findings := []query.Finding{{Check: lint.CheckRuleSettings, Detail: "the query sets its own SETTINGS"}}
 
 	now := time.Date(2026, 9, 22, 0, 0, 0, 0, time.UTC)
 	if got := inspectionProblems("f.yaml", "A", 1, src, policy.Merge(), findings, now); len(got) != 1 {

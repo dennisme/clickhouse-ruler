@@ -9,28 +9,8 @@ import (
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2"
-)
 
-// Assertion names in the ClickHouse user contract (spec 6.7.2). Each is
-// reported separately so a finding says which half of the contract is
-// missing, rather than that something about the user is wrong.
-const (
-	// AssertionSourcesRevoked is the tenancy half: a rule must not be able to
-	// read data the row policies never see.
-	AssertionSourcesRevoked = "sources-revoked"
-
-	// AssertionReadonly is that a rule cannot mutate anything, and that the
-	// ruler can still send the per-query limits it is supposed to send.
-	AssertionReadonly = "readonly"
-
-	// AssertionConstraints is that those limits cannot be raised by the query
-	// they are sent with.
-	AssertionConstraints = "constraints"
-
-	// AssertionTableReadable is the other direction: the grant that has to be
-	// there. Without it every evaluation fails, and finding that out in CI is
-	// better than finding it out on the first tick.
-	AssertionTableReadable = "table-readable"
+	"github.com/dennisme/clickhouse-ruler/internal/lint"
 )
 
 // probeTimeout bounds one probe.
@@ -85,16 +65,6 @@ type Assertion struct {
 
 	// Detail says what was observed. Empty on a pass.
 	Detail string
-}
-
-// Assertions lists every assertion in report order.
-func Assertions() []string {
-	return []string{
-		AssertionSourcesRevoked,
-		AssertionReadonly,
-		AssertionConstraints,
-		AssertionTableReadable,
-	}
 }
 
 // probes are the queries that are supposed to be refused.
@@ -158,13 +128,13 @@ func (q *Querier) Privileges(ctx context.Context, require []string) []Assertion 
 
 	for _, name := range selected(require) {
 		switch name {
-		case AssertionSourcesRevoked:
+		case lint.AssertionSourcesRevoked:
 			out = append(out, q.assertSourcesRevoked(ctx))
-		case AssertionReadonly:
+		case lint.AssertionReadonly:
 			out = append(out, q.assertReadonly(ctx))
-		case AssertionConstraints:
+		case lint.AssertionConstraints:
 			out = append(out, q.assertConstraints(ctx))
-		case AssertionTableReadable:
+		case lint.AssertionTableReadable:
 			out = append(out, q.assertTableReadable(ctx))
 		}
 	}
@@ -181,7 +151,7 @@ func selected(require []string) []string {
 	}
 
 	var out []string
-	for _, name := range Assertions() {
+	for _, name := range lint.Assertions() {
 		if want[name] {
 			out = append(out, name)
 		}
@@ -206,18 +176,18 @@ func (q *Querier) assertSourcesRevoked(ctx context.Context) Assertion {
 	switch {
 	case len(granted) > 0:
 		return Assertion{
-			Name:   AssertionSourcesRevoked,
+			Name:   lint.AssertionSourcesRevoked,
 			Status: StatusFail,
 			Detail: "a rule can read data the row policies never see: " + strings.Join(granted, ", "),
 		}
 	case len(unknown) > 0:
 		return Assertion{
-			Name:   AssertionSourcesRevoked,
+			Name:   lint.AssertionSourcesRevoked,
 			Status: StatusInconclusive,
 			Detail: strings.Join(unknown, ", "),
 		}
 	default:
-		return Assertion{Name: AssertionSourcesRevoked, Status: StatusPass}
+		return Assertion{Name: lint.AssertionSourcesRevoked, Status: StatusPass}
 	}
 }
 
@@ -278,7 +248,7 @@ func (q *Querier) assertTableReadable(ctx context.Context) Assertion {
 	sql := fmt.Sprintf("SELECT 1 FROM %s.%s LIMIT 0", quoteIdent(q.src.Database), quoteIdent(q.src.Table))
 
 	status, detail := classifyReadable(q.conn.Exec(ctx, sql))
-	return Assertion{Name: AssertionTableReadable, Status: status, Detail: detail}
+	return Assertion{Name: lint.AssertionTableReadable, Status: status, Detail: detail}
 }
 
 // classifyReadable reads the outcome of the one query that has to succeed.
@@ -306,7 +276,7 @@ func classifyReadable(err error) (Status, string) {
 func (q *Querier) assertReadonly(ctx context.Context) Assertion {
 	rows, err := q.settingRows(ctx, []string{"readonly"})
 	if err != nil {
-		return Assertion{Name: AssertionReadonly, Status: StatusInconclusive, Detail: err.Error()}
+		return Assertion{Name: lint.AssertionReadonly, Status: StatusInconclusive, Detail: err.Error()}
 	}
 	return evalReadonly(rows)
 }
@@ -322,7 +292,7 @@ func evalReadonly(rows []settingRow) Assertion {
 	row, ok := rowNamed(rows, "readonly")
 	if !ok {
 		return Assertion{
-			Name:   AssertionReadonly,
+			Name:   lint.AssertionReadonly,
 			Status: StatusInconclusive,
 			Detail: "system.settings returned no row for readonly",
 		}
@@ -331,18 +301,18 @@ func evalReadonly(rows []settingRow) Assertion {
 	switch {
 	case row.Value != "2":
 		return Assertion{
-			Name:   AssertionReadonly,
+			Name:   lint.AssertionReadonly,
 			Status: StatusFail,
 			Detail: fmt.Sprintf("readonly is %s, want 2: 0 lets a rule write, 1 refuses the settings the ruler sends", row.Value),
 		}
 	case !row.constant():
 		return Assertion{
-			Name:   AssertionReadonly,
+			Name:   lint.AssertionReadonly,
 			Status: StatusFail,
 			Detail: "readonly is 2 but not const, so a query can lower it",
 		}
 	default:
-		return Assertion{Name: AssertionReadonly, Status: StatusPass}
+		return Assertion{Name: lint.AssertionReadonly, Status: StatusPass}
 	}
 }
 
@@ -355,7 +325,7 @@ func (q *Querier) assertConstraints(ctx context.Context) Assertion {
 
 	rows, err := q.settingRows(ctx, names)
 	if err != nil {
-		return Assertion{Name: AssertionConstraints, Status: StatusInconclusive, Detail: err.Error()}
+		return Assertion{Name: lint.AssertionConstraints, Status: StatusInconclusive, Detail: err.Error()}
 	}
 	return evalConstraints(rows)
 }
@@ -387,12 +357,12 @@ func evalConstraints(rows []settingRow) Assertion {
 
 	if len(unconstrained) > 0 {
 		return Assertion{
-			Name:   AssertionConstraints,
+			Name:   lint.AssertionConstraints,
 			Status: StatusFail,
 			Detail: "a rule can raise these in its own SETTINGS clause: " + strings.Join(unconstrained, ", "),
 		}
 	}
-	return Assertion{Name: AssertionConstraints, Status: StatusPass}
+	return Assertion{Name: lint.AssertionConstraints, Status: StatusPass}
 }
 
 func rowNamed(rows []settingRow, name string) (settingRow, bool) {

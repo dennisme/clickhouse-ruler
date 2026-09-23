@@ -10,7 +10,7 @@ func scope(file string, sev lint.Severity, keys ...string) *Policy {
 	return &Policy{
 		File: file,
 		Checks: map[string]Setting{
-			CheckLabelsRequired: {Severity: sev, Keys: keys, File: file, Line: 1},
+			lint.CheckLabelsRequired: {Severity: sev, Keys: keys, File: file, Line: 1},
 		},
 	}
 }
@@ -23,7 +23,7 @@ func TestMergeTakesStrictestSeverity(t *testing.T) {
 		scope("ruler.yaml", lint.SeverityWarning),
 		scope("sources.yaml", lint.SeverityError),
 	)
-	if s := got.For(CheckLabelsRequired).Severity; s != lint.SeverityError {
+	if s := got.For(lint.CheckLabelsRequired).Severity; s != lint.SeverityError {
 		t.Errorf("severity = %v, want error", s)
 	}
 }
@@ -33,7 +33,7 @@ func TestMergeCannotLowerSeverity(t *testing.T) {
 		scope("sources.yaml", lint.SeverityError),
 		scope("team.yaml", lint.SeverityOff),
 	)
-	if s := got.For(CheckLabelsRequired).Severity; s != lint.SeverityError {
+	if s := got.For(lint.CheckLabelsRequired).Severity; s != lint.SeverityError {
 		t.Errorf("severity = %v, want error: a later scope must not loosen an earlier one", s)
 	}
 }
@@ -45,8 +45,8 @@ func TestMergeIsOrderIndependent(t *testing.T) {
 	a := scope("a.yaml", lint.SeverityWarning, "team")
 	b := scope("b.yaml", lint.SeverityError, "tier")
 
-	ab := Merge(a, b).For(CheckLabelsRequired)
-	ba := Merge(b, a).For(CheckLabelsRequired)
+	ab := Merge(a, b).For(lint.CheckLabelsRequired)
+	ba := Merge(b, a).For(lint.CheckLabelsRequired)
 
 	if ab.Severity != ba.Severity {
 		t.Errorf("severity depends on order: %v vs %v", ab.Severity, ba.Severity)
@@ -63,7 +63,7 @@ func TestMergeUnionsKeys(t *testing.T) {
 	got := Merge(
 		scope("ruler.yaml", lint.SeverityWarning, "team", "severity"),
 		scope("sources.yaml", lint.SeverityWarning, "tier", "team"),
-	).For(CheckLabelsRequired)
+	).For(lint.CheckLabelsRequired)
 
 	want := []string{"severity", "team", "tier"}
 	if len(got.Keys) != len(want) {
@@ -83,7 +83,7 @@ func TestMergeKeepsOriginOfWinningScope(t *testing.T) {
 	got := Merge(
 		scope("ruler.yaml", lint.SeverityWarning),
 		scope("sources.yaml", lint.SeverityError),
-	).For(CheckLabelsRequired)
+	).For(lint.CheckLabelsRequired)
 
 	if got.File != "sources.yaml" {
 		t.Errorf("origin = %q, want sources.yaml, the scope that raised it", got.File)
@@ -93,7 +93,7 @@ func TestMergeKeepsOriginOfWinningScope(t *testing.T) {
 // Merging nothing is legal and yields the defaults, which is what happens when
 // no policy file exists anywhere.
 func TestMergeWithNoScopesGivesDefaults(t *testing.T) {
-	if s := Merge().For(CheckLabelsRequired).Severity; s != lint.SeverityWarning {
+	if s := Merge().For(lint.CheckLabelsRequired).Severity; s != lint.SeverityWarning {
 		t.Errorf("severity = %v, want the default warning", s)
 	}
 }
@@ -104,7 +104,7 @@ func TestMergeWithNoScopesGivesDefaults(t *testing.T) {
 // setting that means "nobody is asked" could be written and never took
 // effect (spec 7.6).
 func TestMergeLetsAnOperatorTurnACheckOff(t *testing.T) {
-	got := Merge(scope("ruler.yaml", lint.SeverityOff)).For(CheckLabelsRequired)
+	got := Merge(scope("ruler.yaml", lint.SeverityOff)).For(lint.CheckLabelsRequired)
 
 	if got.Severity != lint.SeverityOff {
 		t.Errorf("severity = %v, want off", got.Severity)
@@ -115,7 +115,7 @@ func TestMergeLetsAnOperatorTurnACheckOff(t *testing.T) {
 func TestMergeLeavesUnconfiguredChecksAtTheirDefaults(t *testing.T) {
 	got := Merge(scope("ruler.yaml", lint.SeverityOff))
 
-	if s := got.For(CheckAnnotationsRunbook).Severity; s != lint.SeverityWarning {
+	if s := got.For(lint.CheckAnnotationsRunbook).Severity; s != lint.SeverityWarning {
 		t.Errorf("annotations/runbook severity = %v, want the default warning", s)
 	}
 }
@@ -123,7 +123,7 @@ func TestMergeLeavesUnconfiguredChecksAtTheirDefaults(t *testing.T) {
 // A scope may add keys and may not drop the shipped ones, so a check turned
 // up by one scope still requires everything the defaults asked for.
 func TestMergeKeepsDefaultKeys(t *testing.T) {
-	got := Merge(scope("ruler.yaml", lint.SeverityError, "tier")).For(CheckLabelsRequired)
+	got := Merge(scope("ruler.yaml", lint.SeverityError, "tier")).For(lint.CheckLabelsRequired)
 
 	want := []string{"severity", "team", "tier"}
 	if len(got.Keys) != len(want) {
@@ -142,13 +142,13 @@ func TestMergeKeepsDefaultKeys(t *testing.T) {
 // may loosen another (spec 7.7).
 func TestMergeIntersectsAnAllowlist(t *testing.T) {
 	instance := &Policy{Checks: map[string]Setting{
-		CheckRuleTableFunction: {Severity: lint.SeverityError, Keys: []string{"merge", "numbers"}},
+		lint.CheckRuleTableFunction: {Severity: lint.SeverityError, Keys: []string{"merge", "numbers"}},
 	}}
 	source := &Policy{Checks: map[string]Setting{
-		CheckRuleTableFunction: {Severity: lint.SeverityError, Keys: []string{"numbers", "remote"}},
+		lint.CheckRuleTableFunction: {Severity: lint.SeverityError, Keys: []string{"numbers", "remote"}},
 	}}
 
-	got := Merge(instance, source).For(CheckRuleTableFunction)
+	got := Merge(instance, source).For(lint.CheckRuleTableFunction)
 	if len(got.Keys) != 1 || got.Keys[0] != "numbers" {
 		t.Errorf("keys = %v, want only the one both scopes allow", got.Keys)
 	}
@@ -158,14 +158,14 @@ func TestMergeIntersectsAnAllowlist(t *testing.T) {
 // commutative and there is still no precedence rule to remember.
 func TestMergeAllowlistIsOrderIndependent(t *testing.T) {
 	a := &Policy{Checks: map[string]Setting{
-		CheckRuleTableFunction: {Severity: lint.SeverityError, Keys: []string{"merge", "numbers"}},
+		lint.CheckRuleTableFunction: {Severity: lint.SeverityError, Keys: []string{"merge", "numbers"}},
 	}}
 	b := &Policy{Checks: map[string]Setting{
-		CheckRuleTableFunction: {Severity: lint.SeverityError, Keys: []string{"numbers"}},
+		lint.CheckRuleTableFunction: {Severity: lint.SeverityError, Keys: []string{"numbers"}},
 	}}
 
-	ab := Merge(a, b).For(CheckRuleTableFunction).Keys
-	ba := Merge(b, a).For(CheckRuleTableFunction).Keys
+	ab := Merge(a, b).For(lint.CheckRuleTableFunction).Keys
+	ba := Merge(b, a).For(lint.CheckRuleTableFunction).Keys
 	if len(ab) != len(ba) || ab[0] != ba[0] {
 		t.Errorf("keys depend on order: %v vs %v", ab, ba)
 	}
@@ -175,13 +175,13 @@ func TestMergeAllowlistIsOrderIndependent(t *testing.T) {
 // only reason one is ever allowed, and one scope alone cannot widen it past
 // what another scope permits.
 func TestMergeAllowlistStartsEmpty(t *testing.T) {
-	if keys := Defaults().For(CheckRuleTableFunction).Keys; len(keys) != 0 {
+	if keys := Defaults().For(lint.CheckRuleTableFunction).Keys; len(keys) != 0 {
 		t.Errorf("default allowlist = %v, want empty: every table function is refused", keys)
 	}
 
 	got := Merge(&Policy{Checks: map[string]Setting{
-		CheckRuleTableFunction: {Severity: lint.SeverityError, Keys: []string{"numbers"}},
-	}}).For(CheckRuleTableFunction)
+		lint.CheckRuleTableFunction: {Severity: lint.SeverityError, Keys: []string{"numbers"}},
+	}}).For(lint.CheckRuleTableFunction)
 
 	if len(got.Keys) != 1 || got.Keys[0] != "numbers" {
 		t.Errorf("keys = %v, want the one the only scope permitted", got.Keys)
