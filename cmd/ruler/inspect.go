@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/dennisme/clickhouse-ruler/internal/lint"
 	"github.com/dennisme/clickhouse-ruler/internal/policy"
@@ -19,6 +20,10 @@ import (
 func inspectRules(ctx context.Context, set *ruleset.Set, root *policy.Policy) []lint.Problem {
 	var problems []lint.Problem
 
+	// One instant for the whole pass, so a long run cannot expire an
+	// exemption halfway through and report the same rule two ways.
+	now := time.Now()
+
 	queriers := map[string]*query.Querier{}
 	defer func() {
 		for _, q := range queriers {
@@ -30,7 +35,7 @@ func inspectRules(ctx context.Context, set *ruleset.Set, root *policy.Policy) []
 		for _, src := range r.Sources {
 			merged := policy.Merge(root, src.Policy)
 
-			checks := checksFromPolicy(merged)
+			checks := checksFromPolicy(merged, src.Database)
 
 			q, err := querierFor(queriers, src)
 			if err != nil {
@@ -44,7 +49,7 @@ func inspectRules(ctx context.Context, set *ruleset.Set, root *policy.Policy) []
 				continue
 			}
 			problems = append(problems,
-				inspectionProblems(r.File, r.Alert, r.Line(), src.Name, merged, findings)...)
+				inspectionProblems(r.File, r.Alert, r.Line(), src, merged, findings, now)...)
 		}
 	}
 	return problems
@@ -68,7 +73,7 @@ func querierFor(open map[string]*query.Querier, src source.Source) (*query.Queri
 // checksFromPolicy translates the resolved policy into what to look for. A
 // check at severity off is not looked for at all, rather than looked for and
 // discarded.
-func checksFromPolicy(p *policy.Policy) query.Checks {
+func checksFromPolicy(p *policy.Policy, database string) query.Checks {
 	var c query.Checks
 
 	if tf := p.For(policy.CheckRuleTableFunction); tf.Severity != lint.SeverityOff {
@@ -76,6 +81,27 @@ func checksFromPolicy(p *policy.Policy) query.Checks {
 	}
 	if nd := p.For(policy.CheckRuleNondeterministic); nd.Severity != lint.SeverityOff {
 		c.Nondeterministic = nd.Keys
+	}
+	if ft := p.For(policy.CheckRuleForeignTable); ft.Severity != lint.SeverityOff {
+		c.Database = database
+	}
+	if cx := p.For(policy.CheckRuleComplexity); cx.Severity != lint.SeverityOff {
+		joins, hasJoins := cx.Limit(policy.LimitJoins)
+		subqueries, hasSubqueries := cx.Limit(policy.LimitSubqueries)
+
+		// Either ceiling alone is a check worth running, and a missing one
+		// keeps its default rather than becoming zero, which would refuse
+		// every join an operator never said anything about.
+		if hasJoins || hasSubqueries {
+			d := policy.Defaults().For(policy.CheckRuleComplexity)
+			if !hasJoins {
+				joins, _ = d.Limit(policy.LimitJoins)
+			}
+			if !hasSubqueries {
+				subqueries, _ = d.Limit(policy.LimitSubqueries)
+			}
+			c.Complexity = &query.Complexity{MaxJoins: joins, MaxSubqueries: subqueries}
+		}
 	}
 	return c
 }
@@ -88,9 +114,10 @@ func checksFromPolicy(p *policy.Policy) query.Checks {
 func inspectionProblems(
 	file, alert string,
 	line int,
-	sourceName string,
+	src source.Source,
 	merged *policy.Policy,
 	findings []query.Finding,
+	now time.Time,
 ) []lint.Problem {
 	var problems []lint.Problem
 
@@ -106,13 +133,21 @@ func inspectionProblems(
 			continue
 		}
 
+		// An exemption is read after the severity, not merged into it, so
+		// "the strictest scope wins" stays true of policy. It drops one
+		// check on one source, and only a check that could be configured
+		// anyway: nothing that blocks can be exempted (spec 7.7).
+		if policy.Configurable(f.Check) && src.Exempts(f.Check, now) {
+			continue
+		}
+
 		problems = append(problems, lint.Problem{
 			File:       file,
 			Line:       line,
 			Subject:    alert,
 			Check:      f.Check,
 			Severity:   severity,
-			Text:       fmt.Sprintf("against source %s: %s", sourceName, f.Detail),
+			Text:       fmt.Sprintf("against source %s: %s", src.Name, f.Detail),
 			PolicyFile: origin.File,
 			PolicyLine: origin.Line,
 		})

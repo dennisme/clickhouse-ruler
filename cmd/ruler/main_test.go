@@ -281,3 +281,59 @@ func TestCheckExplainStaysOffStdoutInGitHubMode(t *testing.T) {
 		t.Errorf("explanation should be on stderr, got: %s", stderr)
 	}
 }
+
+// An exemption that has run out fails the build. The date is what makes an
+// exemption a decision with an end: whoever renews it states the reason
+// again, in front of a reviewer (spec 7.7).
+func TestCheckBlocksAnExpiredExemption(t *testing.T) {
+	dir := fixture(t, bareRule, "")
+
+	expired := sourcesYAML + `    exempt:
+      - check: rule/select-star
+        reason: the schema here was frozen while the table was retired
+        until: 2020-01-01
+`
+	if err := os.WriteFile(filepath.Join(dir, "sources.yaml"), []byte(expired), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	code, stdout, _ := runCheck(t, "check",
+		"--sources", filepath.Join(dir, "sources.yaml"),
+		filepath.Join(dir, "rules"))
+
+	if code == 0 {
+		t.Errorf("exit = 0, want non-zero for an expired exemption\n%s", stdout)
+	}
+	if !strings.Contains(stdout, "source/exemption") {
+		t.Errorf("expected a source/exemption finding, got:\n%s", stdout)
+	}
+	if !strings.Contains(stdout, "rule/select-star") {
+		t.Errorf("the finding must name the check it exempted, got:\n%s", stdout)
+	}
+}
+
+// An exemption is invisible until it drops a finding somebody expected, so
+// --explain names it alongside the policy it sits beside (spec 7.8).
+func TestExplainListsExemptions(t *testing.T) {
+	dir := fixture(t, bareRule, "")
+
+	exempting := sourcesYAML + `    exempt:
+      - check: rule/select-star
+        reason: the schema here is frozen until the table is retired
+        until: 2099-01-01
+`
+	if err := os.WriteFile(filepath.Join(dir, "sources.yaml"), []byte(exempting), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, stdout, _ := runCheck(t, "check",
+		"--sources", filepath.Join(dir, "sources.yaml"),
+		"--explain",
+		filepath.Join(dir, "rules"))
+
+	for _, want := range []string{"exempt", "rule/select-star", "2099-01-01", "frozen"} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("explain should carry %q, got:\n%s", want, stdout)
+		}
+	}
+}

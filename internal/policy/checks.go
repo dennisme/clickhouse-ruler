@@ -2,6 +2,8 @@ package policy
 
 import (
 	"sort"
+	"strconv"
+	"strings"
 
 	"github.com/dennisme/clickhouse-ruler/internal/lint"
 )
@@ -11,6 +13,7 @@ const (
 	checkPolicyUnknown  = "policy/unknown-check"
 	checkPolicyFixed    = "policy/fixed-check"
 	checkPolicySeverity = "policy/severity"
+	checkPolicyLimit    = "policy/check-limit"
 )
 
 // Check names that can be configured. The rest are correctness checks.
@@ -33,6 +36,8 @@ const (
 	CheckRuleSelectStar       = "rule/select-star"
 	CheckRuleTableFunction    = "rule/table-function"
 	CheckRuleNondeterministic = "rule/nondeterministic"
+	CheckRuleForeignTable     = "rule/foreign-table"
+	CheckRuleComplexity       = "rule/complexity"
 
 	// CheckSourcePrivileges is a check on a source's ClickHouse user rather
 	// than on any rule, and its severity governs the report and never the
@@ -78,10 +83,19 @@ var fixed = map[string]bool{
 	"rule/syntax":  true,
 	"rule/inspect": true,
 
+	// A rule's own SETTINGS clause replaces the execution time, memory and row
+	// limits the ruler sends with every evaluation, so what it overrides is
+	// the thing that keeps a rule from costing the cluster whatever it likes.
+	// Nothing here reasons about which settings are harmless: one clause is
+	// enough, and the profile constraints are the backstop for anything that
+	// gets past this (spec 6.7, 7.3).
+	"rule/settings": true,
+
 	"rule/protected-label": true,
 	checkPolicyUnknown:     true,
 	checkPolicyFixed:       true,
 	checkPolicySeverity:    true,
+	checkPolicyLimit:       true,
 }
 
 // defaults are the shipped settings for every configurable check.
@@ -147,6 +161,69 @@ var defaults = map[string]Setting{
 		Severity: lint.SeverityWarning,
 		Keys:     nondeterministicFunctions,
 	},
+
+	// A warning because the grants are what stop a read outside the source's
+	// database (spec 6.7.1). This check is early feedback: an author hears in
+	// the pull request rather than from a rule that fails against one cluster
+	// at evaluation time. It is configurable because a source whose user is
+	// deliberately granted a second database is a legitimate setup, and an
+	// operator running one should be able to say so.
+	CheckRuleForeignTable: {Severity: lint.SeverityWarning},
+
+	// Joins and subqueries are a cost proxy that reads no data, so this is
+	// the only thing tier 1 can say about cost at all. It is a warning and
+	// the ceilings are generous: a count is a crude stand-in for what a query
+	// costs, and a crude measure that blocks gets switched off (spec 7.3).
+	CheckRuleComplexity: {
+		Severity: lint.SeverityWarning,
+		Keys:     []string{LimitJoins + ":2", LimitSubqueries + ":2"},
+	},
+}
+
+// The ceilings rule/complexity counts against, written into its key list as
+// name:N so one setting carries both.
+const (
+	LimitJoins      = "max-joins"
+	LimitSubqueries = "max-subqueries"
+)
+
+// limitChecks are the checks whose keys are ceilings rather than names. Their
+// keys are validated when a policy file is read, because a ceiling that does
+// not parse would otherwise leave an operator believing they had set a limit
+// that never applied.
+var limitChecks = map[string][]string{
+	CheckRuleComplexity: {LimitJoins, LimitSubqueries},
+}
+
+// limited reports whether a check's keys are ceilings.
+func limited(check string) bool {
+	_, ok := limitChecks[check]
+	return ok
+}
+
+// Limit reads a ceiling from a check's key list.
+//
+// The lowest value wins when a name appears more than once. Merge unions key
+// lists, so both scopes' ceilings survive the merge and the stricter one is
+// the one that binds, which is how every other setting here behaves: no
+// scope may loosen another (spec 7.7).
+func (s Setting) Limit(name string) (int, bool) {
+	out, found := 0, false
+
+	for _, key := range s.Keys {
+		got, value, ok := strings.Cut(key, ":")
+		if !ok || got != name {
+			continue
+		}
+		n, err := strconv.Atoi(value)
+		if err != nil || n < 0 {
+			continue
+		}
+		if !found || n < out {
+			out, found = n, true
+		}
+	}
+	return out, found
 }
 
 // nondeterministicFunctions break window alignment and make a replay lie: a
@@ -172,6 +249,10 @@ var nondeterministicFunctions = []string{
 // scopes intersect it. Unioning one would let a source permit a table
 // function the instance policy refused, and no scope may loosen another
 // (spec 7.7).
+//
+// rule/complexity is neither. Its keys are ceilings, so the direction lives
+// in how they are read rather than in how the lists combine: the lists union
+// and Setting.Limit takes the lowest value, which is the strict one.
 var allowlists = map[string]bool{
 	CheckRuleTableFunction: true,
 }

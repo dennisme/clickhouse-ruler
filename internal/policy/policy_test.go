@@ -132,3 +132,76 @@ func TestSourcePrivilegesMergeIsStrictest(t *testing.T) {
 		t.Errorf("keys = %v, want the default four unioned with both scopes", got.Keys)
 	}
 }
+
+// The ceilings ride on the same key list every other configurable check
+// uses, written as name:N so one Setting carries both.
+func TestComplexityLimits(t *testing.T) {
+	got := Defaults().For(CheckRuleComplexity)
+
+	if got.Severity != lint.SeverityWarning {
+		t.Errorf("severity = %v, want warning", got.Severity)
+	}
+	for _, name := range []string{LimitJoins, LimitSubqueries} {
+		if _, ok := got.Limit(name); !ok {
+			t.Errorf("%s has no default ceiling", name)
+		}
+	}
+	if _, ok := got.Limit("max-something-else"); ok {
+		t.Error("a ceiling nobody set was read from the key list")
+	}
+}
+
+// Merge unions key lists, so both scopes' ceilings survive and the lowest is
+// the one that binds. That is what keeps a scope from loosening another.
+func TestComplexityLimitTakesTheLowest(t *testing.T) {
+	instance := &Policy{Checks: map[string]Setting{
+		CheckRuleComplexity: {Severity: lint.SeverityWarning, Keys: []string{LimitJoins + ":1"}},
+	}}
+	source := &Policy{Checks: map[string]Setting{
+		CheckRuleComplexity: {Severity: lint.SeverityWarning, Keys: []string{LimitJoins + ":9"}},
+	}}
+
+	got, ok := Merge(instance, source).For(CheckRuleComplexity).Limit(LimitJoins)
+	if !ok {
+		t.Fatal("the merged policy has no join ceiling")
+	}
+	if got != 1 {
+		t.Errorf("joins ceiling = %d, want 1: a scope cannot raise another's ceiling", got)
+	}
+}
+
+// A ceiling that does not parse is not a ceiling. Reading it as the default
+// would leave an operator believing they had set a limit that never applied.
+func TestParseRejectsAMalformedLimit(t *testing.T) {
+	in := []byte("checks:\n  rule/complexity:\n    keys: [max-joins, max-subqueries:many]\n")
+
+	_, problems := Parse("ruler.yaml", in)
+	if len(problems) != 2 {
+		t.Fatalf("got %d problems, want one per malformed key: %v", len(problems), problems)
+	}
+	for _, p := range problems {
+		if p.Check != checkPolicyLimit {
+			t.Errorf("check = %q, want %s", p.Check, checkPolicyLimit)
+		}
+		if p.Severity != lint.SeverityError {
+			t.Errorf("severity = %v, want error", p.Severity)
+		}
+	}
+}
+
+// The shipped ceilings apply when nobody sets any. They are not a maximum a
+// scope may not raise: an operator who means to permit a fourth join says so
+// and that is what binds.
+func TestComplexityScopeMayRaiseTheShippedCeiling(t *testing.T) {
+	p := &Policy{Checks: map[string]Setting{
+		CheckRuleComplexity: {Severity: lint.SeverityWarning, Keys: []string{LimitJoins + ":4"}},
+	}}
+
+	got, ok := Merge(p).For(CheckRuleComplexity).Limit(LimitJoins)
+	if !ok {
+		t.Fatal("the merged policy has no join ceiling")
+	}
+	if got != 4 {
+		t.Errorf("joins ceiling = %d, want 4", got)
+	}
+}

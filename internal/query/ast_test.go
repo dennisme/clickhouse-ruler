@@ -120,6 +120,65 @@ func TestSelectsEverythingReachesIntoASubquery(t *testing.T) {
 	}
 }
 
+// A SETTINGS clause is a bare `Set` node carrying nothing, so position is all
+// there is to read, and it has to be read inside a subquery too: a clause
+// nested one level down overrides the ruler's limits the same as one at the
+// top.
+func TestSetsSettings(t *testing.T) {
+	for _, name := range []string{"ast_settings.txt", "ast_settings_in_subquery.txt"} {
+		if !setsSettings(readAST(t, name)) {
+			t.Errorf("setsSettings = false for %s", name)
+		}
+	}
+	if setsSettings(readAST(t, "ast_plain.txt")) {
+		t.Error("setsSettings = true for a query with no SETTINGS clause")
+	}
+}
+
+func TestForeignTables(t *testing.T) {
+	got := foreignTables(readAST(t, "ast_foreign_table.txt"), "otel")
+
+	if len(got) != 1 {
+		t.Fatalf("got %v, want system.parts alone", got)
+	}
+	if got[0] != "system.parts" {
+		t.Errorf("foreign table = %q, want system.parts", got[0])
+	}
+}
+
+// An unqualified name resolves to whatever database the connection is on,
+// which is the source's own, so it is not foreign. This fixture's `recent` is
+// a CTE, which is the same shape.
+func TestForeignTablesIgnoresAnUnqualifiedName(t *testing.T) {
+	if got := foreignTables(readAST(t, "ast_table_function_in_cte.txt"), "otel"); len(got) != 0 {
+		t.Errorf("foreignTables = %v, want none", got)
+	}
+}
+
+// A source with no database configured has nothing to compare against, so
+// every table reads as its own rather than every table reading as foreign.
+func TestForeignTablesWithNoDatabase(t *testing.T) {
+	if got := foreignTables(readAST(t, "ast_foreign_table.txt"), ""); len(got) != 0 {
+		t.Errorf("foreignTables = %v, want none when the source names no database", got)
+	}
+}
+
+func TestCountKind(t *testing.T) {
+	root := readAST(t, "ast_joins.txt")
+
+	if got := countKind(root, "TableJoin"); got != 2 {
+		t.Errorf("joins = %d, want 2", got)
+	}
+	// Both joined subqueries count, including the one the outer query reaches
+	// through an alias.
+	if got := countKind(root, "Subquery"); got != 2 {
+		t.Errorf("subqueries = %d, want 2", got)
+	}
+	if got := countKind(readAST(t, "ast_plain.txt"), "TableJoin"); got != 0 {
+		t.Errorf("joins = %d, want none", got)
+	}
+}
+
 func TestParseASTRejectsUnreadableOutput(t *testing.T) {
 	tests := []struct {
 		name string

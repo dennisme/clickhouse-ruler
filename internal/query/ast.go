@@ -137,6 +137,50 @@ func selectsEverything(root *Node) bool {
 	})) > 0
 }
 
+// setsSettings reports whether the query carries a SETTINGS clause anywhere.
+//
+// ClickHouse writes one as a bare `Set` node with no detail, so there is no
+// name to read and nothing to reason about per setting. A clause inside a
+// subquery counts: it applies to that read the same as one at the top.
+func setsSettings(root *Node) bool {
+	return len(find(root, func(n *Node) bool { return n.Kind == "Set" })) > 0
+}
+
+// foreignTables returns every table named with a database other than the
+// given one, sorted and deduplicated.
+//
+// The name is read as ClickHouse wrote it, which is enough here because this
+// is early feedback rather than the control: the source's grants are what
+// stop a read outside its own database (spec 6.7.1). An unqualified name
+// resolves to the connection's database, which is the source's own, so it is
+// not foreign. A source naming no database has nothing to compare against.
+func foreignTables(root *Node, database string) []string {
+	if database == "" {
+		return nil
+	}
+
+	seen := map[string]bool{}
+	for _, n := range find(root, func(n *Node) bool { return n.Kind == "TableIdentifier" }) {
+		db, _, qualified := strings.Cut(n.Detail, ".")
+		if qualified && !strings.EqualFold(db, database) {
+			seen[n.Detail] = true
+		}
+	}
+
+	out := make([]string, 0, len(seen))
+	for name := range seen {
+		out = append(out, name)
+	}
+	sort.Strings(out)
+
+	return out
+}
+
+// countKind counts the nodes of one kind anywhere in the tree.
+func countKind(root *Node, kind string) int {
+	return len(find(root, func(n *Node) bool { return n.Kind == kind }))
+}
+
 // functionsNamed returns the called functions appearing in the given set,
 // sorted and deduplicated, so a rule calling now() twice is reported once.
 func functionsNamed(root *Node, names map[string]bool) []string {

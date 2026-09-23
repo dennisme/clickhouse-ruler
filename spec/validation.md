@@ -214,9 +214,11 @@ Tier 1, metadata only, reads no table data:
   them is that the first sits under a `TableExpression`. A name list would
   have to know every table function that exists, which is the blocklist this
   bullet refuses, and it would be wrong the first time one is added.
-- databases and tables outside the source's own are refused. Also early
-  feedback: the grants are what stop it (6.7.1), which is why this check may
-  read `table:` naively without that being a tenancy question (6.9).
+- `rule/foreign-table`, a `TableIdentifier` naming a database other than the
+  source's own. Also early feedback: the grants are what stop it (6.7.1),
+  which is why this check may read `table:` naively without that being a
+  tenancy question (6.9). An unqualified name resolves to the connection's
+  database, which is the source's own, so it is not foreign.
 - `source/privileges`, the source's own user against the contract in 6.7.2.
   Not a check on the rule at all: it asserts that the guarantees the other
   checks are allowed to stop making are actually in place. Probes for the
@@ -225,12 +227,22 @@ Tier 1, metadata only, reads no table data:
 - `rule/select-star`, an `Asterisk` node anywhere in the tree. The result
   columns become labels, so a schema change silently changes an alert's
   identity and every instance refingerprints.
-- join count and subquery depth against a ceiling, as a proxy for cost that
-  needs no data read.
-- a `SETTINGS` clause on the query. The ruler's limits are sent per query and
-  a query can override them in one statement, so this is rejected outright
-  rather than reasoned about. The profile constraints in 6.7 are the backstop
-  for anything that gets past here.
+- `rule/complexity`, the count of `TableJoin` and `Subquery` nodes against a
+  ceiling each, as a proxy for cost that needs no data read.
+
+  **Count rather than nesting depth.** Depth punishes the wrong shape: three
+  subqueries side by side are three scans at depth 1, and the rule that reads
+  the most data is usually wide rather than deep. The ceilings are a crude
+  measure either way, which is why they default to a warning and are the one
+  setting an operator is expected to raise (7.7).
+- `rule/settings`, a `Set` node anywhere in the tree, including inside a
+  subquery. The ruler's limits are sent per query and a query can override
+  them in one statement, so this is rejected outright rather than reasoned
+  about. The profile constraints in 6.7 are the backstop for anything that
+  gets past here, and they answer first: `EXPLAIN` applies the clause to its
+  own parse, so a constrained setting comes back as a refusal rather than a
+  tree, and that refusal is a finding about the rule rather than a ruler that
+  could not ask.
 
 Tier 2, bounded data reads:
 
@@ -355,6 +367,12 @@ its job:
   scans unbounded on every evaluation.
 - `rule/for`, `rule/window`, negative values. Nonsense.
 - `rule/protected-label`. Breaks routing (6.3.1).
+- `rule/settings`. The clause replaces the limits the ruler sends with every
+  evaluation, so softening this check would soften every cost control behind
+  it at once (7.3). The tier 1 checks that cannot be configured for a
+  different reason are there too: `rule/syntax`, because a rule that will not
+  parse cannot run, and `rule/inspect`, because it is the ruler reporting that
+  it could not ask rather than a finding about any rule.
 
 Convention checks carry a configurable severity of `error`, `warn` or `off`,
 and where they take a list of keys that list is configurable too:
@@ -376,6 +394,15 @@ and where they take a list of keys that list is configurable too:
   Default `warn`.
 - `rule/select-star` and `rule/nondeterministic`. Both produce rules that
   evaluate; they just evaluate badly, so both default to `warn`.
+- `rule/foreign-table`, a rule reading outside its source's database. Default
+  `warn`: the grants are the control and this is early feedback on hitting
+  them (6.7.1). Configurable because a user deliberately granted a second
+  database is a legitimate setup, and the operator who arranged it is the one
+  who gets to say so.
+- `rule/complexity`, and the ceilings themselves. Default `warn` at two joins
+  and two subqueries. The ceilings are the check's `keys` list written
+  `name:N`, so the merge in 7.7 needs no new rule for them beyond taking the
+  lowest.
 - `rule/table-function`, and which functions are permitted. The only check
   here defaulting to `error`, because it is the only preventive control
   rather than early feedback: `remote()` and `url()` are refused by the
@@ -530,14 +557,65 @@ shipped default, which is empty. Intersecting with an empty list would refuse
 everything however the scopes were written, which is a different check from
 the one anybody configured.
 
-**New check settings must be monotonic or they do not belong here.** Severity
-and both kinds of list have an unambiguous stricter direction. A setting without
-one, a numeric threshold for example, breaks the order independence above and
-needs a different home.
+**New check settings must be monotonic or they do not belong here.** Severity,
+both kinds of list, and a numeric ceiling all have an unambiguous stricter
+direction: maximum, union, intersection, minimum. Each is a meet or a join, so
+order independence survives. A setting with no such direction, a free-form
+string for example, breaks it and needs a different home.
+
+A ceiling rides the same `keys` list as everything else, written `name:N`, so
+the merge needs no new concept: the lists union and the lowest value for a name
+is the one that binds. Unlike a required list, a ceiling does not seed from the
+shipped default. Carrying `max-joins:2` into every union would make the default
+a maximum nobody could raise, and an operator who means to permit a fourth join
+could write it, have it parse, merge, and do nothing.
 
 Instance and datasource scope exist. Team-level files do not: they add file
 count and a trust question nobody has asked for yet, and because the merge is
 variadic over scopes, adding them later changes call sites and nothing else.
+
+**Exemptions are the one thing that loosens, and they sit outside the merge.**
+A rule can be correct everywhere and still fail a check against one cluster:
+the capacity rules that read `system.parts` on the box where that user is
+granted it are not a mistake anybody wants to keep hearing about. Making that
+expressible as a severity would mean a source could lower one, and then
+"strictest wins" stops being true of every scope, which is the sentence the
+rest of this section rests on.
+
+So a source carries an `exempt:` list instead, read after policy resolves and
+applied as a filter on findings for that source alone:
+
+```yaml
+exempt:
+  - check: rule/foreign-table
+    reason: the capacity rules here read system.parts deliberately
+    until: 2026-12-01
+```
+
+Four rules keep it from becoming the escape hatch 7.9 refuses:
+
+- Only a source can carry one. A rule file cannot, so the author who is
+  blocked is never the person who unblocks themselves, and the file that
+  grants it is operator-owned through CODEOWNERS.
+- A fixed check cannot be exempted, the same refusal a `checks:` block gives.
+  Nothing that blocks a rule from working can be dropped by anybody.
+- `reason` and `until` are both required. An exemption with no expiry is a
+  check quietly deleted: whatever made it reasonable stops being true long
+  before anyone reads the file again.
+
+  `until` is the first instant no longer covered, so `2026-12-01` covers
+  November and not December. A bare date is midnight UTC wherever the check
+  runs, because an expiry that moved with the machine's timezone would make a
+  finding depend on where it was evaluated rather than on what was written.
+  An operator who needs a particular local moment writes the RFC3339 form
+  with its offset, `2026-12-01T09:00:00+11:00`.
+- An expired exemption is itself an error, naming the source, the check and
+  the date. It fails CI and refuses to start on a day somebody chose, and
+  renewing it means stating the reason again in front of a reviewer.
+
+`ruler check --explain` prints every active exemption under the source that
+granted it, because a check that stopped reporting otherwise looks exactly
+like a check that passed (7.8).
 
 ### 7.8 Explaining a finding
 
@@ -568,3 +646,63 @@ at, written when the check is. That is a real deliverable rather than a free
 one, and it is the difference between a finding a contributor can act on alone
 and one that turns into a question for the platform team, which by 7.6 is the
 thing severity is supposed to be rationing.
+
+### 7.9 Compared with `pint`
+
+The check model here is `pint`'s, so where the two differ it is worth saying
+why rather than leaving a reader to infer it. Read against `pint` as of
+September 2026.
+
+**Where the configuration lives.**
+
+| | `pint` | here |
+|---|---|---|
+| config files | one `.pint.hcl` at the repo root; no includes, no per-directory files | `ruler.yaml` at the rules root, plus a `checks:` block per source in `sources.yaml` |
+| which server checks a rule | `include`/`exclude` path regexes on the `prometheus` block | label selectors on the rule, matched against source labels (6.10) |
+| severity | set on the check inside a `rule` block, `bug\|warning\|info` | set per check in any scope, `off\|warn\|error`, merged strictest-wins (7.7) |
+| selecting which rules a setting applies to | `match`/`ignore` on `path`, `state`, `name`, `kind`, `command`, `annotation`, `label`, `for`, `keep_firing_for` | scope: instance-wide, or per source |
+| turning a check off for one rule | `# pint disable <check>` in the rule file | nothing; only a scope owner can |
+
+**Both run the data-dependent checks once per server.** `pint` runs
+`promql/series` once for each Prometheus a file matches; we inspect a rule once
+per source it matched, and name the source in the finding. Same shape, and for
+the same reason: one rule spanning an estate is the case where a cluster that
+disagrees with the others is the whole finding.
+
+**Severity cannot vary per Prometheus in `pint`.** Its `match` block has no
+server or tag key, so the only way to be stricter about one cluster is a path
+convention: point a server at `alerts/prod/.*` with `include`, then write a
+`rule { match { path = "alerts/prod/.*" } }` block with the harsher severity.
+Two mechanisms kept in agreement by hand, and moving a file breaks the link.
+Here the source carries its own policy, so "this shared cluster is stricter" is
+written once, next to that cluster's address, by the person who operates it.
+
+**`pint` can disable a check per server, and we cannot.** Its disable and
+snooze comments take a server name or a tag:
+
+```text
+# pint disable promql/series(staging)
+# pint disable promql/series(+testing)
+# pint snooze 2023-01-12T10:00:00Z promql/series
+```
+
+That is what `tags` on a `prometheus` block are for. A repo owner can refuse
+it per rule block with `locked = true`, and `checks { disabled = [...] }` turns
+a check off globally, but the documented precedence is that a rule comment
+wins unless the block is locked.
+
+**That difference is the deliberate one, and it is a real cost.** 7.6 rations
+who has to be involved to unblock a contributor, and an in-file opt-out sets
+that price to nothing: the author who is blocked is the author who can unblock
+themselves, and the only thing standing between a repo and a silently disabled
+check is whether a reviewer noticed a comment in a diff. `locked = true` exists
+because that lever needed a lock. We start from the locked end instead, which
+is what makes the merge in 7.7 mean anything: if a rule file could turn a
+check off, no statement about the strictest scope winning would be true.
+
+The cost lands on the legitimate case. A rule that is correct everywhere and
+fails against one staging cluster needs a source owner to edit `sources.yaml`,
+where a `pint` author would write one comment. If that case turns up often
+enough to matter, the answer is an operator-owned exemption with a reason and
+an expiry, which is what 7.7 specifies: the finding is dropped for one check
+on one source, by the person who owns that cluster, until a date they chose.

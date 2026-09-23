@@ -39,8 +39,14 @@ func Merge(scopes ...*Policy) *Policy {
 				// An allowlist starts from the first scope that sets one, not
 				// from the shipped empty list: intersecting with empty would
 				// refuse everything however the scopes were configured.
+				//
+				// A ceiling list starts there too. The shipped ceilings are
+				// what applies when nobody configures any, not a maximum
+				// nobody may raise: carrying them into the merge would make
+				// the default the strictest entry for ever, and an operator
+				// who means to permit a fourth join could not say so.
 				current = Setting{Keys: defaults[name].Keys}
-				if Allowlist(name) {
+				if Allowlist(name) || limited(name) {
 					current.Keys = incoming.Keys
 				}
 			}

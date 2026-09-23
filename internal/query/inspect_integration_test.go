@@ -175,3 +175,97 @@ func TestInspectNeitherReadsNorNeedsAGrant(t *testing.T) {
 		t.Errorf("findings = %v, want none: parsing needs no grant", checkNames(got))
 	}
 }
+
+// A SETTINGS clause is applied to this very parse and still shows in the
+// tree, which is the fact the check rests on.
+func TestInspectReportsASettingsClause(t *testing.T) {
+	expr := `
+SELECT ServiceName, count() AS value
+FROM otel.otel_traces
+WHERE Timestamp >= {{ .From }} AND Timestamp < {{ .To }}
+GROUP BY ServiceName
+SETTINGS max_execution_time = 300`
+
+	got := inspect(t, expr, defaultChecks())
+	if len(got) != 1 || got[0].Check != CheckSettings {
+		t.Fatalf("findings = %v, want only %s", checkNames(got), CheckSettings)
+	}
+}
+
+// One level down is the case worth having: a clause inside a subquery applies
+// to that read the same as one at the top.
+func TestInspectReportsASettingsClauseInASubquery(t *testing.T) {
+	expr := `
+SELECT s AS ServiceName, count() AS value
+FROM (
+  SELECT ServiceName AS s
+  FROM otel.otel_traces
+  WHERE Timestamp >= {{ .From }} AND Timestamp < {{ .To }}
+  SETTINGS max_rows_to_read = 100000000
+)
+GROUP BY s`
+
+	got := inspect(t, expr, defaultChecks())
+	if len(got) != 1 || got[0].Check != CheckSettings {
+		t.Fatalf("findings = %v, want only %s", checkNames(got), CheckSettings)
+	}
+}
+
+func TestInspectReportsAForeignTable(t *testing.T) {
+	expr := `
+SELECT count() AS value, 'parts' AS ServiceName
+FROM system.parts
+WHERE modification_time >= {{ .From }} AND modification_time < {{ .To }}`
+
+	c := defaultChecks()
+	c.Database = "otel"
+
+	got := inspect(t, expr, c)
+	if len(got) != 1 || got[0].Check != CheckForeignTable {
+		t.Fatalf("findings = %v, want only %s", checkNames(got), CheckForeignTable)
+	}
+	if !strings.Contains(got[0].Detail, "system.parts") {
+		t.Errorf("detail = %q, want it to name the table", got[0].Detail)
+	}
+}
+
+// The source's own database is not foreign however the rule spells it, and an
+// unqualified name resolves to that same database.
+func TestInspectSaysNothingAboutTheSourcesOwnDatabase(t *testing.T) {
+	c := defaultChecks()
+	c.Database = "otel"
+
+	if got := inspect(t, goodExpr, c); len(got) != 0 {
+		t.Errorf("findings = %v, want none", checkNames(got))
+	}
+}
+
+func TestInspectReportsComplexity(t *testing.T) {
+	expr := `
+SELECT a.ServiceName, count() AS value
+FROM otel.otel_traces AS a
+INNER JOIN (
+  SELECT ServiceName FROM otel.otel_traces WHERE Timestamp >= {{ .From }}
+) AS b ON a.ServiceName = b.ServiceName
+WHERE a.Timestamp >= {{ .From }} AND a.Timestamp < {{ .To }}
+GROUP BY a.ServiceName`
+
+	c := defaultChecks()
+	c.Complexity = &Complexity{MaxJoins: 0, MaxSubqueries: 0}
+
+	got := inspect(t, expr, c)
+	if len(got) != 1 || got[0].Check != CheckComplexity {
+		t.Fatalf("findings = %v, want only %s", checkNames(got), CheckComplexity)
+	}
+	for _, want := range []string{"1 join", "1 subquery"} {
+		if !strings.Contains(got[0].Detail, want) {
+			t.Errorf("detail = %q, want it to carry %q", got[0].Detail, want)
+		}
+	}
+
+	// The same query under the shipped ceilings is a rule nobody hears about.
+	c.Complexity = &Complexity{MaxJoins: 2, MaxSubqueries: 2}
+	if got := inspect(t, expr, c); len(got) != 0 {
+		t.Errorf("findings = %v, want none under the shipped ceilings", checkNames(got))
+	}
+}
