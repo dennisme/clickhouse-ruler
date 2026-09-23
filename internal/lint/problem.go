@@ -27,13 +27,6 @@ func (s Severity) String() string {
 	}
 }
 
-// Checks that inspect the file itself rather than anything it describes.
-const (
-	CheckYAMLSyntax       = "yaml/syntax"
-	CheckYAMLUnknownField = "yaml/unknown-field"
-	CheckYAMLType         = "yaml/type"
-)
-
 // Problem is one validation finding. File and Line are always populated so
 // that CI can attach the finding to a line of the diff.
 type Problem struct {
@@ -54,6 +47,30 @@ type Problem struct {
 	// instead of guessing (spec 7.8).
 	PolicyFile string
 	PolicyLine int
+}
+
+// NewProblem builds a finding, refusing a check name the table does not know.
+//
+// Every finding is constructed here, which is what makes the check table a
+// complete catalogue rather than a list somebody remembers to extend: a name
+// written inline at a call site fails the first test that exercises it, and
+// the documentation generated from the table cannot be missing a page for a
+// check that ships (spec 7.8).
+//
+// A panic rather than a returned error. An unknown check name is a mistake in
+// this repository's own source, not a condition a caller can handle or an
+// operator can cause.
+func NewProblem(file string, line int, check string, sev Severity, text string) Problem {
+	if !Known(check) {
+		panic("lint: unknown check " + check + ", every check belongs in the table in checks.go")
+	}
+	return Problem{
+		File:     file,
+		Line:     line,
+		Check:    check,
+		Severity: sev,
+		Text:     text,
+	}
 }
 
 func (p Problem) String() string {

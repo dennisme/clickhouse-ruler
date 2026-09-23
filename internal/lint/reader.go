@@ -42,13 +42,8 @@ func (r *Reader) AttributeFrom(index int, subject string) {
 }
 
 func (r *Reader) Add(line int, check string, sev Severity, format string, args ...any) {
-	r.problems = append(r.problems, Problem{
-		File:     r.file,
-		Line:     line,
-		Check:    check,
-		Severity: sev,
-		Text:     fmt.Sprintf(format, args...),
-	})
+	r.problems = append(r.problems, NewProblem(r.file, line, check, sev,
+		fmt.Sprintf(format, args...)))
 }
 
 // Document parses the bytes and returns the document's root node. A syntax

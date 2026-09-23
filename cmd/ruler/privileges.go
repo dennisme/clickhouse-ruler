@@ -30,7 +30,7 @@ func checkPrivileges(ctx context.Context, file string, sources []source.Source, 
 	var problems []lint.Problem
 
 	for _, src := range sources {
-		setting := policy.Merge(root, src.Policy).For(policy.CheckSourcePrivileges)
+		setting := policy.Merge(root, src.Policy).For(lint.CheckSourcePrivileges)
 		if !privilegesEnabled(setting) {
 			continue
 		}
@@ -88,26 +88,20 @@ func privilegeProblems(file, name string, line int, setting policy.Setting, resu
 	var problems []lint.Problem
 
 	for _, a := range results {
-		var p lint.Problem
+		var severity lint.Severity
+		var text string
+
 		switch a.Status {
 		case query.StatusPass:
 			continue
 		case query.StatusFail:
-			p = lint.Problem{
-				Severity: setting.Severity,
-				Text:     fmt.Sprintf("%s: %s", a.Name, a.Detail),
-			}
+			severity, text = setting.Severity, fmt.Sprintf("%s: %s", a.Name, a.Detail)
 		case query.StatusInconclusive:
-			p = lint.Problem{
-				Severity: lint.SeverityWarning,
-				Text:     fmt.Sprintf("%s: inconclusive, %s", a.Name, a.Detail),
-			}
+			severity, text = lint.SeverityWarning, fmt.Sprintf("%s: inconclusive, %s", a.Name, a.Detail)
 		}
 
-		p.File = file
-		p.Line = line
+		p := lint.NewProblem(file, line, lint.CheckSourcePrivileges, severity, text)
 		p.Subject = name
-		p.Check = policy.CheckSourcePrivileges
 		p.PolicyFile = setting.File
 		p.PolicyLine = setting.Line
 		problems = append(problems, p)

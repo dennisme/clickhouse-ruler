@@ -5,13 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"sort"
 	"strings"
 	"testing"
 
 	"github.com/ClickHouse/clickhouse-go/v2"
 
-	"github.com/dennisme/clickhouse-ruler/internal/policy"
+	"github.com/dennisme/clickhouse-ruler/internal/lint"
 )
 
 // denied is the exception ClickHouse returns when a privilege is missing.
@@ -146,8 +145,8 @@ func TestEvalReadonly(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := evalReadonly(tt.rows)
-			if got.Name != AssertionReadonly {
-				t.Errorf("Name = %q, want %q", got.Name, AssertionReadonly)
+			if got.Name != lint.AssertionReadonly {
+				t.Errorf("Name = %q, want %q", got.Name, lint.AssertionReadonly)
 			}
 			if got.Status != tt.status {
 				t.Errorf("Status = %v (%s), want %v", got.Status, got.Detail, tt.status)
@@ -237,20 +236,20 @@ func TestSelected(t *testing.T) {
 		},
 		{
 			name:    "all, in report order rather than configured order",
-			require: []string{AssertionTableReadable, AssertionReadonly, AssertionConstraints, AssertionSourcesRevoked},
-			want:    Assertions(),
+			require: []string{lint.AssertionTableReadable, lint.AssertionReadonly, lint.AssertionConstraints, lint.AssertionSourcesRevoked},
+			want:    lint.Assertions(),
 		},
 		{
 			name:    "a subset, for a cluster that cannot meet the whole contract",
-			require: []string{AssertionSourcesRevoked, AssertionTableReadable},
-			want:    []string{AssertionSourcesRevoked, AssertionTableReadable},
+			require: []string{lint.AssertionSourcesRevoked, lint.AssertionTableReadable},
+			want:    []string{lint.AssertionSourcesRevoked, lint.AssertionTableReadable},
 		},
 		{
 			// Policy rejects unknown names, so reaching here means something
 			// bypassed it. Running nothing is safer than guessing.
 			name:    "an unknown name is dropped",
-			require: []string{AssertionReadonly, "sources-revokd"},
-			want:    []string{AssertionReadonly},
+			require: []string{lint.AssertionReadonly, "sources-revokd"},
+			want:    []string{lint.AssertionReadonly},
 		},
 	}
 
@@ -266,49 +265,6 @@ func TestSelected(t *testing.T) {
 				}
 			}
 		})
-	}
-}
-
-// The probes and the list an operator may require are the same set, or
-// policy can require an assertion that never runs. They live in two packages
-// because policy cannot import this one without a cycle, so nothing but this
-// test keeps them in step.
-func TestAssertionsMatchPolicyDefaults(t *testing.T) {
-	want := append([]string(nil), Assertions()...)
-	sort.Strings(want)
-
-	got := policy.Defaults().For(policy.CheckSourcePrivileges).Keys
-	if len(got) != len(want) {
-		t.Fatalf("policy requires %v, this package probes %v", got, want)
-	}
-	for i := range got {
-		if got[i] != want[i] {
-			t.Fatalf("policy requires %v, this package probes %v", got, want)
-		}
-	}
-}
-
-// The check names this package reports and the names policy knows are the
-// same set, or a finding arrives under a name no policy can resolve. They are
-// spelled twice because policy cannot import this package without a cycle.
-func TestCheckNamesAreKnownToPolicy(t *testing.T) {
-	configurable := []string{
-		CheckSelectStar,
-		CheckTableFunction,
-		CheckNondeterministic,
-		CheckForeignTable,
-		CheckComplexity,
-	}
-	for _, name := range configurable {
-		if !policy.Configurable(name) {
-			t.Errorf("%s is not configurable in policy, so its severity cannot be resolved", name)
-		}
-	}
-
-	for _, name := range []string{CheckSyntax, CheckInspect, CheckSettings} {
-		if !policy.Fixed(name) {
-			t.Errorf("%s must be fixed: there is no severity to resolve for it", name)
-		}
 	}
 }
 

@@ -318,7 +318,7 @@ func TestAnnotationsTemplateSeverityIsTheOperatorsChoice(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			p := &policy.Policy{Checks: map[string]policy.Setting{
-				policy.CheckAnnotationsTemplate: {Severity: tc.severity},
+				lint.CheckAnnotationsTemplate: {Severity: tc.severity},
 			}}
 
 			var got []lint.Problem

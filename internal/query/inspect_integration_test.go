@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/dennisme/clickhouse-ruler/internal/lint"
+
 	"github.com/dennisme/clickhouse-ruler/internal/rule"
 )
 
@@ -63,8 +65,8 @@ func TestInspectReportsSelectStar(t *testing.T) {
 	expr := `SELECT * FROM otel.otel_traces WHERE Timestamp >= {{ .From }} AND Timestamp < {{ .To }}`
 
 	got := inspect(t, expr, defaultChecks())
-	if len(got) != 1 || got[0].Check != CheckSelectStar {
-		t.Fatalf("findings = %v, want only %s", checkNames(got), CheckSelectStar)
+	if len(got) != 1 || got[0].Check != lint.CheckRuleSelectStar {
+		t.Fatalf("findings = %v, want only %s", checkNames(got), lint.CheckRuleSelectStar)
 	}
 }
 
@@ -74,8 +76,8 @@ func TestInspectReportsATableFunction(t *testing.T) {
 	expr := `SELECT number AS value FROM numbers(10) WHERE {{ .From }} <= {{ .To }}`
 
 	got := inspect(t, expr, defaultChecks())
-	if len(got) != 1 || got[0].Check != CheckTableFunction {
-		t.Fatalf("findings = %v, want only %s", checkNames(got), CheckTableFunction)
+	if len(got) != 1 || got[0].Check != lint.CheckRuleTableFunction {
+		t.Fatalf("findings = %v, want only %s", checkNames(got), lint.CheckRuleTableFunction)
 	}
 	if !strings.Contains(got[0].Detail, "numbers") {
 		t.Errorf("detail = %q, want it to name numbers", got[0].Detail)
@@ -92,7 +94,7 @@ WHERE Timestamp >= {{ .From }} AND Timestamp < {{ .To }}
 GROUP BY ServiceName`
 
 	for _, f := range inspect(t, expr, defaultChecks()) {
-		if f.Check == CheckTableFunction {
+		if f.Check == lint.CheckRuleTableFunction {
 			t.Errorf("reported a table function: %s", f.Detail)
 		}
 	}
@@ -117,8 +119,8 @@ WHERE Timestamp >= now() - 300 AND Timestamp < {{ .To }} AND {{ .From }} <= {{ .
 GROUP BY ServiceName`
 
 	got := inspect(t, expr, defaultChecks())
-	if len(got) != 1 || got[0].Check != CheckNondeterministic {
-		t.Fatalf("findings = %v, want only %s", checkNames(got), CheckNondeterministic)
+	if len(got) != 1 || got[0].Check != lint.CheckRuleNondeterministic {
+		t.Fatalf("findings = %v, want only %s", checkNames(got), lint.CheckRuleNondeterministic)
 	}
 }
 
@@ -128,8 +130,8 @@ func TestInspectReportsSyntaxAloneAndFirst(t *testing.T) {
 	expr := `SELECT * FROM WHERE {{ .From }} {{ .To }}`
 
 	got := inspect(t, expr, defaultChecks())
-	if len(got) != 1 || got[0].Check != CheckSyntax {
-		t.Fatalf("findings = %v, want only %s", checkNames(got), CheckSyntax)
+	if len(got) != 1 || got[0].Check != lint.CheckRuleSyntax {
+		t.Fatalf("findings = %v, want only %s", checkNames(got), lint.CheckRuleSyntax)
 	}
 	if !strings.Contains(got[0].Detail, "Syntax error") {
 		t.Errorf("detail = %q, want it to say where parsing stopped", got[0].Detail)
@@ -142,8 +144,8 @@ func TestInspectReportsASecondStatement(t *testing.T) {
 	expr := `SELECT 1 AS value FROM otel.otel_traces WHERE Timestamp >= {{ .From }} AND Timestamp < {{ .To }}; SELECT 2`
 
 	got := inspect(t, expr, defaultChecks())
-	if len(got) != 1 || got[0].Check != CheckSyntax {
-		t.Fatalf("findings = %v, want only %s", checkNames(got), CheckSyntax)
+	if len(got) != 1 || got[0].Check != lint.CheckRuleSyntax {
+		t.Fatalf("findings = %v, want only %s", checkNames(got), lint.CheckRuleSyntax)
 	}
 	if !strings.Contains(got[0].Detail, "Multi-statements are not allowed") {
 		t.Errorf("detail = %q, want it to say why", got[0].Detail)
@@ -187,8 +189,8 @@ GROUP BY ServiceName
 SETTINGS max_execution_time = 300`
 
 	got := inspect(t, expr, defaultChecks())
-	if len(got) != 1 || got[0].Check != CheckSettings {
-		t.Fatalf("findings = %v, want only %s", checkNames(got), CheckSettings)
+	if len(got) != 1 || got[0].Check != lint.CheckRuleSettings {
+		t.Fatalf("findings = %v, want only %s", checkNames(got), lint.CheckRuleSettings)
 	}
 }
 
@@ -206,8 +208,8 @@ FROM (
 GROUP BY s`
 
 	got := inspect(t, expr, defaultChecks())
-	if len(got) != 1 || got[0].Check != CheckSettings {
-		t.Fatalf("findings = %v, want only %s", checkNames(got), CheckSettings)
+	if len(got) != 1 || got[0].Check != lint.CheckRuleSettings {
+		t.Fatalf("findings = %v, want only %s", checkNames(got), lint.CheckRuleSettings)
 	}
 }
 
@@ -221,8 +223,8 @@ WHERE modification_time >= {{ .From }} AND modification_time < {{ .To }}`
 	c.Database = "otel"
 
 	got := inspect(t, expr, c)
-	if len(got) != 1 || got[0].Check != CheckForeignTable {
-		t.Fatalf("findings = %v, want only %s", checkNames(got), CheckForeignTable)
+	if len(got) != 1 || got[0].Check != lint.CheckRuleForeignTable {
+		t.Fatalf("findings = %v, want only %s", checkNames(got), lint.CheckRuleForeignTable)
 	}
 	if !strings.Contains(got[0].Detail, "system.parts") {
 		t.Errorf("detail = %q, want it to name the table", got[0].Detail)
@@ -254,8 +256,8 @@ GROUP BY a.ServiceName`
 	c.Complexity = &Complexity{MaxJoins: 0, MaxSubqueries: 0}
 
 	got := inspect(t, expr, c)
-	if len(got) != 1 || got[0].Check != CheckComplexity {
-		t.Fatalf("findings = %v, want only %s", checkNames(got), CheckComplexity)
+	if len(got) != 1 || got[0].Check != lint.CheckRuleComplexity {
+		t.Fatalf("findings = %v, want only %s", checkNames(got), lint.CheckRuleComplexity)
 	}
 	for _, want := range []string{"1 join", "1 subquery"} {
 		if !strings.Contains(got[0].Detail, want) {

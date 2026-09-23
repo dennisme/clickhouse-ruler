@@ -3,6 +3,8 @@ package policy
 import (
 	"slices"
 	"sort"
+
+	"github.com/dennisme/clickhouse-ruler/internal/lint"
 )
 
 // Merge combines policy from every scope that applies to a rule, taking the
@@ -45,12 +47,15 @@ func Merge(scopes ...*Policy) *Policy {
 				// nobody may raise: carrying them into the merge would make
 				// the default the strictest entry for ever, and an operator
 				// who means to permit a fourth join could not say so.
-				current = Setting{Keys: defaults[name].Keys}
-				if Allowlist(name) || limited(name) {
+				current = Setting{}
+				if d, ok := defaultFor(name); ok {
+					current.Keys = d.Keys
+				}
+				if lint.Allowlist(name) || lint.Ceiling(name) {
 					current.Keys = incoming.Keys
 				}
 			}
-			out.Checks[name] = strictest(current, incoming, Allowlist(name))
+			out.Checks[name] = strictest(current, incoming, lint.Allowlist(name))
 		}
 	}
 	return out

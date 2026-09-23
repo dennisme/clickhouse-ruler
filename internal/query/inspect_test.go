@@ -6,6 +6,8 @@ import (
 	"net"
 	"testing"
 
+	"github.com/dennisme/clickhouse-ruler/internal/lint"
+
 	"github.com/ClickHouse/clickhouse-go/v2"
 )
 
@@ -34,7 +36,7 @@ func TestInspectTreeSaysNothingAboutAGoodRule(t *testing.T) {
 }
 
 func TestInspectTreeReportsSelectStar(t *testing.T) {
-	got, ok := findingFor(inspectTree(readAST(t, "ast_select_star.txt"), checksFor()), CheckSelectStar)
+	got, ok := findingFor(inspectTree(readAST(t, "ast_select_star.txt"), checksFor()), lint.CheckRuleSelectStar)
 	if !ok {
 		t.Fatal("SELECT * was not reported")
 	}
@@ -46,7 +48,7 @@ func TestInspectTreeReportsSelectStar(t *testing.T) {
 }
 
 func TestInspectTreeReportsATableFunction(t *testing.T) {
-	got, ok := findingFor(inspectTree(readAST(t, "ast_table_function_in_cte.txt"), checksFor()), CheckTableFunction)
+	got, ok := findingFor(inspectTree(readAST(t, "ast_table_function_in_cte.txt"), checksFor()), lint.CheckRuleTableFunction)
 	if !ok {
 		t.Fatal("a table function inside a CTE was not reported")
 	}
@@ -60,7 +62,7 @@ func TestInspectTreeReportsATableFunction(t *testing.T) {
 func TestInspectTreeHonoursTheAllowlist(t *testing.T) {
 	findings := inspectTree(readAST(t, "ast_table_function_in_cte.txt"), checksFor("merge"))
 
-	if _, ok := findingFor(findings, CheckTableFunction); ok {
+	if _, ok := findingFor(findings, lint.CheckRuleTableFunction); ok {
 		t.Error("merge() was reported although the allowlist permits it")
 	}
 }
@@ -68,13 +70,13 @@ func TestInspectTreeHonoursTheAllowlist(t *testing.T) {
 func TestInspectTreeAllowlistIsCaseInsensitive(t *testing.T) {
 	findings := inspectTree(readAST(t, "ast_table_function_in_cte.txt"), checksFor("MERGE"))
 
-	if _, ok := findingFor(findings, CheckTableFunction); ok {
+	if _, ok := findingFor(findings, lint.CheckRuleTableFunction); ok {
 		t.Error("MERGE in the allowlist did not permit merge()")
 	}
 }
 
 func TestInspectTreeReportsNondeterministicFunctions(t *testing.T) {
-	got, ok := findingFor(inspectTree(readAST(t, "ast_nondeterministic.txt"), checksFor()), CheckNondeterministic)
+	got, ok := findingFor(inspectTree(readAST(t, "ast_nondeterministic.txt"), checksFor()), lint.CheckRuleNondeterministic)
 	if !ok {
 		t.Fatal("now() and today() were not reported")
 	}
@@ -99,7 +101,7 @@ func TestInspectTreeWithNoNondeterministicList(t *testing.T) {
 // one: the ruler's own limits are what it overrides.
 func TestInspectTreeReportsASettingsClause(t *testing.T) {
 	for _, name := range []string{"ast_settings.txt", "ast_settings_in_subquery.txt"} {
-		got, ok := findingFor(inspectTree(readAST(t, name), checksFor()), CheckSettings)
+		got, ok := findingFor(inspectTree(readAST(t, name), checksFor()), lint.CheckRuleSettings)
 		if !ok {
 			t.Fatalf("%s: a SETTINGS clause was not reported", name)
 		}
@@ -113,7 +115,7 @@ func TestInspectTreeReportsAForeignTable(t *testing.T) {
 	c := checksFor()
 	c.Database = "otel"
 
-	got, ok := findingFor(inspectTree(readAST(t, "ast_foreign_table.txt"), c), CheckForeignTable)
+	got, ok := findingFor(inspectTree(readAST(t, "ast_foreign_table.txt"), c), lint.CheckRuleForeignTable)
 	if !ok {
 		t.Fatal("a table outside the source's database was not reported")
 	}
@@ -122,7 +124,7 @@ func TestInspectTreeReportsAForeignTable(t *testing.T) {
 	}
 
 	// The source's own table is not foreign, whichever database it is in.
-	if _, ok := findingFor(inspectTree(readAST(t, "ast_plain.txt"), c), CheckForeignTable); ok {
+	if _, ok := findingFor(inspectTree(readAST(t, "ast_plain.txt"), c), lint.CheckRuleForeignTable); ok {
 		t.Error("the source's own table was reported as foreign")
 	}
 }
@@ -131,7 +133,7 @@ func TestInspectTreeReportsComplexity(t *testing.T) {
 	c := checksFor()
 	c.Complexity = &Complexity{MaxJoins: 1, MaxSubqueries: 1}
 
-	got, ok := findingFor(inspectTree(readAST(t, "ast_joins.txt"), c), CheckComplexity)
+	got, ok := findingFor(inspectTree(readAST(t, "ast_joins.txt"), c), lint.CheckRuleComplexity)
 	if !ok {
 		t.Fatal("two joins and two subqueries against a ceiling of one were not reported")
 	}
@@ -146,7 +148,7 @@ func TestInspectTreeComplexityUnderTheCeiling(t *testing.T) {
 	c := checksFor()
 	c.Complexity = &Complexity{MaxJoins: 2, MaxSubqueries: 2}
 
-	if _, ok := findingFor(inspectTree(readAST(t, "ast_joins.txt"), c), CheckComplexity); ok {
+	if _, ok := findingFor(inspectTree(readAST(t, "ast_joins.txt"), c), lint.CheckRuleComplexity); ok {
 		t.Error("a query at the ceiling was reported; the ceiling is what is permitted")
 	}
 }
@@ -154,13 +156,13 @@ func TestInspectTreeComplexityUnderTheCeiling(t *testing.T) {
 // Nil is the check switched off, and a ceiling of zero is an operator meaning
 // no joins at all. They cannot be the same value.
 func TestInspectTreeComplexityOffAndZero(t *testing.T) {
-	if _, ok := findingFor(inspectTree(readAST(t, "ast_joins.txt"), checksFor()), CheckComplexity); ok {
+	if _, ok := findingFor(inspectTree(readAST(t, "ast_joins.txt"), checksFor()), lint.CheckRuleComplexity); ok {
 		t.Error("complexity was reported although no ceiling is configured")
 	}
 
 	c := checksFor()
 	c.Complexity = &Complexity{}
-	if _, ok := findingFor(inspectTree(readAST(t, "ast_joins.txt"), c), CheckComplexity); !ok {
+	if _, ok := findingFor(inspectTree(readAST(t, "ast_joins.txt"), c), lint.CheckRuleComplexity); !ok {
 		t.Error("a ceiling of zero permitted two joins")
 	}
 }
@@ -210,7 +212,7 @@ func TestClassifyExplain(t *testing.T) {
 				Message: "Setting max_execution_time shouldn't be greater than 60.",
 			},
 			wantFinding:  true,
-			wantCheck:    CheckSettings,
+			wantCheck:    lint.CheckRuleSettings,
 			wantInDetail: "max_execution_time",
 		},
 		{

@@ -11,20 +11,6 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-const (
-	checkName            = "source/name"
-	checkAddress         = "source/address"
-	checkDatabase        = "source/database"
-	checkUsername        = "source/username"
-	checkPassword        = "source/password"
-	checkTable           = "source/table"
-	checkTimestampColumn = "source/timestamp-column"
-	checkEvaluationDelay = "source/evaluation-delay"
-	checkMaxRows         = "source/max-rows"
-	checkMaxExecution    = "source/max-execution-time"
-	checkMaxMemory       = "source/max-memory-usage"
-)
-
 // DefaultEvaluationDelay keeps an evaluation off the newest, still-filling
 // window. See spec 6.8.
 const DefaultEvaluationDelay = time.Minute
@@ -255,11 +241,11 @@ func (s Source) checkName(r *lint.Reader, namedAt map[string]int) {
 	line := s.lines.Of("name")
 
 	if s.Name == "" {
-		r.Add(line, checkName, lint.SeverityError, "source name is empty")
+		r.Add(line, lint.CheckSourceName, lint.SeverityError, "source name is empty")
 		return
 	}
 	if first, ok := namedAt[s.Name]; ok {
-		r.Add(line, checkName, lint.SeverityError,
+		r.Add(line, lint.CheckSourceName, lint.SeverityError,
 			"duplicate source name %q, first defined on line %d", s.Name, first)
 		return
 	}
@@ -268,17 +254,17 @@ func (s Source) checkName(r *lint.Reader, namedAt map[string]int) {
 
 func (s Source) checkConnection(r *lint.Reader) {
 	if s.Address == "" {
-		r.Add(s.lines.Of("address"), checkAddress, lint.SeverityError,
+		r.Add(s.lines.Of("address"), lint.CheckSourceAddress, lint.SeverityError,
 			"address is empty, expected host:port")
 	}
 	if s.Database == "" {
-		r.Add(s.lines.Of("database"), checkDatabase, lint.SeverityError, "database is empty")
+		r.Add(s.lines.Of("database"), lint.CheckSourceDatabase, lint.SeverityError, "database is empty")
 	}
 	// Required rather than defaulted to "default": which ClickHouse user a
 	// source connects as is the tenancy boundary, so it has to be a decision
 	// somebody wrote down and somebody else reviewed.
 	if s.Username == "" {
-		r.Add(s.lines.Of("username"), checkUsername, lint.SeverityError, "username is empty")
+		r.Add(s.lines.Of("username"), lint.CheckSourceUsername, lint.SeverityError, "username is empty")
 	}
 }
 
@@ -292,7 +278,7 @@ func (s Source) resolvePassword(r *lint.Reader, secret secretRef, env func(strin
 
 	switch {
 	case secret.file != "" && secret.env != "":
-		r.Add(line, checkPassword, lint.SeverityError,
+		r.Add(line, lint.CheckSourcePassword, lint.SeverityError,
 			"password_file and password_env are mutually exclusive, set one")
 		return ""
 
@@ -300,7 +286,7 @@ func (s Source) resolvePassword(r *lint.Reader, secret secretRef, env func(strin
 		// Read errors name the path, never the contents.
 		raw, err := os.ReadFile(secret.file)
 		if err != nil {
-			r.Add(line, checkPassword, lint.SeverityError,
+			r.Add(line, lint.CheckSourcePassword, lint.SeverityError,
 				"cannot read password_file %q: %s", secret.file, errReason(err))
 			return ""
 		}
@@ -309,7 +295,7 @@ func (s Source) resolvePassword(r *lint.Reader, secret secretRef, env func(strin
 		// confusing auth failure instead of a clear config error.
 		password := strings.TrimRight(string(raw), "\r\n")
 		if password == "" {
-			r.Add(line, checkPassword, lint.SeverityError,
+			r.Add(line, lint.CheckSourcePassword, lint.SeverityError,
 				"password_file %q is empty", secret.file)
 			return ""
 		}
@@ -318,12 +304,12 @@ func (s Source) resolvePassword(r *lint.Reader, secret secretRef, env func(strin
 	case secret.env != "":
 		password, ok := env(secret.env)
 		if !ok {
-			r.Add(line, checkPassword, lint.SeverityError,
+			r.Add(line, lint.CheckSourcePassword, lint.SeverityError,
 				"password_env references ${%s}, which is not set in the environment", secret.env)
 			return ""
 		}
 		if password == "" {
-			r.Add(line, checkPassword, lint.SeverityError,
+			r.Add(line, lint.CheckSourcePassword, lint.SeverityError,
 				"password_env ${%s} is set but empty", secret.env)
 			return ""
 		}
@@ -347,26 +333,26 @@ func errReason(err error) string {
 
 func (s Source) checkQueryTarget(r *lint.Reader) {
 	if s.Table == "" {
-		r.Add(s.lines.Of("table"), checkTable, lint.SeverityError, "table is empty")
+		r.Add(s.lines.Of("table"), lint.CheckSourceTable, lint.SeverityError, "table is empty")
 	}
 	if s.TimestampColumn == "" {
-		r.Add(s.lines.Of("timestamp_column"), checkTimestampColumn,
+		r.Add(s.lines.Of("timestamp_column"), lint.CheckSourceTimestampColumn,
 			lint.SeverityError, "timestamp_column is empty")
 	}
 	if s.EvaluationDelay < 0 {
-		r.Add(s.lines.Of("evaluation_delay"), checkEvaluationDelay,
+		r.Add(s.lines.Of("evaluation_delay"), lint.CheckSourceEvaluationDelay,
 			lint.SeverityError, "evaluation_delay must not be negative, got %s", s.EvaluationDelay)
 	}
 	if s.MaxRows < 0 {
-		r.Add(s.lines.Of("max_rows"), checkMaxRows,
+		r.Add(s.lines.Of("max_rows"), lint.CheckSourceMaxRows,
 			lint.SeverityError, "max_rows must not be negative, got %d", s.MaxRows)
 	}
 	if s.MaxExecutionTime < 0 {
-		r.Add(s.lines.Of("max_execution_time"), checkMaxExecution,
+		r.Add(s.lines.Of("max_execution_time"), lint.CheckSourceMaxExecution,
 			lint.SeverityError, "max_execution_time must not be negative, got %s", s.MaxExecutionTime)
 	}
 	if s.MaxMemoryUsage < 0 {
-		r.Add(s.lines.Of("max_memory_usage"), checkMaxMemory,
+		r.Add(s.lines.Of("max_memory_usage"), lint.CheckSourceMaxMemory,
 			lint.SeverityError, "max_memory_usage must not be negative, got %d", s.MaxMemoryUsage)
 	}
 }

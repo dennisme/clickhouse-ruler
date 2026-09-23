@@ -79,9 +79,9 @@ func TestDefaultsAreWarnings(t *testing.T) {
 	d := Defaults()
 
 	for _, check := range []string{
-		CheckLabelsRequired, CheckAnnotationsRequired,
-		CheckAnnotationsRunbook, CheckAnnotationsTemplate,
-		CheckRuleFor, CheckRuleWindow,
+		lint.CheckLabelsRequired, lint.CheckAnnotationsRequired,
+		lint.CheckAnnotationsRunbook, lint.CheckAnnotationsTemplate,
+		lint.CheckRuleFor, lint.CheckRuleWindow,
 	} {
 		if got := d.For(check).Severity; got != lint.SeverityWarning {
 			t.Errorf("%s default severity = %v, want warning", check, got)
@@ -98,7 +98,7 @@ func TestDefaultsAreWarnings(t *testing.T) {
 // assertion they cannot satisfy, rather than turning the whole check off and
 // losing the tenancy half with it (spec 7.6).
 func TestSourcePrivilegesDefaults(t *testing.T) {
-	got := Defaults().For(CheckSourcePrivileges)
+	got := Defaults().For(lint.CheckSourcePrivileges)
 
 	if got.Severity != lint.SeverityWarning {
 		t.Errorf("severity = %v, want warning", got.Severity)
@@ -106,10 +106,10 @@ func TestSourcePrivilegesDefaults(t *testing.T) {
 	if len(got.Keys) != 4 {
 		t.Errorf("keys = %v, want every assertion required by default", got.Keys)
 	}
-	if !Configurable(CheckSourcePrivileges) {
+	if !lint.Configurable(lint.CheckSourcePrivileges) {
 		t.Error("source/privileges must be configurable")
 	}
-	if Fixed(CheckSourcePrivileges) {
+	if lint.Fixed(lint.CheckSourcePrivileges) {
 		t.Error("source/privileges must not be a correctness check")
 	}
 }
@@ -118,13 +118,13 @@ func TestSourcePrivilegesDefaults(t *testing.T) {
 // cannot drop an assertion the instance policy requires.
 func TestSourcePrivilegesMergeIsStrictest(t *testing.T) {
 	instance := &Policy{Checks: map[string]Setting{
-		CheckSourcePrivileges: {Severity: lint.SeverityError, Keys: []string{"sources-revoked"}},
+		lint.CheckSourcePrivileges: {Severity: lint.SeverityError, Keys: []string{"sources-revoked"}},
 	}}
 	source := &Policy{Checks: map[string]Setting{
-		CheckSourcePrivileges: {Severity: lint.SeverityOff, Keys: []string{"readonly"}},
+		lint.CheckSourcePrivileges: {Severity: lint.SeverityOff, Keys: []string{"readonly"}},
 	}}
 
-	got := Merge(instance, source).For(CheckSourcePrivileges)
+	got := Merge(instance, source).For(lint.CheckSourcePrivileges)
 	if got.Severity != lint.SeverityError {
 		t.Errorf("severity = %v, want error: a source cannot soften the instance policy", got.Severity)
 	}
@@ -136,12 +136,12 @@ func TestSourcePrivilegesMergeIsStrictest(t *testing.T) {
 // The ceilings ride on the same key list every other configurable check
 // uses, written as name:N so one Setting carries both.
 func TestComplexityLimits(t *testing.T) {
-	got := Defaults().For(CheckRuleComplexity)
+	got := Defaults().For(lint.CheckRuleComplexity)
 
 	if got.Severity != lint.SeverityWarning {
 		t.Errorf("severity = %v, want warning", got.Severity)
 	}
-	for _, name := range []string{LimitJoins, LimitSubqueries} {
+	for _, name := range []string{lint.LimitJoins, lint.LimitSubqueries} {
 		if _, ok := got.Limit(name); !ok {
 			t.Errorf("%s has no default ceiling", name)
 		}
@@ -155,13 +155,13 @@ func TestComplexityLimits(t *testing.T) {
 // the one that binds. That is what keeps a scope from loosening another.
 func TestComplexityLimitTakesTheLowest(t *testing.T) {
 	instance := &Policy{Checks: map[string]Setting{
-		CheckRuleComplexity: {Severity: lint.SeverityWarning, Keys: []string{LimitJoins + ":1"}},
+		lint.CheckRuleComplexity: {Severity: lint.SeverityWarning, Keys: []string{lint.LimitJoins + ":1"}},
 	}}
 	source := &Policy{Checks: map[string]Setting{
-		CheckRuleComplexity: {Severity: lint.SeverityWarning, Keys: []string{LimitJoins + ":9"}},
+		lint.CheckRuleComplexity: {Severity: lint.SeverityWarning, Keys: []string{lint.LimitJoins + ":9"}},
 	}}
 
-	got, ok := Merge(instance, source).For(CheckRuleComplexity).Limit(LimitJoins)
+	got, ok := Merge(instance, source).For(lint.CheckRuleComplexity).Limit(lint.LimitJoins)
 	if !ok {
 		t.Fatal("the merged policy has no join ceiling")
 	}
@@ -180,8 +180,8 @@ func TestParseRejectsAMalformedLimit(t *testing.T) {
 		t.Fatalf("got %d problems, want one per malformed key: %v", len(problems), problems)
 	}
 	for _, p := range problems {
-		if p.Check != checkPolicyLimit {
-			t.Errorf("check = %q, want %s", p.Check, checkPolicyLimit)
+		if p.Check != lint.CheckPolicyLimit {
+			t.Errorf("check = %q, want %s", p.Check, lint.CheckPolicyLimit)
 		}
 		if p.Severity != lint.SeverityError {
 			t.Errorf("severity = %v, want error", p.Severity)
@@ -194,10 +194,10 @@ func TestParseRejectsAMalformedLimit(t *testing.T) {
 // and that is what binds.
 func TestComplexityScopeMayRaiseTheShippedCeiling(t *testing.T) {
 	p := &Policy{Checks: map[string]Setting{
-		CheckRuleComplexity: {Severity: lint.SeverityWarning, Keys: []string{LimitJoins + ":4"}},
+		lint.CheckRuleComplexity: {Severity: lint.SeverityWarning, Keys: []string{lint.LimitJoins + ":4"}},
 	}}
 
-	got, ok := Merge(p).For(CheckRuleComplexity).Limit(LimitJoins)
+	got, ok := Merge(p).For(lint.CheckRuleComplexity).Limit(lint.LimitJoins)
 	if !ok {
 		t.Fatal("the merged policy has no join ceiling")
 	}

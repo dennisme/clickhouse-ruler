@@ -221,7 +221,7 @@ func explainSet(w io.Writer, set *ruleset.Set, root *policy.Policy) {
 		// Every configurable check, not only the ones a file mentioned: an
 		// author asking why a check blocks them is not helped by a list that
 		// omits the checks nobody configured.
-		for _, name := range policy.Names() {
+		for _, name := range lint.Configurables() {
 			s := merged.For(name)
 			origin := "default"
 			if s.File != "" {

@@ -21,13 +21,6 @@ import (
 	"github.com/dennisme/clickhouse-ruler/internal/source"
 )
 
-// Check names are namespaced like pint, as in slices 1 and 3.
-const (
-	checkDirectory   = "ruleset/directory"
-	checkSourceMatch = "rule/source-match"
-	checkProtected   = "rule/protected-label"
-)
-
 // Rule is one rule with everything needed to evaluate it resolved: the file it
 // came from, the team that owns it, its group's interval, and its source.
 type Rule struct {
@@ -67,12 +60,9 @@ func Load(dir string, sources *source.File, root *policy.Policy) (*Set, []lint.P
 
 	files, err := ruleFiles(dir)
 	if err != nil {
-		return set, []lint.Problem{{
-			File:     dir,
-			Check:    checkDirectory,
-			Severity: lint.SeverityError,
-			Text:     err.Error(),
-		}}
+		return set, []lint.Problem{
+			lint.NewProblem(dir, 0, lint.CheckRulesetDirectory, lint.SeverityError, err.Error()),
+		}
 	}
 
 	for _, path := range files {
@@ -113,12 +103,9 @@ func loadFile(path string, sources *source.File, root *policy.Policy) ([]Rule, [
 	// has nothing to warn about here.
 	data, err := os.ReadFile(path) //nolint:gosec
 	if err != nil {
-		return nil, []lint.Problem{{
-			File:     path,
-			Check:    checkDirectory,
-			Severity: lint.SeverityError,
-			Text:     err.Error(),
-		}}
+		return nil, []lint.Problem{
+			lint.NewProblem(path, 0, lint.CheckRulesetDirectory, lint.SeverityError, err.Error()),
+		}
 	}
 
 	parsed, problems := rule.Parse(path, data)
@@ -174,23 +161,18 @@ func sourceMatch(file string, r rule.Rule, matched []source.Source, p *policy.Po
 	if len(matched) > 0 {
 		return nil
 	}
-	setting := p.For(checkSourceMatch)
+	setting := p.For(lint.CheckRuleSourceMatch)
 	if setting.Severity == lint.SeverityOff {
 		return nil
 	}
-	return []lint.Problem{{
-		File:     file,
-		Line:     r.LineOf("labels"),
-		Subject:  r.Alert,
-		Check:    checkSourceMatch,
-		Severity: setting.Severity,
-		Text: "the sources selector matches no source, so this ruler will never " +
-			"evaluate the rule. That is expected when the sources for its cluster live " +
-			"on a different ruler, or when a cluster is being added and its source has " +
-			"not landed yet. An empty selector matches nothing on purpose",
-		PolicyFile: setting.File,
-		PolicyLine: setting.Line,
-	}}
+	unmatched := lint.NewProblem(file, r.LineOf("labels"), lint.CheckRuleSourceMatch, setting.Severity,
+		"the sources selector matches no source, so this ruler will never "+
+			"evaluate the rule. That is expected when the sources for its cluster live "+
+			"on a different ruler, or when a cluster is being added and its source has "+
+			"not landed yet. An empty selector matches nothing on purpose")
+	unmatched.Subject = r.Alert
+	unmatched.PolicyFile, unmatched.PolicyLine = setting.File, setting.Line
+	return []lint.Problem{unmatched}
 }
 
 // aliasPattern matches a SQL column alias, as in `'platform' AS team`.
@@ -212,14 +194,10 @@ func protectedLabels(file string, r rule.Rule, matched []source.Source) []lint.P
 	var out []lint.Problem
 
 	add := func(line int, format string, args ...any) {
-		out = append(out, lint.Problem{
-			File:     file,
-			Line:     line,
-			Subject:  r.Alert,
-			Check:    checkProtected,
-			Severity: lint.SeverityError,
-			Text:     fmt.Sprintf(format, args...),
-		})
+		p := lint.NewProblem(file, line, lint.CheckRuleProtectedLabel, lint.SeverityError,
+			fmt.Sprintf(format, args...))
+		p.Subject = r.Alert
+		out = append(out, p)
 	}
 
 	// Keys the alert's identity depends on. alertname and source are always
