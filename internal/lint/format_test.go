@@ -28,7 +28,9 @@ func TestFormatText(t *testing.T) {
 	}
 
 	want := `rules/payments/latency.yaml:12 HighP99Latency: error: rule/expr: expr does not reference {{ .To }}, so the query has no upper time bound
+  ` + DocsURL("rule/expr") + `
 rules/payments/latency.yaml:5 HighP99Latency: warning: labels/required: required label "team" is missing
+  ` + DocsURL("labels/required") + `
 `
 	if got := sb.String(); got != want {
 		t.Errorf("text output:\ngot:\n%s\nwant:\n%s", got, want)
@@ -43,8 +45,8 @@ func TestFormatGitHub(t *testing.T) {
 		t.Fatalf("Format: %v", err)
 	}
 
-	want := `::error file=rules/payments/latency.yaml,line=12,title=rule/expr::expr does not reference {{ .To }}, so the query has no upper time bound
-::warning file=rules/payments/latency.yaml,line=5,title=labels/required::required label "team" is missing
+	want := `::error file=rules/payments/latency.yaml,line=12,title=rule/expr::expr does not reference {{ .To }}, so the query has no upper time bound (` + DocsURL("rule/expr") + `)
+::warning file=rules/payments/latency.yaml,line=5,title=labels/required::required label "team" is missing (` + DocsURL("labels/required") + `)
 `
 	if got := sb.String(); got != want {
 		t.Errorf("github output:\ngot:\n%s\nwant:\n%s", got, want)
@@ -76,5 +78,20 @@ func TestFormatRejectsUnknownFormat(t *testing.T) {
 	var sb strings.Builder
 	if err := Format(&sb, "json", sample()); err == nil {
 		t.Fatal("expected an error for an unknown format")
+	}
+}
+
+// Both formats carry the link, because a finding naming a check an author
+// cannot look up turns their own problem into a question for whoever owns
+// policy (spec 7.8).
+func TestBothFormatsLinkTheCheck(t *testing.T) {
+	for _, format := range Formats {
+		var sb strings.Builder
+		if err := Format(&sb, format, sample()); err != nil {
+			t.Fatalf("Format(%s): %v", format, err)
+		}
+		if !strings.Contains(sb.String(), DocsURL("rule/expr")) {
+			t.Errorf("%s output does not link the check:\n%s", format, sb.String())
+		}
 	}
 }
