@@ -141,3 +141,53 @@ func TestConfigurablesAreSortedAndConfigurable(t *testing.T) {
 		}
 	}
 }
+
+// A finding names a check, and the name has to lead somewhere. The anchor is
+// written rather than inferred because a slash does not survive GitHub's
+// slugifier: rule/foreign-table would become ruleforeign-table (spec 7.8).
+func TestDocsAnchorAndURL(t *testing.T) {
+	if got := DocsAnchor(CheckRuleForeignTable); got != "rule-foreign-table" {
+		t.Errorf("anchor = %q, want rule-foreign-table", got)
+	}
+
+	got := DocsURL(CheckRuleForeignTable)
+
+	// The published form, not the file name: MkDocs serves rule.md at
+	// checks/rule/, and a link carrying the .md would 404 on the site.
+	if !strings.HasSuffix(got, "rule/#rule-foreign-table") {
+		t.Errorf("url = %q, want it to end at the check's own section", got)
+	}
+	if strings.Contains(got, ".md") {
+		t.Errorf("url = %q, want the published path rather than the source file", got)
+	}
+	if !strings.HasPrefix(got, DocsBase) {
+		t.Errorf("url = %q, want it under %s", got, DocsBase)
+	}
+}
+
+// Namespaces are grouped onto a few pages rather than one page per check.
+// Every check has to land on one of them, or its link is a 404.
+func TestEveryCheckHasAPage(t *testing.T) {
+	pages := map[string]bool{}
+
+	for _, c := range All() {
+		page := DocsPage(c.Name)
+		if page == "" {
+			t.Errorf("%s belongs to no page, so nothing can link to it", c.Name)
+			continue
+		}
+		pages[page] = true
+	}
+
+	for _, want := range []string{"rule.md", "source.md", "policy.md"} {
+		if !pages[want] {
+			t.Errorf("no check lands on %s, so the page would be empty", want)
+		}
+	}
+}
+
+func TestDocsURLOfAnUnknownCheck(t *testing.T) {
+	if got := DocsURL("not/a-check"); got != "" {
+		t.Errorf("url = %q, want empty: a name the table does not know has no page", got)
+	}
+}

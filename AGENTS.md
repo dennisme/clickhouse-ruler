@@ -28,6 +28,8 @@ just fix                # apply every fix golangci-lint can make
 just build              # go build ./... plus a vet of the integration-tagged tests
 just integration-clean  # start the stack, run integration tests, tear it down
 just markdownlint       # markdownlint-cli2 over the docs
+just generate           # rewrite the generated parts of docs/checks
+just docs-serve         # preview the documentation site locally
 just init               # mise tool versions and pre-commit hooks
 ```
 
@@ -79,6 +81,7 @@ Two things that bite:
 | `internal/notify` | Alertmanager payloads, resend cadence, the HTTP client |
 | `deploy/` | ClickHouse init SQL (including the reference ruler user) and Alertmanager config |
 | `spec/` | Design, validation, operations, research, decisions |
+| `docs/` | The published site: a page per check family, linked from every finding |
 
 ## Conventions
 
