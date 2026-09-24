@@ -356,3 +356,99 @@ None of these need code that does not already exist, with one exception: a
 rule matching several sources has to evaluate once per source, and its alert
 instances must stay distinct per source. That is a fingerprint question
 (6.3), and it is open, see 12.6.
+
+### 10.3 Checking a pull request
+
+Two decisions, both of which look like implementation detail and are not.
+
+#### Changed-file filtering belongs in the binary
+
+"Only checks rules changed in the pull request" is what this section has
+always said, and it is easy to read as "the action passes the changed paths
+to the checker". That is wrong, because the changed set of *files* is not the
+affected set of *rules*:
+
+- A change to `sources.yaml` can move a source's labels, so a rule in an
+  untouched file stops matching, starts matching, or matches a different
+  cluster (6.10).
+- A change to `ruler.yaml`, or to a `checks:` block on a source, can raise a
+  check, so a rule that warned yesterday blocks today (7.7).
+- A source's `database`, `table` or caps changing alters what the tier 1
+  checks conclude about rules nobody edited (7.3).
+
+Computing which rules a change affects needs the ruleset binding and the
+policy merge. Both live in the validation package, and reimplementing either
+inside an action is the second validation path 7.1 exists to prevent. So the
+expansion is the binary's job, and the action supplies only the base
+reference and a checkout deep enough to reach the merge base.
+
+It is also the reason this is not a CI-only feature. `ruler check
+--changed-since origin/main ./rules/` answers the same question on a laptop,
+before anything is pushed.
+
+Three rules it has to follow:
+
+- **The base is the merge base**, not the previous commit. A branch with
+  several commits, or one that has been rebased, gets the wrong answer from
+  `HEAD~1`.
+- **Some paths force a full run.** A change to the sources file or to any
+  policy file affects rules the diff does not name, so the filter widens to
+  everything rather than trying to be clever about which rules a label change
+  reached.
+- **An unresolvable base checks everything and says so.** A shallow checkout
+  with no merge base is a reason to do more work, never less. Filtering that
+  silently checks nothing is the failure mode that makes a green build
+  meaningless.
+
+Filtering is off unless asked for. `ruler check` with no flag checks the whole
+directory, because that is what the loader does at startup, and a CI run whose
+scope quietly differs from the loader's is a rule that passes review and fails
+to load.
+
+#### The action is composite, and owns nothing but the wiring
+
+7.1 chose a composite action in `action/`, consumed as
+`dennisme/clickhouse-ruler/action@v1`. Holding to that, with two additions
+that belong in the spec rather than in whoever writes it:
+
+- **The download is verified.** A composite action that fetches a release
+  binary and executes it is a supply chain step. Releases publish a checksums
+  file; the action checks it before running anything.
+- **Tags are disciplined.** The action version should equal the tool version,
+  which means a release moves the floating major tag. Without that, everyone
+  pinned to `@v1` runs whatever the tag pointed at the day they wrote it.
+
+Not a Node action: it would add npm, a committed bundle, and a second
+dependency tree to a repository whose entire dependency list is three Go
+modules, and it would buy nothing that shell cannot do. Not a Docker action
+either: an image pull per job for no isolation benefit, since what runs is a
+static binary.
+
+**What the binary does not do is talk to GitHub.** Inline annotations need no
+API at all: `--format=github` writes workflow commands to stdout and GitHub
+renders them on the diff. The summary comment in 7.10 does need the API, a
+`pull-requests: write` token, and logic to update one comment in place rather
+than appending one per push. That belongs in the action, which already runs
+inside GitHub's own environment, and it keeps a GitHub client out of a service
+whose dependencies are otherwise ClickHouse and Alertmanager.
+
+The split that makes it possible: the binary can emit its findings as JSON,
+and the action reads that to build the comment. The same output serves anyone
+integrating the checks elsewhere (10.1), which is an argument for it existing
+independent of the comment.
+
+#### What the action exposes
+
+Inputs are the flags `ruler check` already has — the rules path, the sources
+file, the policy file, the output format, whether to run the online checks —
+plus the base reference for filtering and whether to post a summary. Nothing
+is invented for the action that the binary does not already support, so
+anything achievable in CI is achievable by hand.
+
+Permissions are worth documenting on the action rather than left to be
+discovered: `contents: read` is enough for the offline checks and inline
+annotations, and the summary comment additionally needs
+`pull-requests: write`. A pull request from a fork gets neither a writable
+token nor secrets, so it cannot run the online checks or post a comment. That
+is correct behaviour, and 7.10 explains why `pull_request_target` is not the
+way around it.

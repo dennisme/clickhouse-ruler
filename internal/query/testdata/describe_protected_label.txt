@@ -1,0 +1,2 @@
+team	LowCardinality(String)
+value	UInt8

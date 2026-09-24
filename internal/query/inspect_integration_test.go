@@ -61,12 +61,22 @@ func TestInspectSaysNothingAboutAWorkingRule(t *testing.T) {
 	}
 }
 
+// SELECT * is reported twice, by two checks answering different questions:
+// its columns are whatever the table has today, and none of them is named
+// value, so the rule also cannot fire.
 func TestInspectReportsSelectStar(t *testing.T) {
 	expr := `SELECT * FROM otel.otel_traces WHERE Timestamp >= {{ .From }} AND Timestamp < {{ .To }}`
 
-	got := inspect(t, expr, defaultChecks())
-	if len(got) != 1 || got[0].Check != lint.CheckRuleSelectStar {
-		t.Fatalf("findings = %v, want only %s", checkNames(got), lint.CheckRuleSelectStar)
+	got := checkNames(inspect(t, expr, describeChecks()))
+	want := map[string]bool{lint.CheckRuleSelectStar: true, lint.CheckRuleColumns: true}
+
+	if len(got) != len(want) {
+		t.Fatalf("findings = %v, want %v", got, want)
+	}
+	for _, name := range got {
+		if !want[name] {
+			t.Errorf("unexpected finding %s in %v", name, got)
+		}
 	}
 }
 
@@ -167,14 +177,23 @@ GROUP BY ServiceName`
 	}
 }
 
-// Nothing here reads a row or runs the rule, so a query that would be refused
-// or would cost something is still inspectable. This one names a table the
-// source's user cannot read.
-func TestInspectNeitherReadsNorNeedsAGrant(t *testing.T) {
+// Nothing here reads a row, and the two round trips need different things
+// from the cluster. EXPLAIN AST only parses, so it is happy with a table that
+// does not exist; DESCRIBE has to resolve the query, which is what makes the
+// missing table a finding at all.
+func TestInspectParsesWithoutResolvingButStillResolves(t *testing.T) {
 	expr := `SELECT 1 AS value FROM otel.no_such_table WHERE {{ .From }} <= {{ .To }}`
 
-	if got := inspect(t, expr, defaultChecks()); len(got) != 0 {
-		t.Errorf("findings = %v, want none: parsing needs no grant", checkNames(got))
+	c := describeChecks()
+
+	// The parse half says nothing: no syntax finding, and every tree check
+	// passed on a query naming a table nobody has.
+	got := inspect(t, expr, c)
+	if len(got) != 1 || got[0].Check != lint.CheckRuleColumns {
+		t.Fatalf("findings = %v, want only %s", checkNames(got), lint.CheckRuleColumns)
+	}
+	if !strings.Contains(got[0].Detail, "no_such_table") {
+		t.Errorf("detail = %q, want it to name the table", got[0].Detail)
 	}
 }
 
@@ -219,15 +238,22 @@ SELECT count() AS value, 'parts' AS ServiceName
 FROM system.parts
 WHERE modification_time >= {{ .From }} AND modification_time < {{ .To }}`
 
-	c := defaultChecks()
+	c := describeChecks()
 	c.Database = "otel"
 
-	got := inspect(t, expr, c)
-	if len(got) != 1 || got[0].Check != lint.CheckRuleForeignTable {
-		t.Fatalf("findings = %v, want only %s", checkNames(got), lint.CheckRuleForeignTable)
+	// Two findings, and the pair is the point: reading outside the source's
+	// database is early feedback, and the grant refusing it is what actually
+	// stops the rule (spec 6.7.1).
+	got := checkNames(inspect(t, expr, c))
+	want := map[string]bool{lint.CheckRuleForeignTable: true, lint.CheckRuleTableAccess: true}
+
+	if len(got) != len(want) {
+		t.Fatalf("findings = %v, want %v", got, want)
 	}
-	if !strings.Contains(got[0].Detail, "system.parts") {
-		t.Errorf("detail = %q, want it to name the table", got[0].Detail)
+	for _, name := range got {
+		if !want[name] {
+			t.Errorf("unexpected finding %s in %v", name, got)
+		}
 	}
 }
 
@@ -269,5 +295,164 @@ GROUP BY a.ServiceName`
 	c.Complexity = &Complexity{MaxJoins: 2, MaxSubqueries: 2}
 	if got := inspect(t, expr, c); len(got) != 0 {
 		t.Errorf("findings = %v, want none under the shipped ceilings", checkNames(got))
+	}
+}
+
+// describeChecks is what the result checks need from the caller: the labels
+// that will exist at evaluation time, and the ones a query may not produce.
+func describeChecks() Checks {
+	c := defaultChecks()
+	c.KnownLabels = []string{"alertname", "severity", "source", "team"}
+	c.ProtectedLabels = []string{"alertname", "source", "team"}
+	return c
+}
+
+// The case a parse tree cannot see: the column is gone from the table, and
+// only resolving the query against this cluster says so.
+func TestInspectReportsAColumnThatIsNotThere(t *testing.T) {
+	expr := `
+SELECT ServiceName, max(Duration_milliseconds) AS value
+FROM otel.otel_traces
+WHERE Timestamp >= {{ .From }} AND Timestamp < {{ .To }}
+GROUP BY ServiceName`
+
+	got := inspect(t, expr, describeChecks())
+	if len(got) != 1 || got[0].Check != lint.CheckRuleColumns {
+		t.Fatalf("findings = %v, want only %s", checkNames(got), lint.CheckRuleColumns)
+	}
+	if !strings.Contains(got[0].Detail, "Duration_milliseconds") {
+		t.Errorf("detail = %q, want it to name what did not resolve", got[0].Detail)
+	}
+}
+
+func TestInspectReportsAnUnknownTable(t *testing.T) {
+	expr := `SELECT 1 AS value FROM otel.no_such_table WHERE {{ .From }} <= {{ .To }}`
+
+	got := inspect(t, expr, describeChecks())
+	if len(got) != 1 || got[0].Check != lint.CheckRuleColumns {
+		t.Fatalf("findings = %v, want only %s", checkNames(got), lint.CheckRuleColumns)
+	}
+}
+
+// A rule that returns rows and produces no alert, which otherwise fails at
+// evaluation time in front of nobody.
+func TestInspectReportsAMissingValueColumn(t *testing.T) {
+	expr := `
+SELECT ServiceName, count() AS total
+FROM otel.otel_traces
+WHERE Timestamp >= {{ .From }} AND Timestamp < {{ .To }}
+GROUP BY ServiceName`
+
+	got := inspect(t, expr, describeChecks())
+	if len(got) != 1 || got[0].Check != lint.CheckRuleColumns {
+		t.Fatalf("findings = %v, want only %s", checkNames(got), lint.CheckRuleColumns)
+	}
+	for _, want := range []string{"value", "total"} {
+		if !strings.Contains(got[0].Detail, want) {
+			t.Errorf("detail = %q, want it to carry %q", got[0].Detail, want)
+		}
+	}
+}
+
+// The gap the tier 0 text check documents: no literal `AS team` appears
+// anywhere in this rule, and the column is produced all the same.
+func TestInspectReportsAProtectedLabelFromASubquery(t *testing.T) {
+	expr := `
+SELECT s AS team, count() AS value
+FROM (
+  SELECT ServiceName AS s
+  FROM otel.otel_traces
+  WHERE Timestamp >= {{ .From }} AND Timestamp < {{ .To }}
+)
+GROUP BY s`
+
+	got := inspect(t, expr, describeChecks())
+	if len(got) != 1 || got[0].Check != lint.CheckRuleProtectedLabel {
+		t.Fatalf("findings = %v, want only %s", checkNames(got), lint.CheckRuleProtectedLabel)
+	}
+	if !strings.Contains(got[0].Detail, "team") {
+		t.Errorf("detail = %q, want it to name the label", got[0].Detail)
+	}
+}
+
+// Annotation variables resolve against the real output columns, which is the
+// claim spec 7.3 makes about this check.
+func TestInspectReportsAnAnnotationReadingNothing(t *testing.T) {
+	q, err := Open(testSource(t))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = q.Close() })
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	r := rule.Rule{
+		Alert: "Probe",
+		Expr:  goodExpr,
+		Annotations: map[string]string{
+			"summary": "{{ .ServiceName }} is at {{ .value }} for {{ .team }}",
+			"detail":  "owned by {{ .Squad }}",
+		},
+	}
+
+	got, err := q.Inspect(ctx, r, describeChecks())
+	if err != nil {
+		t.Fatalf("Inspect: %v", err)
+	}
+	if len(got) != 1 || got[0].Check != lint.CheckAnnotationsTemplate {
+		t.Fatalf("findings = %v, want only %s", checkNames(got), lint.CheckAnnotationsTemplate)
+	}
+	for _, want := range []string{"detail", "Squad"} {
+		if !strings.Contains(got[0].Detail, want) {
+			t.Errorf("detail = %q, want it to carry %q", got[0].Detail, want)
+		}
+	}
+}
+
+// A table the source's user cannot read says nothing about the SQL, so it is
+// its own check at its own severity rather than a broken rule.
+func TestInspectReportsATableItCannotRead(t *testing.T) {
+	expr := `
+SELECT database AS ServiceName, count() AS value
+FROM system.parts
+WHERE modification_time >= {{ .From }} AND modification_time < {{ .To }}
+GROUP BY database`
+
+	c := describeChecks()
+
+	got := inspect(t, expr, c)
+	if len(got) != 1 || got[0].Check != lint.CheckRuleTableAccess {
+		t.Fatalf("findings = %v, want only %s", checkNames(got), lint.CheckRuleTableAccess)
+	}
+	if !strings.Contains(got[0].Detail, "privileges") {
+		t.Errorf("detail = %q, want the server's own reason", got[0].Detail)
+	}
+}
+
+// The rule the compose stack's fixture uses, with annotations that resolve.
+// A check that cannot stay quiet on a working rule is one nobody keeps on.
+func TestInspectSaysNothingAboutAWorkingRuleWithAnnotations(t *testing.T) {
+	q, err := Open(testSource(t))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = q.Close() })
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	r := rule.Rule{
+		Alert:       "Probe",
+		Expr:        goodExpr,
+		Annotations: map[string]string{"summary": "{{ .ServiceName }} at {{ .value }} on {{ .source }}"},
+	}
+
+	got, err := q.Inspect(ctx, r, describeChecks())
+	if err != nil {
+		t.Fatalf("Inspect: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("findings = %v, want none", checkNames(got))
 	}
 }

@@ -1,0 +1,7 @@
+Timestamp	DateTime64(9)
+TraceId	String
+SpanName	LowCardinality(String)
+ServiceName	LowCardinality(String)
+Duration	UInt64
+Events.Timestamp	Array(DateTime64(9))
+Links.TraceId	Array(String)

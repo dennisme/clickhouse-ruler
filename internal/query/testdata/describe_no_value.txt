@@ -1,0 +1,2 @@
+ServiceName	LowCardinality(String)
+total	UInt64

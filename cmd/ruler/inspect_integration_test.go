@@ -164,7 +164,9 @@ func TestCheckStaysOfflineForQueryChecks(t *testing.T) {
 // source owner said this cluster expects it.
 func TestCheckOnlineHonoursASourceExemption(t *testing.T) {
 	dir := t.TempDir()
-	rules := writeRule(t, dir, `SELECT * FROM otel.otel_traces
+	// Selects * and still returns a value column, so the only thing wrong
+	// with it is the check being exempted.
+	rules := writeRule(t, dir, `SELECT *, 1 AS value FROM otel.otel_traces
 WHERE Timestamp >= {{ .From }} AND Timestamp < {{ .To }}`)
 
 	sources := writeSources(t, dir, "ruler_payments")
@@ -197,7 +199,9 @@ WHERE Timestamp >= {{ .From }} AND Timestamp < {{ .To }}`)
 // back and the expiry is reported on top of it.
 func TestCheckOnlineReportsAnExpiredExemption(t *testing.T) {
 	dir := t.TempDir()
-	rules := writeRule(t, dir, `SELECT * FROM otel.otel_traces
+	// Selects * and still returns a value column, so the only thing wrong
+	// with it is the check being exempted.
+	rules := writeRule(t, dir, `SELECT *, 1 AS value FROM otel.otel_traces
 WHERE Timestamp >= {{ .From }} AND Timestamp < {{ .To }}`)
 
 	sources := writeSources(t, dir, "ruler_payments")
