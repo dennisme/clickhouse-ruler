@@ -50,6 +50,7 @@ const (
 	CheckRuleComplexity       = "rule/complexity"
 	CheckRuleColumns          = "rule/columns"
 	CheckRuleTableAccess      = "rule/table-access"
+	CheckRuleCost             = "rule/cost"
 
 	CheckSourceName            = "source/name"
 	CheckSourceAddress         = "source/address"
@@ -86,6 +87,14 @@ const (
 const (
 	LimitJoins      = "max-joins"
 	LimitSubqueries = "max-subqueries"
+)
+
+// The ceilings rule/cost counts against. The rate is the one that decides
+// whether a rule is affordable: the same query is cheap hourly and ruinous
+// every fifteen seconds (spec 7.3).
+const (
+	LimitRowsRead      = "max-rows-read"
+	LimitRowsPerSecond = "max-rows-per-second"
 )
 
 // ListKind is what a check's key list means, which decides how scopes combine
@@ -304,6 +313,21 @@ var checks = []Check{
 	{
 		Name: CheckRuleColumns, Spec: "7.3", Fixed: true,
 		Summary: "a query naming a column or table that does not exist, or returning no value column",
+	},
+
+	// Warns rather than blocks, because the numbers behind it are the
+	// optimiser's prediction rather than a measurement and can be out by an
+	// order of magnitude on a skewed key. Refusing a rule over a guess is how
+	// a check gets switched off; what the estimate is reliably good for is
+	// telling a rule reading a terabyte from one reading a megabyte.
+	//
+	// The ceilings ship generous. One that blocks a working repository on its
+	// first run gets turned off rather than raised (spec 7.3, 7.6).
+	{
+		Name: CheckRuleCost, Spec: "7.3", Default: SeverityWarning,
+		Keys:    []string{LimitRowsPerSecond + ":1000000", LimitRowsRead + ":100000000"},
+		List:    ListCeiling,
+		Summary: "a query predicted to read more than the ceiling allows, per evaluation or per second",
 	},
 
 	// Configurable, and warn by default, because the answer differs per

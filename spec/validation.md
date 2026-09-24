@@ -194,11 +194,25 @@ Tier 1, metadata only, reads no table data:
   it is the one thing ClickHouse gives us that Prometheus does not. The cost
   is that it needs a connection, so it is tier 1 where their equivalent is
   free (7.9).
-- `EXPLAIN ESTIMATE` for predicted rows, parts, and marks
-- `EXPLAIN PLAN indexes=1`: if granules selected is close to granules total,
-  the primary key is not pruning anything
-- eval interval against predicted cost. A rule on a 30s interval reading 400GB
-  is arithmetic, and it is rejected
+- `rule/cost`, from `EXPLAIN ESTIMATE`: predicted rows, parts and marks,
+  summed across the tables a query reads, against two ceilings. One is what a
+  single evaluation may read; the other is that number divided by the group's
+  interval, which is the one that decides anything, because the same query is
+  cheap hourly and ruinous every fifteen seconds. A rule on a 30s interval
+  reading 400GB is arithmetic.
+
+  A warning rather than an error, because these are the optimiser's
+  predictions and can be out by an order of magnitude on a skewed key.
+  Refusing a rule over a guess is how a check gets switched off; telling a
+  terabyte from a megabyte is what an estimate is reliably good for.
+
+  **`EXPLAIN PLAN indexes=1` explains the finding rather than making its
+  own.** When a rule is over a ceiling, and only then, the plan says whether
+  the primary key excluded any granules. Selected equal to total means the
+  query reads the table rather than a slice of it, which is the usual cause
+  and the usual fix. It is not a check of its own: one that can never fire
+  alone would need a documentation page explaining that it never fires
+  alone.
 - `rule/nondeterministic`. `now()`, `today()` and `rand()` inside rule SQL
   break window alignment and make replays lie. The list is ours to curate and
   configurable to extend: `system.functions` has no `is_deterministic` column
@@ -788,7 +802,9 @@ in 7.3 performs.
 
 **Estimated before measured.** `EXPLAIN ESTIMATE` returns predicted rows,
 parts and marks without executing anything, so the table can exist at tier 1,
-cost nothing, and read no data. Measured numbers are better, and they need an
+cost nothing, and read no data. `rule/cost` already asks that question per
+rule and per source, so the table is that output arranged rather than a second
+thing to build. Measured numbers are better, and they need an
 evaluation to measure: rows and bytes read come from the driver's progress
 callback (8.2), which means tier 2. Ship the estimated table first. A
 predicted number that is wrong by an order of magnitude still separates a rule

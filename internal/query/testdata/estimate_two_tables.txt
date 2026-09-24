@@ -1,0 +1,2 @@
+otel	fixture_side	1	1000	1
+otel	otel_traces	1	200000	25

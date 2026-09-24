@@ -8,6 +8,7 @@ import (
 	"github.com/dennisme/clickhouse-ruler/internal/lint"
 	"github.com/dennisme/clickhouse-ruler/internal/policy"
 	"github.com/dennisme/clickhouse-ruler/internal/query"
+	"github.com/dennisme/clickhouse-ruler/internal/rule"
 	"github.com/dennisme/clickhouse-ruler/internal/ruleset"
 	"github.com/dennisme/clickhouse-ruler/internal/source"
 )
@@ -235,5 +236,38 @@ func TestChecksFromPolicyCarriesTheLabelsThatWillExist(t *testing.T) {
 		if !protected[want] {
 			t.Errorf("ProtectedLabels = %v, want it to carry %q", got.ProtectedLabels, want)
 		}
+	}
+}
+
+// The rate ceiling only means something with an interval, and the interval
+// belongs to the rule's group, so the caller is what carries it in.
+func TestChecksFromPolicyReadsTheCostCeilings(t *testing.T) {
+	r := ruleset.Rule{Group: rule.Group{Interval: 30 * time.Second}}
+
+	got := checksFromPolicy(policy.Merge(&policy.Policy{Checks: map[string]policy.Setting{
+		lint.CheckRuleCost: {
+			Severity: lint.SeverityWarning,
+			Keys:     []string{lint.LimitRowsPerSecond + ":500", lint.LimitRowsRead + ":1000"},
+		},
+	}}), r, source.Source{Database: "otel"})
+
+	if got.Cost == nil {
+		t.Fatal("no ceilings, want the configured ones")
+	}
+	if got.Cost.MaxRows != 1000 || got.Cost.MaxRowsPerSecond != 500 {
+		t.Errorf("ceilings = %+v, want 1000 rows and 500 a second", *got.Cost)
+	}
+	if got.Interval != 30*time.Second {
+		t.Errorf("interval = %s, want the group's", got.Interval)
+	}
+}
+
+func TestChecksFromPolicyCostTurnedOff(t *testing.T) {
+	off := policy.Merge(&policy.Policy{Checks: map[string]policy.Setting{
+		lint.CheckRuleCost: {Severity: lint.SeverityOff},
+	}})
+
+	if got := checksFromPolicy(off, ruleset.Rule{}, source.Source{}); got.Cost != nil {
+		t.Errorf("ceilings = %+v, want none: the check is off", *got.Cost)
 	}
 }

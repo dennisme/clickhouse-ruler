@@ -456,3 +456,127 @@ func TestInspectSaysNothingAboutAWorkingRuleWithAnnotations(t *testing.T) {
 		t.Errorf("findings = %v, want none", checkNames(got))
 	}
 }
+
+// costChecks asks the cost question with ceilings a caller chose, against
+// whatever the fixture table holds.
+func costChecks(maxRows uint64, maxRate float64, interval time.Duration) Checks {
+	c := describeChecks()
+	c.Cost = &Cost{MaxRows: maxRows, MaxRowsPerSecond: maxRate}
+	c.Interval = interval
+	return c
+}
+
+// The estimate has to come from the real optimiser: a fixture would keep
+// parsing long after the server's answer changed shape.
+func TestInspectReportsAnExpensiveRule(t *testing.T) {
+	q := openQuerier(t, testSource(t))
+	seedManySpans(t, q)
+
+	expr := `
+SELECT ServiceName, count() AS value
+FROM otel.otel_traces
+WHERE Duration > 0 AND {{ .From }} <= {{ .To }}
+GROUP BY ServiceName`
+
+	got := inspect(t, expr, costChecks(100, 1_000_000, time.Minute))
+	if len(got) != 1 || got[0].Check != lint.CheckRuleCost {
+		t.Fatalf("findings = %v, want only %s", checkNames(got), lint.CheckRuleCost)
+	}
+	if !strings.Contains(got[0].Detail, "estimate") {
+		t.Errorf("detail = %q, want it to say the number is predicted", got[0].Detail)
+	}
+	// This rule has no time bound on the ordering key, so the plan should say
+	// the primary key excluded nothing.
+	if !strings.Contains(got[0].Detail, "primary key") {
+		t.Errorf("detail = %q, want it to explain why the estimate is large", got[0].Detail)
+	}
+}
+
+// The same rule against a ceiling that permits it. A check that cannot be
+// satisfied by raising its ceiling is one an operator turns off instead.
+func TestInspectAcceptsAnExpensiveRuleUnderARaisedCeiling(t *testing.T) {
+	q := openQuerier(t, testSource(t))
+	seedManySpans(t, q)
+
+	expr := `
+SELECT ServiceName, count() AS value
+FROM otel.otel_traces
+WHERE Duration > 0 AND {{ .From }} <= {{ .To }}
+GROUP BY ServiceName`
+
+	if got := inspect(t, expr, costChecks(10_000_000, 1_000_000, time.Minute)); len(got) != 0 {
+		t.Errorf("findings = %v, want none under a ceiling that permits it", checkNames(got))
+	}
+}
+
+// The interval is what makes a modest query expensive, which is the whole
+// reason the rate ceiling exists.
+func TestInspectReportsARuleThatIsOnlyExpensiveBecauseOfItsInterval(t *testing.T) {
+	q := openQuerier(t, testSource(t))
+	seedManySpans(t, q)
+
+	expr := `
+SELECT ServiceName, count() AS value
+FROM otel.otel_traces
+WHERE Duration > 0 AND {{ .From }} <= {{ .To }}
+GROUP BY ServiceName`
+
+	// Row count is permitted; running it every second is not.
+	hourly := costChecks(10_000_000, 1000, time.Hour)
+	if got := inspect(t, expr, hourly); len(got) != 0 {
+		t.Fatalf("findings = %v, want none: hourly, this is affordable", checkNames(got))
+	}
+
+	perSecond := costChecks(10_000_000, 1000, time.Second)
+	got := inspect(t, expr, perSecond)
+	if len(got) != 1 || got[0].Check != lint.CheckRuleCost {
+		t.Fatalf("findings = %v, want only %s", checkNames(got), lint.CheckRuleCost)
+	}
+	if !strings.Contains(got[0].Detail, "rows a second") {
+		t.Errorf("detail = %q, want it to report the rate", got[0].Detail)
+	}
+}
+
+// A rule bounded on the ordering key, under the shipped ceilings. The check
+// has to stay quiet here or nobody keeps it on.
+func TestInspectSaysNothingAboutAnAffordableRule(t *testing.T) {
+	q := openQuerier(t, testSource(t))
+	seedManySpans(t, q)
+
+	c := describeChecks()
+	c.Cost = &Cost{MaxRows: 100_000_000, MaxRowsPerSecond: 1_000_000}
+	c.Interval = time.Minute
+
+	if got := inspect(t, goodExpr, c); len(got) != 0 {
+		t.Errorf("findings = %v, want none", checkNames(got))
+	}
+}
+
+// seedManySpans writes enough rows for an estimate to be worth reading. A
+// handful would leave every ceiling untested, since the optimiser reports
+// what it would actually open and one part of three rows is one granule.
+func seedManySpans(t *testing.T, q *Querier) {
+	t.Helper()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	conn := adminConn(t, q.src.Address)
+	if err := conn.Exec(ctx, "TRUNCATE TABLE otel.otel_traces"); err != nil {
+		t.Fatalf("truncate: %v", err)
+	}
+
+	// Written with the server's own generator rather than a batch from here:
+	// the rows exist to give the primary index something to estimate, and
+	// their contents do not matter.
+	err := conn.Exec(ctx, `
+INSERT INTO otel.otel_traces (Timestamp, TraceId, SpanId, ServiceName, SpanName, Duration, StatusCode)
+SELECT
+  toDateTime64('2026-09-19 12:00:00', 9) - toIntervalSecond(number % 600),
+  toString(number), toString(number),
+  concat('svc-', toString(number % 5)), 'GET /', number, 'Ok'
+FROM numbers(200000)`)
+	if err != nil {
+		t.Fatalf("seeding rows: %v", err)
+	}
+}

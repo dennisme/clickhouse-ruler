@@ -143,7 +143,7 @@ func checkLimits(r *lint.Reader, n *yaml.Node, check string) {
 	if !lint.Ceiling(check) {
 		return
 	}
-	names := []string{lint.LimitJoins, lint.LimitSubqueries}
+	names := limitNames(check)
 
 	for _, item := range n.Content {
 		s := Setting{Keys: []string{item.Value}}
@@ -156,6 +156,15 @@ func checkLimits(r *lint.Reader, n *yaml.Node, check string) {
 			"%s takes ceilings written as name:number, one of %s, got %q",
 			check, strings.Join(names, " or "), item.Value)
 	}
+}
+
+// limitNames are the ceilings a check takes, for the message that reports a
+// malformed one.
+func limitNames(check string) []string {
+	if check == lint.CheckRuleCost {
+		return []string{lint.LimitRowsRead, lint.LimitRowsPerSecond}
+	}
+	return []string{lint.LimitJoins, lint.LimitSubqueries}
 }
 
 func parseKeys(r *lint.Reader, n *yaml.Node) []string {

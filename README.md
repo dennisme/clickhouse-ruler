@@ -476,6 +476,10 @@ Working:
   migration dropped, one whose result has no `value` column and so can never
   fire, one producing a label the ruler owns through a subquery or `SELECT *`,
   and an annotation reading something no column and no label will carry
+- A cost check, from `EXPLAIN ESTIMATE`, which also reads no rows: what a rule
+  is predicted to read per evaluation and per second, measured against
+  configurable ceilings. A rule over one is told why when the query plan says
+  its primary key excluded nothing
 - The ClickHouse user contract: `source/privileges` checks each source's user
   for revoked table-function privileges, `readonly = 2`, a constraint behind
   every limit the ruler sends, and the grant on its own table. Probed rather
@@ -514,9 +518,9 @@ Working:
 
 Not built yet:
 
-- The query checks stop short of reading data. A rule scanning a terabyte, or
-  returning nothing at all, still passes. Spec 7.3, the rest of tier 1 and all
-  of tier 2.
+- The query checks stop short of reading data. A rule returning nothing at all
+  still passes: whether an attribute key is actually present, and how often a
+  rule would have fired, both need real rows. Spec 7.3 tier 2, and 7.4.
 - No `ruler watch`, so rules are not reloaded without a restart.
 - No ClickHouse query cost metrics. Rows and bytes read per rule need a driver
   progress callback. Spec 8.2.
