@@ -25,6 +25,10 @@ theme:
         icon: material/weather-sunny
         name: Switch to light mode
   features:
+    # The edit link only renders when this is on, whatever edit_uri says. A
+    # page somebody can correct from the page they noticed the mistake on is
+    # the difference between a fix and a note they meant to make later.
+    - content.action.edit
     - content.code.copy
     - navigation.sections
     - search.highlight
