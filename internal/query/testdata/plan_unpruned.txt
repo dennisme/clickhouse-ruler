@@ -1,0 +1,24 @@
+Expression ((Project names + Projection))
+  Aggregating
+    Expression (Before GROUP BY)
+      Filter ((WHERE + Change column names to column identifiers))
+        ReadFromMergeTree (otel.otel_traces)
+        Indexes:
+          MinMax
+            Condition: true
+            Parts: 1/1
+            Granules: 25/25
+          Partition
+            Condition: true
+            Parts: 1/1
+            Granules: 25/25
+          PrimaryKey
+            Condition: true
+            Parts: 1/1
+            Granules: 25/25
+          Skip
+            Name: idx_duration
+            Description: minmax GRANULARITY 1
+            Parts: 1/1
+            Granules: 25/25
+            Ranges: 1

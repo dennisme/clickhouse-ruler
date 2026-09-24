@@ -1,0 +1,1 @@
+otel	otel_traces	1	126272	16

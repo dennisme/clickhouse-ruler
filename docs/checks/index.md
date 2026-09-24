@@ -16,6 +16,7 @@ Generated from the check table in `internal/lint/checks.go`. Edit the table, the
 | [`policy/unknown-check`](policy.md#policy-unknown-check) | fixed, always `error` | a policy file configuring a check that does not exist |
 | [`rule/columns`](rule.md#rule-columns) | fixed, always `error` | a query naming a column or table that does not exist, or returning no value column |
 | [`rule/complexity`](rule.md#rule-complexity) | `warning` by default | a query with more joins or subqueries than the configured ceiling |
+| [`rule/cost`](rule.md#rule-cost) | `warning` by default | a query predicted to read more than the ceiling allows, per evaluation or per second |
 | [`rule/expr`](rule.md#rule-expr) | fixed, always `error` | an empty query, or one missing the time bounds the ruler binds |
 | [`rule/for`](rule.md#rule-for) | `warning` by default | a `for` shorter than the group interval, so the alert fires on its first evaluation |
 | [`rule/foreign-table`](rule.md#rule-foreign-table) | `warning` by default | a query reading a table outside its source's own database |

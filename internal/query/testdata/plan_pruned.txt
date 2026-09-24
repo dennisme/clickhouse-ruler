@@ -1,0 +1,26 @@
+Expression ((Project names + Projection))
+  Aggregating
+    Expression (Before GROUP BY)
+      Filter ((WHERE + Change column names to column identifiers))
+        ReadFromMergeTree (otel.otel_traces)
+        Indexes:
+          MinMax
+            Keys:
+              Timestamp
+            Condition: and((Timestamp in (-Inf, \'1789819200\')), (Timestamp in [\'1789818900\', +Inf)))
+            Parts: 1/1
+            Granules: 25/25
+          Partition
+            Keys:
+              toDate(Timestamp)
+            Condition: and((toDate(Timestamp) in (-Inf, 20715]), (toDate(Timestamp) in [20715, +Inf)))
+            Parts: 1/1
+            Granules: 25/25
+          PrimaryKey
+            Keys:
+              toDateTime(Timestamp)
+            Condition: and((toDateTime(Timestamp) in (-Inf, 1789819200]), (toDateTime(Timestamp) in [1789818900, +Inf)))
+            Parts: 1/1
+            Granules: 16/25
+            Search Algorithm: generic exclusion search
+            Ranges: 5

@@ -27,6 +27,7 @@ stricter, and a ceiling binds at its lowest value. See spec 7.6 and 7.7.
 | [`labels/required`](#labels-required) | `warning` by default | required: `severity`, `team` | [7.6](https://github.com/dennisme/clickhouse-ruler/blob/main/spec.md) |
 | [`rule/columns`](#rule-columns) | fixed, always `error` | none | [7.3](https://github.com/dennisme/clickhouse-ruler/blob/main/spec.md) |
 | [`rule/complexity`](#rule-complexity) | `warning` by default | ceilings: `max-joins:2`, `max-subqueries:2` | [7.3](https://github.com/dennisme/clickhouse-ruler/blob/main/spec.md) |
+| [`rule/cost`](#rule-cost) | `warning` by default | ceilings: `max-rows-per-second:1000000`, `max-rows-read:100000000` | [7.3](https://github.com/dennisme/clickhouse-ruler/blob/main/spec.md) |
 | [`rule/expr`](#rule-expr) | fixed, always `error` | none | [7.6](https://github.com/dennisme/clickhouse-ruler/blob/main/spec.md) |
 | [`rule/for`](#rule-for) | `warning` by default | none | [7.6](https://github.com/dennisme/clickhouse-ruler/blob/main/spec.md) |
 | [`rule/foreign-table`](#rule-foreign-table) | `warning` by default | none | [7.3](https://github.com/dennisme/clickhouse-ruler/blob/main/spec.md) |
@@ -426,3 +427,51 @@ takes that ability away from every source.
 
 If the finding is unexpected, `source/privileges` is the check that says which
 half of the user contract is missing.
+
+<a id="rule-cost"></a>
+
+### rule/cost
+
+A query predicted to read more than the ceiling allows, per evaluation or per
+second.
+
+`EXPLAIN ESTIMATE` answers from the primary index and the part metadata, so
+this reads no data and costs a parse. What comes back is rows, parts and marks
+per table, summed across every table the query touches.
+
+**The rate is the number that decides things.** The same query is cheap hourly
+and ruinous every fifteen seconds, so the ceiling an author trips is usually
+`max-rows-per-second`, derived from the row count and the group's interval. A
+rule with no interval has no rate, and only the per-evaluation ceiling applies.
+
+```yaml
+checks:
+  rule/cost:
+    keys: [max-rows-read:50000000, max-rows-per-second:500000]
+```
+
+**The numbers are predictions, not measurements.** ClickHouse is estimating
+what it would read before reading it, and on a skewed key that estimate can be
+out by an order of magnitude. That is why this warns rather than blocks: a
+check refusing rules over a guess is one people turn off. What the estimate is
+reliably good for is telling a rule reading a terabyte from one reading a
+megabyte, and that is the decision it exists to support.
+
+So raise the ceiling when a rule is genuinely that expensive and the cluster
+can afford it. Raise it on the source rather than the instance when only one
+cluster is that big, and remember a source can only tighten: the shipped
+ceilings apply where nothing else is configured.
+
+**When a rule is over, the finding says why if it can.** A second question
+goes to the query plan, and if the primary key excluded no granules the
+finding says so. That is the usual cause and the usual fix: the rule's time
+bound has to be on the table's ordering key for the key to narrow anything.
+
+```sql
+-- before: bounded on a column the key does not order by, so every granule
+-- is still a candidate
+WHERE toDate(EventDate) >= today() - 1 AND Duration > 0
+
+-- after: bounded on the ordering key the ruler already supplies
+WHERE Timestamp >= {{ .From }} AND Timestamp < {{ .To }}
+```

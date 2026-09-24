@@ -65,6 +65,15 @@ type Checks struct {
 	// resolves them and this package sees one rule at a time (spec 6.3.1).
 	KnownLabels []string
 
+	// Cost is the ceiling on what one evaluation may read, nil when no
+	// ceiling is configured.
+	Cost *Cost
+
+	// Interval is how often the rule's group evaluates, which is what turns a
+	// row count into a rate. Zero when the group set none, and the rate
+	// ceiling then does not apply (spec 7.3).
+	Interval time.Duration
+
 	// ProtectedLabels are the names a query may not produce as columns,
 	// because the Alertmanager route tree is generated from the files and a
 	// value that exists only at query time has no route (spec 6.3.1). Passed
@@ -125,7 +134,49 @@ func (q *Querier) Inspect(ctx context.Context, r rule.Rule, c Checks) ([]Finding
 		// reporting on columns nobody has. The tree checks above still stand.
 		return append(out, *finding), nil
 	}
-	return append(out, inspectResult(cols, r, c)...), nil
+	out = append(out, inspectResult(cols, r, c)...)
+
+	cost, err := q.inspectCost(ctx, sql, c)
+	if err != nil {
+		return nil, err
+	}
+	return append(out, cost...), nil
+}
+
+// inspectCost asks what the rule will read every time it runs.
+//
+// The third round trip, and a fourth when a ceiling is already exceeded.
+// Neither executes the query: EXPLAIN ESTIMATE answers from the primary index
+// and the part metadata, and EXPLAIN indexes=1 from the plan, so both cost a
+// parse and a network hop like the two before them (spec 7.3).
+func (q *Querier) inspectCost(ctx context.Context, sql string, c Checks) ([]Finding, error) {
+	if c.Cost == nil {
+		return nil, nil
+	}
+
+	est, err := q.explainEstimate(ctx, sql)
+	if finding, err := classifyEstimate(err); err != nil {
+		return nil, err
+	} else if finding != nil {
+		return []Finding{*finding}, nil
+	}
+
+	// A query the server estimated nothing for reads no table it tracks this
+	// way: a constant, or a count it can answer from metadata. Nothing to
+	// report, and nothing that would make a ceiling meaningful.
+	detail := overCost(est, c.Cost, c.Interval)
+	if detail == "" {
+		return nil, nil
+	}
+
+	// Why it is expensive, asked only now. A failure here loses the
+	// explanation and keeps the finding: the ceiling was already exceeded,
+	// and reporting nothing because the second question went unanswered
+	// would be worse than reporting it without the reason.
+	if plan, err := q.explainIndexes(ctx, sql); err == nil {
+		detail = withPruning(detail, unprunedTables(plan))
+	}
+	return []Finding{{Check: lint.CheckRuleCost, Detail: detail}}, nil
 }
 
 // inspectResult runs every check that reads the rule's output columns.
