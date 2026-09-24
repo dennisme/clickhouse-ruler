@@ -25,6 +25,7 @@ stricter, and a ceiling binds at its lowest value. See spec 7.6 and 7.7.
 | [`annotations/runbook`](#annotations-runbook) | `warning` by default | none | [7.6](https://github.com/dennisme/clickhouse-ruler/blob/main/spec.md) |
 | [`annotations/template`](#annotations-template) | `warning` by default | none | [7.6](https://github.com/dennisme/clickhouse-ruler/blob/main/spec.md) |
 | [`labels/required`](#labels-required) | `warning` by default | required: `severity`, `team` | [7.6](https://github.com/dennisme/clickhouse-ruler/blob/main/spec.md) |
+| [`rule/columns`](#rule-columns) | fixed, always `error` | none | [7.3](https://github.com/dennisme/clickhouse-ruler/blob/main/spec.md) |
 | [`rule/complexity`](#rule-complexity) | `warning` by default | ceilings: `max-joins:2`, `max-subqueries:2` | [7.3](https://github.com/dennisme/clickhouse-ruler/blob/main/spec.md) |
 | [`rule/expr`](#rule-expr) | fixed, always `error` | none | [7.6](https://github.com/dennisme/clickhouse-ruler/blob/main/spec.md) |
 | [`rule/for`](#rule-for) | `warning` by default | none | [7.6](https://github.com/dennisme/clickhouse-ruler/blob/main/spec.md) |
@@ -38,6 +39,7 @@ stricter, and a ceiling binds at its lowest value. See spec 7.6 and 7.7.
 | [`rule/settings`](#rule-settings) | fixed, always `error` | none | [7.3](https://github.com/dennisme/clickhouse-ruler/blob/main/spec.md) |
 | [`rule/source-match`](#rule-source-match) | `warning` by default | none | [6.10](https://github.com/dennisme/clickhouse-ruler/blob/main/spec.md) |
 | [`rule/syntax`](#rule-syntax) | fixed, always `error` | none | [7.3](https://github.com/dennisme/clickhouse-ruler/blob/main/spec.md) |
+| [`rule/table-access`](#rule-table-access) | `warning` by default | none | [7.3](https://github.com/dennisme/clickhouse-ruler/blob/main/spec.md) |
 | [`rule/table-function`](#rule-table-function) | `error` by default | an allowlist, shipped empty | [7.3](https://github.com/dennisme/clickhouse-ruler/blob/main/spec.md) |
 | [`rule/window`](#rule-window) | `warning` by default | none | [7.6](https://github.com/dennisme/clickhouse-ruler/blob/main/spec.md) |
 
@@ -358,3 +360,69 @@ Scopes union the lists and the lowest value for a name binds, so a source can
 be stricter than the instance policy and can never be looser. The shipped
 ceilings apply only when no scope sets any, so raising one is a decision an
 operator gets to make.
+
+<a id="rule-columns"></a>
+
+### rule/columns
+
+A query naming a column or a table that is not there, or returning no `value`
+column.
+
+ClickHouse resolves the query without reading a row, so this is the check that
+catches a rule broken by a schema change. A column dropped in a migration
+months ago fails here, in the pull request that touches the rule, instead of
+failing at evaluation time in front of nobody.
+
+The second half is quieter and worse. A rule whose result has no `value`
+column returns rows and produces no alert, because there is nothing to compare
+against a threshold. That failure reaches production and stays there: the rule
+runs, the query succeeds, and the alert never fires.
+
+```sql
+-- before: the aggregate is named total, so nothing is a value
+SELECT ServiceName, count() AS total
+FROM otel.otel_traces
+WHERE Timestamp >= {{ .From }} AND Timestamp < {{ .To }}
+GROUP BY ServiceName
+
+-- after
+SELECT ServiceName, count() AS value
+FROM otel.otel_traces
+WHERE Timestamp >= {{ .From }} AND Timestamp < {{ .To }}
+GROUP BY ServiceName
+```
+
+Fixed, because each case means the rule cannot do its job.
+
+<a id="rule-table-access"></a>
+
+### rule/table-access
+
+The source's ClickHouse user cannot read what the rule asks for, so the
+query's result was never checked.
+
+This is not a finding about the SQL. The query may be perfect; nobody could
+resolve it, which also means `rule/columns` and the annotation checks had
+nothing to read. It is reported rather than passed over in silence, because a
+check that could not run must never look like a check that passed.
+
+It is configurable because the right answer differs per cluster rather than
+per rule. On the cluster that will actually evaluate the rule, a table its
+user cannot read is worth blocking on. On a validation replica whose user is
+deliberately granted almost nothing, it is noise:
+
+```yaml
+# sources.ci.yaml, handed to the validation run
+- name: otel_ci
+  checks:
+    rule/table-access:
+      severity: "off"
+```
+
+**Severity only tightens across scopes.** A source can raise a check and can
+never lower one, so leaving this at its shipped default in `ruler.yaml` is
+what lets a single source turn it off. Setting it to `error` instance-wide
+takes that ability away from every source.
+
+If the finding is unexpected, `source/privileges` is the check that says which
+half of the user contract is missing.

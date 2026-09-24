@@ -58,6 +58,19 @@ type Checks struct {
 	// is configured. A pointer rather than two ints because zero is a ceiling
 	// an operator can mean: no joins at all.
 	Complexity *Complexity
+
+	// KnownLabels are the label names an annotation can read that no result
+	// column produces: the rule's own labels overlaid on its group's, the
+	// source's, and the two the ruler sets. Passed in because the loader
+	// resolves them and this package sees one rule at a time (spec 6.3.1).
+	KnownLabels []string
+
+	// ProtectedLabels are the names a query may not produce as columns,
+	// because the Alertmanager route tree is generated from the files and a
+	// value that exists only at query time has no route (spec 6.3.1). Passed
+	// in for the same reason: a matched source's own labels are protected for
+	// the rules that reach it, and only the caller knows which those are.
+	ProtectedLabels []string
 }
 
 // Complexity is how much query a rule may be. A count of joins and
@@ -94,7 +107,71 @@ func (q *Querier) Inspect(ctx context.Context, r rule.Rule, c Checks) ([]Finding
 	if finding != nil {
 		return []Finding{*finding}, nil
 	}
-	return inspectTree(root, c), nil
+	out := inspectTree(root, c)
+
+	// The second round trip, and the only other one. DESCRIBE resolves the
+	// query and hands back the columns it will produce, which is the only way
+	// to know what a rule's result actually looks like: an alias inside a
+	// subquery, a CTE or SELECT * all name columns the file never mentions
+	// (spec 7.3).
+	cols, err := q.describe(ctx, sql)
+
+	finding, err = classifyDescribe(err)
+	if err != nil {
+		return nil, err
+	}
+	if finding != nil {
+		// Nothing resolved, so every check that reads the result would be
+		// reporting on columns nobody has. The tree checks above still stand.
+		return append(out, *finding), nil
+	}
+	return append(out, inspectResult(cols, r, c)...), nil
+}
+
+// inspectResult runs every check that reads the rule's output columns.
+func inspectResult(cols []Column, r rule.Rule, c Checks) []Finding {
+	var out []Finding
+
+	if !hasValueColumn(cols) {
+		out = append(out, Finding{
+			Check: lint.CheckRuleColumns,
+			Detail: fmt.Sprintf("the query returns %s and no %q column, so there is nothing to "+
+				"compare against a threshold and the rule can never fire",
+				columnList(cols), valueColumn),
+		})
+	}
+
+	if used := producedProtectedLabels(cols, c.ProtectedLabels); len(used) > 0 {
+		out = append(out, Finding{
+			Check: lint.CheckRuleProtectedLabel,
+			Detail: fmt.Sprintf("the query produces %s, which the ruler owns: the Alertmanager route "+
+				"tree is generated from the files, so a value that exists only at query time has no route",
+				strings.Join(used, ", ")),
+		})
+	}
+
+	for _, u := range unresolvedFields(r.Annotations, cols, c.KnownLabels) {
+		out = append(out, Finding{
+			Check: lint.CheckAnnotationsTemplate,
+			Detail: fmt.Sprintf("annotation %q reads %s, which no result column and no label will "+
+				"carry, so the annotation fails to render on every alert this rule produces",
+				u.Annotation, strings.Join(u.Fields, ", ")),
+		})
+	}
+	return out
+}
+
+// columnList names what the query did return, because "no value column" is
+// most often a column named something else.
+func columnList(cols []Column) string {
+	if len(cols) == 0 {
+		return "no columns"
+	}
+	names := make([]string, 0, len(cols))
+	for _, c := range cols {
+		names = append(names, c.Name)
+	}
+	return strings.Join(names, ", ")
 }
 
 // classifyExplain separates what the server says about the rule from a ruler

@@ -8,6 +8,7 @@ import (
 	"github.com/dennisme/clickhouse-ruler/internal/lint"
 	"github.com/dennisme/clickhouse-ruler/internal/policy"
 	"github.com/dennisme/clickhouse-ruler/internal/query"
+	"github.com/dennisme/clickhouse-ruler/internal/ruleset"
 	"github.com/dennisme/clickhouse-ruler/internal/source"
 )
 
@@ -93,7 +94,7 @@ func TestChecksFromPolicy(t *testing.T) {
 		lint.CheckRuleNondeterministic: {Severity: lint.SeverityOff},
 	}})
 
-	got := checksFromPolicy(merged, "otel")
+	got := checksFromPolicy(merged, ruleset.Rule{}, source.Source{Database: "otel"})
 	if len(got.AllowedTableFunctions) != 1 || got.AllowedTableFunctions[0] != "merge" {
 		t.Errorf("allowed = %v, want the configured allowlist", got.AllowedTableFunctions)
 	}
@@ -105,14 +106,14 @@ func TestChecksFromPolicy(t *testing.T) {
 // A foreign table is one outside the source's own database, so the source
 // the rule matched is what the check is measured against.
 func TestChecksFromPolicyCarriesTheSourceDatabase(t *testing.T) {
-	if got := checksFromPolicy(policy.Merge(), "otel"); got.Database != "otel" {
+	if got := checksFromPolicy(policy.Merge(), ruleset.Rule{}, source.Source{Database: "otel"}); got.Database != "otel" {
 		t.Errorf("database = %q, want otel", got.Database)
 	}
 
 	off := policy.Merge(&policy.Policy{Checks: map[string]policy.Setting{
 		lint.CheckRuleForeignTable: {Severity: lint.SeverityOff},
 	}})
-	if got := checksFromPolicy(off, "otel"); got.Database != "" {
+	if got := checksFromPolicy(off, ruleset.Rule{}, source.Source{Database: "otel"}); got.Database != "" {
 		t.Errorf("database = %q, want none: the check is off", got.Database)
 	}
 }
@@ -123,7 +124,7 @@ func TestChecksFromPolicyReadsTheComplexityCeilings(t *testing.T) {
 			Severity: lint.SeverityWarning,
 			Keys:     []string{lint.LimitJoins + ":1", lint.LimitSubqueries + ":4"},
 		},
-	}}), "otel")
+	}}), ruleset.Rule{}, source.Source{Database: "otel"})
 
 	if got.Complexity == nil {
 		t.Fatal("no ceilings, want the configured ones")
@@ -135,7 +136,7 @@ func TestChecksFromPolicyReadsTheComplexityCeilings(t *testing.T) {
 	off := policy.Merge(&policy.Policy{Checks: map[string]policy.Setting{
 		lint.CheckRuleComplexity: {Severity: lint.SeverityOff},
 	}})
-	if got := checksFromPolicy(off, "otel"); got.Complexity != nil {
+	if got := checksFromPolicy(off, ruleset.Rule{}, source.Source{Database: "otel"}); got.Complexity != nil {
 		t.Errorf("ceilings = %+v, want none: the check is off", *got.Complexity)
 	}
 }
@@ -202,5 +203,37 @@ func TestInspectionProblemsNeverExemptsAFixedCheck(t *testing.T) {
 	now := time.Date(2026, 9, 22, 0, 0, 0, 0, time.UTC)
 	if got := inspectionProblems("f.yaml", "A", 1, src, policy.Merge(), findings, now); len(got) != 1 {
 		t.Errorf("got %v, want the correctness finding kept", got)
+	}
+}
+
+// An annotation can read a label no column produces, so the checker is told
+// which names will exist at evaluation time: the rule's own labels, the
+// source's, and the two the ruler sets (spec 6.3.1).
+func TestChecksFromPolicyCarriesTheLabelsThatWillExist(t *testing.T) {
+	r := ruleset.Rule{Labels: map[string]string{"team": "payments", "severity": "warning"}}
+	src := source.Source{Name: "payments_prod", Database: "otel", Labels: map[string]string{"env": "prod"}}
+
+	got := checksFromPolicy(policy.Merge(), r, src)
+
+	known := map[string]bool{}
+	for _, name := range got.KnownLabels {
+		known[name] = true
+	}
+	for _, want := range []string{"team", "severity", "env", "alertname", "source"} {
+		if !known[want] {
+			t.Errorf("KnownLabels = %v, want it to carry %q", got.KnownLabels, want)
+		}
+	}
+
+	protected := map[string]bool{}
+	for _, name := range got.ProtectedLabels {
+		protected[name] = true
+	}
+	// A source's own labels are protected for the rules that reach it: a query
+	// cannot know better than the ruler which cluster it ran on.
+	for _, want := range []string{"alertname", "source", "team", "env"} {
+		if !protected[want] {
+			t.Errorf("ProtectedLabels = %v, want it to carry %q", got.ProtectedLabels, want)
+		}
 	}
 }

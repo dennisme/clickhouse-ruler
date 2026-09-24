@@ -471,6 +471,11 @@ Working:
   source's database, or joins more than a configured ceiling is reported
   before it ever runs. Found in the tree ClickHouse itself parsed, never by
   matching words in the query text
+- Checks that read the rule's real result columns, through
+  `DESCRIBE (SELECT ...)`, which reads no rows: a rule naming a column a
+  migration dropped, one whose result has no `value` column and so can never
+  fire, one producing a label the ruler owns through a subquery or `SELECT *`,
+  and an annotation reading something no column and no label will carry
 - The ClickHouse user contract: `source/privileges` checks each source's user
   for revoked table-function privileges, `readonly = 2`, a constraint behind
   every limit the ruler sends, and the grant on its own table. Probed rather
@@ -509,13 +514,16 @@ Working:
 
 Not built yet:
 
-- The query checks stop at the parse tree. A rule referencing a dropped
-  column, scanning a terabyte, or returning nothing at all still passes. Spec
-  7.3, the rest of tier 1 and all of tier 2.
+- The query checks stop short of reading data. A rule scanning a terabyte, or
+  returning nothing at all, still passes. Spec 7.3, the rest of tier 1 and all
+  of tier 2.
 - No `ruler watch`, so rules are not reloaded without a restart.
 - No ClickHouse query cost metrics. Rows and bytes read per rule need a driver
   progress callback. Spec 8.2.
 - No Alertmanager route tree generation.
+- No pull request summary comment. Findings annotate the diff inline today;
+  a table of what each rule will cost per evaluation is spec 7.10, and the
+  measured version of it needs the cost metrics above.
 
 Known gaps that will change:
 

@@ -186,8 +186,14 @@ Tier 1, metadata only, reads no table data:
   passed.
 - table and columns exist, via `system.columns`
 - annotation template variables resolve against the real output column names
-  from `DESCRIBE (SELECT ...)`. Better than the `pint` equivalent, which has to
-  infer labels through aggregations and sometimes gets it wrong.
+  from `DESCRIBE (SELECT ...)`. `pint` has to model how labels propagate
+  through a PromQL expression, because Prometheus has no way to be asked, and
+  its changelog is a long trail of corrections for `absent()`,
+  `label_replace()`, binary expressions and `on(...)`, plus two refactors for
+  accuracy. We ask the database instead, which is not cleverness on our part:
+  it is the one thing ClickHouse gives us that Prometheus does not. The cost
+  is that it needs a connection, so it is tier 1 where their equivalent is
+  free (7.9).
 - `EXPLAIN ESTIMATE` for predicted rows, parts, and marks
 - `EXPLAIN PLAN indexes=1`: if granules selected is close to granules total,
   the primary key is not pruning anything
@@ -751,3 +757,101 @@ where a `pint` author would write one comment. If that case turns up often
 enough to matter, the answer is an operator-owned exemption with a reason and
 an expiry, which is what 7.7 specifies: the finding is dropped for one check
 on one source, by the person who owns that cluster, until a date they chose.
+
+### 7.10 Reporting in a pull request
+
+Two surfaces, and only one of them exists.
+
+**Inline annotations exist.** `ruler check --format=github` emits workflow
+commands, and GitHub renders each finding on the changed line, with the
+check's documentation link in the annotation body (7.8). That is the surface
+an author acts on, and it needs no API token: the workflow command is written
+to stdout and GitHub reads it.
+
+**A summary comment does not.** One comment on the pull request, a table per
+changed file, saying what each rule will cost on every evaluation:
+
+```markdown
+| File | Alert | Source | Bytes read | Rows | Duration | Interval |
+| --- | --- | --- | --- | --- | --- | --- |
+| rules/payments/latency.yaml | HighP99Latency | payments_prod | 1.2 GB | 4.1 M | 820ms | 30s |
+| rules/payments/latency.yaml | HighP99Latency | payments_staging | 18 MB | 90 K | 40ms | 30s |
+```
+
+The row key is the rule **and** the source, never the rule alone. A rule
+matches sources by label and evaluates against each one, so a rule that is
+cheap on staging and pathological on prod is exactly the row worth surfacing,
+and averaging it away is the one thing this table must not do. The interval
+sits beside the cost because "1.2 GB every 30 seconds" is the sentence that
+changes somebody's mind, and that arithmetic is the same one the cost check
+in 7.3 performs.
+
+**Estimated before measured.** `EXPLAIN ESTIMATE` returns predicted rows,
+parts and marks without executing anything, so the table can exist at tier 1,
+cost nothing, and read no data. Measured numbers are better, and they need an
+evaluation to measure: rows and bytes read come from the driver's progress
+callback (8.2), which means tier 2. Ship the estimated table first. A
+predicted number that is wrong by an order of magnitude still separates a rule
+reading a terabyte from one reading a megabyte, which is the decision being
+supported.
+
+**Duration is the weakest column and goes last.** Wall clock moves with
+cluster load, cache state and CI concurrency, so the same rule timed twice can
+differ fivefold. A table whose numbers change for reasons the author did not
+cause is a table people stop reading. Bytes read is stable and is what
+predicts the cost of every future evaluation.
+
+#### Running rules from CI is a decision, not a default
+
+A summary carrying measured numbers means continuous integration executes a
+contributor's SQL against a real cluster. That is a genuine capability and it
+has to be named rather than discovered: **a pull request becomes a way to run
+a query the author wrote.** It is off by default for that reason, and it stays
+off until an operator turns it on deliberately.
+
+It is defensible because nothing about it is a new privilege. The query runs
+as the source's own ClickHouse user, under the contract in 6.7.2: table
+functions revoked, `readonly = 2`, row policies applied, and settings profile
+constraints capping execution time, memory and rows. The worst a crafted pull
+request can do is what that user can already do, which is the whole point of
+the contract being asserted rather than assumed.
+
+Three layers carry the rest, and the documentation has to say so plainly
+rather than implying the tool handles it:
+
+- **GitHub's own permissions.** A `pull_request` workflow triggered from a
+  fork gets a read-only token and no secrets, so the online checks cannot
+  connect and the summary cannot be posted. That is the correct behaviour and
+  not a bug to work around. `pull_request_target` runs with the base
+  repository's secrets and must not be used to work around it: that is how a
+  fork's code gets a credential.
+- **Which cluster CI points at.** This needs no new configuration. Sources are
+  a file passed with `--sources`, so CI can be given a different one: a
+  read-only replica, with a ClickHouse user that exists only for validation,
+  while the ruler evaluating in production uses its own. Labels already
+  decide which rules match which sources, so the same rules resolve against
+  whichever file the run was handed.
+- **The cost caps on that user.** `max_execution_time`, `max_memory_usage` and
+  `max_rows` are per source, so the CI source can be capped far harder than
+  the evaluating one.
+
+**Pointing validation at a real cluster is the point, not a compromise.**
+`pint` is useful because it asks a live Prometheus whether the series exist,
+and the equivalent questions here need real data: whether an attribute key is
+actually present (7.3, tier 2), and how many times a rule would have fired
+over the last day (7.4). A replica that only the validation user can reach is
+the shape that makes those answerable without pointing CI at the cluster
+carrying production traffic. The configuration has to stay flexible enough to
+express that, which today it already does.
+
+#### What it needs first
+
+- **Changed-file filtering.** 10 says `ruler check` in CI checks only the
+  rules changed in the pull request. Nothing reads a diff today; it checks a
+  directory. "A table per changed file" needs that first.
+- **A comment path.** Inline annotations need no token; a summary comment
+  needs the GitHub API and `pull-requests: write`. It has to update one
+  comment in place, found by a hidden marker, rather than appending a comment
+  per push. A bot that posts five tables on a five-commit branch is a bot
+  people mute.
+- **Tier 2, for the measured version.** The estimated table needs none of it.

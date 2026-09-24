@@ -105,11 +105,23 @@ generate:
 
 # Fail if the checked-in documentation is not what the table produces.
 #
-# Same game `golangci-lint fmt --diff` plays above: regenerate, then report
-# rather than rewrite, so drifted docs fail the recipe instead of passing it
-# silently. `just generate` is the one that rewrites.
-generate-check: generate
-    git diff --exit-code -- docs/
+# Same game `golangci-lint fmt --diff` plays above: report rather than rewrite,
+# so drifted docs fail the recipe instead of passing it silently.
+#
+# Compares the tree against itself across a generate rather than against git.
+# A `git diff` here would also fail on documentation somebody is in the middle
+# of writing, which makes `just check` unusable exactly when it is most needed,
+# and would pass on a dirty tree whose generated regions were stale.
+generate-check:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    before=$(find docs -type f | sort | xargs shasum | shasum)
+    just generate
+    after=$(find docs -type f | sort | xargs shasum | shasum)
+    if [ "$before" != "$after" ]; then
+        echo "docs/ is out of date with the check table, run \`just generate\`" >&2
+        exit 1
+    fi
 
 # Serve the documentation site locally, rebuilding as files change.
 #

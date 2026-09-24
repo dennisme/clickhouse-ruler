@@ -14,6 +14,7 @@ Generated from the check table in `internal/lint/checks.go`. Edit the table, the
 | [`policy/fixed-check`](policy.md#policy-fixed-check) | fixed, always `error` | a policy file configuring a correctness check, which cannot be softened |
 | [`policy/severity`](policy.md#policy-severity) | fixed, always `error` | a severity that is not off, warn or error |
 | [`policy/unknown-check`](policy.md#policy-unknown-check) | fixed, always `error` | a policy file configuring a check that does not exist |
+| [`rule/columns`](rule.md#rule-columns) | fixed, always `error` | a query naming a column or table that does not exist, or returning no value column |
 | [`rule/complexity`](rule.md#rule-complexity) | `warning` by default | a query with more joins or subqueries than the configured ceiling |
 | [`rule/expr`](rule.md#rule-expr) | fixed, always `error` | an empty query, or one missing the time bounds the ruler binds |
 | [`rule/for`](rule.md#rule-for) | `warning` by default | a `for` shorter than the group interval, so the alert fires on its first evaluation |
@@ -27,6 +28,7 @@ Generated from the check table in `internal/lint/checks.go`. Edit the table, the
 | [`rule/settings`](rule.md#rule-settings) | fixed, always `error` | a query setting its own SETTINGS, overriding the limits the ruler sends |
 | [`rule/source-match`](rule.md#rule-source-match) | `warning` by default | a rule whose selector matches no source, so this ruler will never evaluate it |
 | [`rule/syntax`](rule.md#rule-syntax) | fixed, always `error` | SQL ClickHouse cannot parse, or a second statement nobody reviewed |
+| [`rule/table-access`](rule.md#rule-table-access) | `warning` by default | a source's user cannot read what the rule asks for, so nothing could be checked |
 | [`rule/table-function`](rule.md#rule-table-function) | `error` by default | a query reading through a table function the allowlist does not permit |
 | [`rule/window`](rule.md#rule-window) | `warning` by default | a `window` shorter than the group interval, leaving data no evaluation reads |
 | [`ruleset/directory`](policy.md#ruleset-directory) | fixed, always `error` | the rules directory could not be read |

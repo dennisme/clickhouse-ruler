@@ -76,6 +76,11 @@ type instance struct {
 // clusters' alerts apart when one rule evaluates against both.
 const LabelSource = "source"
 
+// LabelAlertname carries the rule's name, and with LabelSource it is the pair
+// the ruler sets itself on every alert. Both are named here so the checks can
+// say which labels a query may not produce (spec 6.3.1).
+const LabelAlertname = "alertname"
+
 // State tracks the alert instances of a single rule against a single source.
 //
 // A rule matching several sources gets a State per source. They share nothing:
@@ -360,7 +365,7 @@ func (s *State) labelsFor(smpl Sample) map[string]string {
 	for k, v := range s.src.Labels {
 		labels[k] = v
 	}
-	labels["alertname"] = s.rule.Alert
+	labels[LabelAlertname] = s.rule.Alert
 	labels[LabelSource] = s.src.Name
 	return labels
 }

@@ -48,6 +48,8 @@ const (
 	CheckRuleSettings         = "rule/settings"
 	CheckRuleForeignTable     = "rule/foreign-table"
 	CheckRuleComplexity       = "rule/complexity"
+	CheckRuleColumns          = "rule/columns"
+	CheckRuleTableAccess      = "rule/table-access"
 
 	CheckSourceName            = "source/name"
 	CheckSourceAddress         = "source/address"
@@ -292,6 +294,25 @@ var checks = []Check{
 		Name: CheckRuleComplexity, Spec: "7.3", Default: SeverityWarning,
 		Keys: []string{LimitJoins + ":2", LimitSubqueries + ":2"}, List: ListCeiling,
 		Summary: "a query with more joins or subqueries than the configured ceiling",
+	},
+
+	// Fixed because each case means the rule cannot run: a column that is not
+	// there, a table that is not there, or a result with nothing to compare
+	// against a threshold. The last one is the quiet failure worth catching in
+	// CI, because a rule with no value column fails at evaluation time, which
+	// is after review and in front of nobody (spec 7.3).
+	{
+		Name: CheckRuleColumns, Spec: "7.3", Fixed: true,
+		Summary: "a query naming a column or table that does not exist, or returning no value column",
+	},
+
+	// Configurable, and warn by default, because the answer differs per
+	// cluster rather than per rule: an error on the cluster that will evaluate
+	// the rule, and off on a validation replica whose user has no grants. A
+	// source's own checks block is where that is said (spec 7.7, 10.3).
+	{
+		Name: CheckRuleTableAccess, Spec: "7.3", Default: SeverityWarning,
+		Summary: "a source's user cannot read what the rule asks for, so nothing could be checked",
 	},
 
 	{

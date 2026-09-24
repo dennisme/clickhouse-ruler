@@ -186,10 +186,10 @@ var aliasPattern = regexp.MustCompile(`(?i)\bAS\s+` + "[`\"]?" + `(\w+)` + "[`\"
 // A result column cannot be, which is the whole distinction (spec 6.3.1).
 //
 // This is a tier 0 check, so it only sees the SQL as text and only catches a
-// literal `AS team`. A query can still produce the column some other way, for
-// example through SELECT *, a subquery alias, or a CTE. Catching those needs
-// the real output column names from DESCRIBE, which is tier 1 (spec 7.3).
-// This check is a cheap first line, not a complete one.
+// literal `AS team`. A column reached through SELECT *, a subquery alias or a
+// CTE is caught by the tier 1 half of the same check, which reads the real
+// output columns from DESCRIBE (spec 7.3). This is the half that needs no
+// connection, so it still runs when nothing else can.
 func protectedLabels(file string, r rule.Rule, matched []source.Source) []lint.Problem {
 	var out []lint.Problem
 

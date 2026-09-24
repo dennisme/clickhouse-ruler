@@ -3,8 +3,10 @@ package main
 import (
 	"context"
 	"fmt"
+	"sort"
 	"time"
 
+	"github.com/dennisme/clickhouse-ruler/internal/alert"
 	"github.com/dennisme/clickhouse-ruler/internal/lint"
 	"github.com/dennisme/clickhouse-ruler/internal/policy"
 	"github.com/dennisme/clickhouse-ruler/internal/query"
@@ -35,7 +37,7 @@ func inspectRules(ctx context.Context, set *ruleset.Set, root *policy.Policy) []
 		for _, src := range r.Sources {
 			merged := policy.Merge(root, src.Policy)
 
-			checks := checksFromPolicy(merged, src.Database)
+			checks := checksFromPolicy(merged, r, src)
 
 			q, err := querierFor(queriers, src)
 			if err != nil {
@@ -73,8 +75,16 @@ func querierFor(open map[string]*query.Querier, src source.Source) (*query.Queri
 // checksFromPolicy translates the resolved policy into what to look for. A
 // check at severity off is not looked for at all, rather than looked for and
 // discarded.
-func checksFromPolicy(p *policy.Policy, database string) query.Checks {
+func checksFromPolicy(p *policy.Policy, r ruleset.Rule, src source.Source) query.Checks {
 	var c query.Checks
+
+	// The labels an annotation can read that no result column produces, and
+	// the ones a query may not produce at all. Both are assembled here because
+	// only the loader knows a rule's effective labels and which sources it
+	// matched (spec 6.3.1).
+	c.KnownLabels = labelNames(r.Labels, src.Labels, alert.LabelAlertname, alert.LabelSource)
+	c.ProtectedLabels = labelNames(nil, src.Labels,
+		alert.LabelAlertname, alert.LabelSource, "team")
 
 	if tf := p.For(lint.CheckRuleTableFunction); tf.Severity != lint.SeverityOff {
 		c.AllowedTableFunctions = tf.Keys
@@ -83,7 +93,7 @@ func checksFromPolicy(p *policy.Policy, database string) query.Checks {
 		c.Nondeterministic = nd.Keys
 	}
 	if ft := p.For(lint.CheckRuleForeignTable); ft.Severity != lint.SeverityOff {
-		c.Database = database
+		c.Database = src.Database
 	}
 	if cx := p.For(lint.CheckRuleComplexity); cx.Severity != lint.SeverityOff {
 		joins, hasJoins := cx.Limit(lint.LimitJoins)
@@ -106,13 +116,34 @@ func checksFromPolicy(p *policy.Policy, database string) query.Checks {
 	return c
 }
 
+// labelNames collects label keys plus any fixed names, sorted and
+// deduplicated so a finding listing them reads the same way every run.
+func labelNames(labels, srcLabels map[string]string, fixed ...string) []string {
+	seen := map[string]bool{}
+	for _, m := range []map[string]string{labels, srcLabels} {
+		for k := range m {
+			seen[k] = true
+		}
+	}
+	for _, name := range fixed {
+		seen[name] = true
+	}
+
+	out := make([]string, 0, len(seen))
+	for name := range seen {
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out
+}
+
 // inspectionProblems resolves each finding's severity from policy.
 //
 // The source is named in every one of them: a rule can match several and fail
 // against only one, and "which cluster said so" is the first thing an author
 // asks.
 func inspectionProblems(
-	file, alert string,
+	file, alertName string,
 	line int,
 	src source.Source,
 	merged *policy.Policy,
@@ -143,7 +174,7 @@ func inspectionProblems(
 
 		p := lint.NewProblem(file, line, f.Check, severity,
 			fmt.Sprintf("against source %s: %s", src.Name, f.Detail))
-		p.Subject = alert
+		p.Subject = alertName
 		p.PolicyFile, p.PolicyLine = origin.File, origin.Line
 		problems = append(problems, p)
 	}

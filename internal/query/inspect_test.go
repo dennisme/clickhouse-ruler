@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/dennisme/clickhouse-ruler/internal/lint"
+	"github.com/dennisme/clickhouse-ruler/internal/rule"
 
 	"github.com/ClickHouse/clickhouse-go/v2"
 )
@@ -249,5 +250,79 @@ func TestClassifyExplainUnwraps(t *testing.T) {
 	wrapped := fmt.Errorf("checking syntax: %w", &clickhouse.Exception{Code: codeSyntaxError, Message: "Syntax error"})
 	if _, err := classifyExplain(wrapped); err != nil {
 		t.Errorf("err = %v, want the wrapped exception to be recognised", err)
+	}
+}
+
+func checksWithResult() Checks {
+	c := checksFor()
+	c.KnownLabels = []string{"alertname", "source", "team"}
+	c.ProtectedLabels = []string{"alertname", "source", "team"}
+	return c
+}
+
+func TestInspectResultReportsAMissingValueColumn(t *testing.T) {
+	r := rule.Rule{Alert: "A"}
+	cols := readColumns(t, "describe_no_value.txt")
+
+	got, ok := findingFor(inspectResult(cols, r, checksWithResult()), lint.CheckRuleColumns)
+	if !ok {
+		t.Fatal("a result with no value column was not reported")
+	}
+	if !contains(got.Detail, "value") {
+		t.Errorf("detail = %q, want it to name the column that is missing", got.Detail)
+	}
+
+	if _, ok := findingFor(inspectResult(readColumns(t, "describe_plain.txt"), r, checksWithResult()),
+		lint.CheckRuleColumns); ok {
+		t.Error("a result carrying value was reported")
+	}
+}
+
+// The gap the tier 0 check documents: the alias is produced inside a
+// subquery, so no literal `AS team` appears in the rule's text.
+func TestInspectResultReportsAProtectedLabelTheTextCheckMisses(t *testing.T) {
+	r := rule.Rule{Alert: "A"}
+	cols := readColumns(t, "describe_protected_label.txt")
+
+	got, ok := findingFor(inspectResult(cols, r, checksWithResult()), lint.CheckRuleProtectedLabel)
+	if !ok {
+		t.Fatal("a protected label produced through a subquery was not reported")
+	}
+	if !contains(got.Detail, "team") {
+		t.Errorf("detail = %q, want it to name the label", got.Detail)
+	}
+}
+
+func TestInspectResultReportsAnUnresolvableAnnotation(t *testing.T) {
+	r := rule.Rule{
+		Alert: "A",
+		Annotations: map[string]string{
+			"summary": "{{ .ServiceName }} is at {{ .value }}",
+			"detail":  "owner {{ .Squad }}",
+		},
+	}
+
+	got, ok := findingFor(inspectResult(readColumns(t, "describe_plain.txt"), r, checksWithResult()),
+		lint.CheckAnnotationsTemplate)
+	if !ok {
+		t.Fatal("an annotation reading a column nothing produces was not reported")
+	}
+	for _, want := range []string{"detail", "Squad"} {
+		if !contains(got.Detail, want) {
+			t.Errorf("detail = %q, want it to carry %q", got.Detail, want)
+		}
+	}
+}
+
+// A rule whose annotations read its own labels resolves at evaluation time,
+// and must not be reported for reading something no column produces.
+func TestInspectResultSaysNothingAboutAWorkingRule(t *testing.T) {
+	r := rule.Rule{
+		Alert:       "A",
+		Annotations: map[string]string{"summary": "{{ .ServiceName }} at {{ .value }} for {{ .team }}"},
+	}
+
+	if got := inspectResult(readColumns(t, "describe_plain.txt"), r, checksWithResult()); len(got) != 0 {
+		t.Errorf("findings = %v, want none", got)
 	}
 }
