@@ -191,7 +191,7 @@ func unprunedTables(plan string) []string {
 	var inPrimaryKey bool
 
 	for _, line := range strings.Split(plan, "\n") {
-		trimmed := strings.TrimSpace(line)
+		trimmed := planLine(line)
 
 		switch {
 		case strings.HasPrefix(trimmed, "ReadFromMergeTree ("):
@@ -219,6 +219,17 @@ func unprunedTables(plan string) []string {
 	sort.Strings(out)
 
 	return out
+}
+
+// planLine strips a plan line down to what it says.
+//
+// Indentation carries no meaning here, and newer servers draw the plan as a
+// tree, so a step arrives as `└──ReadFromMergeTree (otel.otel_traces)` where an
+// older one printed it indented with spaces. The glyphs are decoration around
+// the same step names, and reading past them is what lets one reader answer for
+// both (spec 7.2).
+func planLine(line string) string {
+	return strings.TrimLeft(line, " \t│└├─")
 }
 
 func granules(line string) (selected, total uint64, ok bool) {

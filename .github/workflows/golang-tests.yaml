@@ -40,13 +40,6 @@ jobs:
       - name: Unit tests
         run: just test
 
-      # The compose stack rather than a services: block, so CI runs the same
-      # ClickHouse image and the same init schema developers run locally.
-      # compose-down runs even when the tests fail, so a cancelled or broken
-      # run leaves no volume behind.
-      - name: Integration tests
-        run: just integration-clean
-
       - name: Coverage
         run: just coverage
 
@@ -68,3 +61,62 @@ jobs:
             pr-number.txt
           retention-days: 5
           if-no-files-found: error
+
+  # The tests that need a real ClickHouse, run against more than one version.
+  #
+  # The checks in internal/query read what `EXPLAIN` prints, and that output has
+  # no stability guarantee (spec 7.2). Testing only the pinned version proves the
+  # readers work against the version they were written for, which is the one
+  # thing that was never in doubt. The second leg is how a format change becomes
+  # a build that says so, rather than a check that silently stops reporting.
+  integration:
+    runs-on: ubuntu-latest
+
+    strategy:
+      # Both legs always run. A failure on the newer server says nothing about
+      # whether the pinned one still works, which is the question the required
+      # leg answers.
+      fail-fast: false
+      matrix:
+        include:
+          - label: pinned
+            image: ""
+            required: true
+
+          # Whatever ClickHouse released most recently. Advisory: a new server
+          # changing its output is worth knowing about on the pull request that
+          # happened to run next, and is not that author's problem to fix.
+          - label: newest
+            image: clickhouse/clickhouse-server:latest-alpine
+            required: false
+
+    name: integration (${{ matrix.label }})
+    continue-on-error: ${{ !matrix.required }}
+
+    env:
+      # Empty means the version pinned in compose.yaml, which stays the single
+      # place that version is written down: naming it here as well would let the
+      # required leg go on testing an old server after a bump.
+      CLICKHOUSE_IMAGE: ${{ matrix.image }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Install dependencies
+        run: go mod download
+
+      - name: Install just
+        uses: extractions/setup-just@v3
+
+      # The compose stack rather than a services: block, so CI runs the same
+      # ClickHouse image and the same init schema developers run locally.
+      # compose-down runs even when the tests fail, so a cancelled or broken
+      # run leaves no volume behind.
+      - name: Integration tests
+        run: just integration-clean

@@ -108,9 +108,23 @@ stability guarantee, and the reader in `internal/query/ast.go` depends on its
 indentation and node names.
 
 What holds that down is the integration tests, which run every check through a
-live `EXPLAIN AST` at the version pinned in `compose.yaml` and assert on the
-answer, so a format change fails the build rather than quietly reporting
-nothing. The captured fixtures do not protect against it and are not there for
+live `EXPLAIN` at the version pinned in `compose.yaml` and assert on the answer,
+so a format change fails the build rather than quietly reporting nothing.
+
+**Against two versions, because the pinned one cannot report drift.** Tests at
+the pinned version prove the readers work against the version they were written
+for, which was never the risk. So `CLICKHOUSE_IMAGE` points the same stack at
+another server and continuous integration runs both: the pinned leg is required,
+and a second leg on the newest release is advisory, because a server changing
+its output is worth knowing about and is not the problem of whichever pull
+request ran next.
+
+That leg earned itself immediately. `EXPLAIN PLAN indexes=1` gained
+box-drawing glyphs between 25.8 and 26.9, so the reader in `internal/query`
+stopped finding `ReadFromMergeTree` and the cost finding lost the explanation of
+why an estimate was large, silently and with every test green. `EXPLAIN AST`
+was unchanged, which is the other half of the lesson: the coupling is to every
+`EXPLAIN` the checks read, not only the one this section names. The captured fixtures do not protect against it and are not there for
 that: a stale capture keeps parsing perfectly long after the server has moved
 on. They exist so the reader can be tested without a container, and they are
 captured rather than hand-written so that what they describe was true of a

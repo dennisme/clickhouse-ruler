@@ -174,3 +174,15 @@ func TestWithPruning(t *testing.T) {
 		t.Errorf("detail = %q, want it unchanged when every table pruned", got)
 	}
 }
+
+// The same answer from the tree-drawn plan a newer server prints. `EXPLAIN PLAN`
+// output has no stability guarantee, and 26.9 wraps it in box-drawing glyphs
+// with extra lines per step, so a reader anchored on the bare step name stops
+// finding the table and the finding quietly loses its explanation (spec 7.2).
+func TestUnprunedTablesReadsATreeDrawnPlan(t *testing.T) {
+	got := unprunedTables(readPlan(t, "plan_unpruned_tree.txt"))
+
+	if len(got) != 1 || got[0] != "otel.otel_traces" {
+		t.Errorf("got %v, want otel.otel_traces: the key pruned nothing", got)
+	}
+}
