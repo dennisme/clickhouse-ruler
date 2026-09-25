@@ -569,13 +569,18 @@ func seedManySpans(t *testing.T, q *Querier) {
 	// Written with the server's own generator rather than a batch from here:
 	// the rows exist to give the primary index something to estimate, and
 	// their contents do not matter.
+	//
+	// Placed around anchor rather than a date written into the statement, for
+	// the reason anchor itself is read from the clock: the schema TTLs at three
+	// days, and rows older than that are dropped on arrival, which leaves every
+	// cost estimate at zero and every ceiling satisfied.
 	err := conn.Exec(ctx, `
 INSERT INTO otel.otel_traces (Timestamp, TraceId, SpanId, ServiceName, SpanName, Duration, StatusCode)
 SELECT
-  toDateTime64('2026-09-19 12:00:00', 9) - toIntervalSecond(number % 600),
+  ? - toIntervalSecond(number % 600),
   toString(number), toString(number),
   concat('svc-', toString(number % 5)), 'GET /', number, 'Ok'
-FROM numbers(200000)`)
+FROM numbers(200000)`, anchor)
 	if err != nil {
 		t.Fatalf("seeding rows: %v", err)
 	}

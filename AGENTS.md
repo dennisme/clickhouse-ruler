@@ -57,7 +57,16 @@ just integration
 just compose-down
 ```
 
-Two things that bite:
+`CLICKHOUSE_IMAGE` points the stack at another server, which is how the readers
+that parse `EXPLAIN` output are checked against a version they were not written
+for. CI runs the pinned version as a required job and the newest release as an
+advisory one:
+
+```bash
+CLICKHOUSE_IMAGE=clickhouse/clickhouse-server:latest-alpine just integration-clean
+```
+
+Three things that bite:
 
 - `just integration` uses `-p 1`. Several integration tests bind a webhook
   sink to the fixed port in `deploy/alertmanager/alertmanager.yml`, so parallel
@@ -65,6 +74,11 @@ Two things that bite:
 - `compose-down` passes `-v` on purpose. ClickHouse only applies
   `deploy/clickhouse/init` to an empty data directory, so keeping the volume
   means a schema change silently does not take effect.
+- Seeded rows are placed around `anchor`, which is read from the clock. The dev
+  schema TTLs at three days, so a timestamp written into a test file expires
+  where it stands: the rows are dropped on arrival, every query returns nothing,
+  and the checks that read data report nothing wrong. Never put a literal date
+  in a fixture.
 
 ## Layout
 

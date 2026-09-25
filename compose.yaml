@@ -14,7 +14,11 @@
 # unless the volume is destroyed first.
 services:
   clickhouse:
-    image: clickhouse/clickhouse-server:25.8.2.29-alpine
+    # The pinned version is what a developer gets and what the required CI leg
+    # runs. CLICKHOUSE_IMAGE overrides it so the same stack can be pointed at a
+    # newer server, which is how the checks that read `EXPLAIN` output find out
+    # that the output changed (spec 7.2).
+    image: ${CLICKHOUSE_IMAGE:-clickhouse/clickhouse-server:25.8.2.29-alpine}
     container_name: ruler-clickhouse
     ports:
       - "127.0.0.1:9000:9000"

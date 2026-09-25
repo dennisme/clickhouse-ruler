@@ -16,9 +16,16 @@ import (
 	"github.com/dennisme/clickhouse-ruler/internal/source"
 )
 
-// anchor is the fixed point the seeded rows are placed around. Using a fixed
-// instant rather than time.Now keeps the assertions exact.
-var anchor = time.Date(2026, 9, 19, 12, 0, 0, 0, time.UTC)
+// anchor is the fixed point the seeded rows are placed around: one instant for
+// the whole run, so the assertions stay exact.
+//
+// Read from the clock rather than written down, because the schema in
+// deploy/clickhouse/init TTLs at three days and a date in this file ages past
+// that. The rows then expire on arrival, every query returns nothing, and the
+// checks that read data report nothing wrong: a fixture that stops existing
+// looks exactly like a rule with nothing to find. Truncated to the hour, and an
+// hour back, so the seeded offsets are all comfortably in the past.
+var anchor = time.Now().UTC().Truncate(time.Hour).Add(-time.Hour)
 
 func testSource(t *testing.T) source.Source {
 	t.Helper()
