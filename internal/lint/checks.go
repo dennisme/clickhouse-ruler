@@ -51,6 +51,7 @@ const (
 	CheckRuleColumns          = "rule/columns"
 	CheckRuleTableAccess      = "rule/table-access"
 	CheckRuleCost             = "rule/cost"
+	CheckRuleAttributeKey     = "rule/attribute-key"
 
 	CheckSourceName            = "source/name"
 	CheckSourceAddress         = "source/address"
@@ -95,6 +96,16 @@ const (
 const (
 	LimitRowsRead      = "max-rows-read"
 	LimitRowsPerSecond = "max-rows-per-second"
+)
+
+// What rule/attribute-key takes: a ceiling on what one sample may read, and a
+// flag turning an unverifiable rule into a finding. A flag is a bare name in the
+// same list, because union already means a scope can add it and none can drop
+// it, which is the direction a setting that makes a check stricter has to merge
+// in (spec 7.7).
+const (
+	LimitSampleRows = "max-sample-rows"
+	FlagRequireRows = "require-rows"
 )
 
 // ListKind is what a check's key list means, which decides how scopes combine
@@ -143,6 +154,19 @@ type Check struct {
 	// List says what Keys means to the merge. ListNone for a check that takes
 	// no list.
 	List ListKind
+
+	// Limits are the ceiling names a policy file may set on this check, each
+	// written `name:number`.
+	Limits []string
+
+	// Flags are the bare names a policy file may add to this check's list. A
+	// flag makes the check stricter and merges by union, so a scope can add one
+	// and none can drop it (spec 7.7).
+	//
+	// Declared rather than inferred from the absence of a number, so a ceiling
+	// written without its value is an error instead of a flag nobody named,
+	// which would parse, merge and do nothing.
+	Flags []string
 }
 
 // Configurable reports whether this check may appear in a policy file.
@@ -302,6 +326,7 @@ var checks = []Check{
 	{
 		Name: CheckRuleComplexity, Spec: "7.3", Default: SeverityWarning,
 		Keys: []string{LimitJoins + ":2", LimitSubqueries + ":2"}, List: ListCeiling,
+		Limits:  []string{LimitJoins, LimitSubqueries},
 		Summary: "a query with more joins or subqueries than the configured ceiling",
 	},
 
@@ -327,7 +352,23 @@ var checks = []Check{
 		Name: CheckRuleCost, Spec: "7.3", Default: SeverityWarning,
 		Keys:    []string{LimitRowsPerSecond + ":1000000", LimitRowsRead + ":100000000"},
 		List:    ListCeiling,
+		Limits:  []string{LimitRowsRead, LimitRowsPerSecond},
 		Summary: "a query predicted to read more than the ceiling allows, per evaluation or per second",
+	},
+
+	// The only check that reads rows, so it runs only where sampling was asked
+	// for (spec 7.3). A warning, and for a stronger reason than the checks that
+	// merely produce a rule which evaluates badly: the answer is a sample read
+	// through row policies, so a key present only in rows this user cannot see
+	// reads as absent. Blocking would mean blocking on evidence the author
+	// cannot inspect.
+	{
+		Name: CheckRuleAttributeKey, Spec: "7.3", Default: SeverityWarning,
+		Keys:    []string{LimitSampleRows + ":10000000"},
+		List:    ListCeiling,
+		Limits:  []string{LimitSampleRows},
+		Flags:   []string{FlagRequireRows},
+		Summary: "a map key the query reads that no recent row actually has",
 	},
 
 	// Configurable, and warn by default, because the answer differs per
@@ -504,6 +545,17 @@ func Allowlist(name string) bool {
 func Ceiling(name string) bool {
 	c, ok := byName[name]
 	return ok && c.List == ListCeiling
+}
+
+// Limits returns the ceiling names a check accepts, so policy can report a
+// malformed one by naming what it could have been.
+func Limits(name string) []string {
+	return byName[name].Limits
+}
+
+// Flags returns the bare names a check accepts alongside its ceilings.
+func Flags(name string) []string {
+	return byName[name].Flags
 }
 
 // Configurables lists every configurable check, sorted, so `ruler check

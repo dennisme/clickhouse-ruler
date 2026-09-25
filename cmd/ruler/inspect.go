@@ -19,7 +19,7 @@ import (
 // Per source, not once per rule: a rule spanning an estate is checked against
 // every cluster it will run on, which is also how a source that disagrees
 // with the others shows up at all (spec 6.10).
-func inspectRules(ctx context.Context, set *ruleset.Set, root *policy.Policy) []lint.Problem {
+func inspectRules(ctx context.Context, set *ruleset.Set, root *policy.Policy, sampling bool) []lint.Problem {
 	var problems []lint.Problem
 
 	// One instant for the whole pass, so a long run cannot expire an
@@ -52,9 +52,48 @@ func inspectRules(ctx context.Context, set *ruleset.Set, root *policy.Policy) []
 			}
 			problems = append(problems,
 				inspectionProblems(r.File, r.Alert, r.Line(), src, merged, findings, now)...)
+
+			if !sampling {
+				continue
+			}
+			sampleChecks, wanted := samplingFromPolicy(merged)
+			if !wanted {
+				continue
+			}
+
+			// The only checks that read rows, so they run when they were asked
+			// for and never merely because a connection exists (spec 7.3).
+			sampled, err := q.Sample(ctx, r.Rule, sampleChecks, now)
+			if err != nil {
+				problems = append(problems, inspectionFailed(r, src.Name, err))
+				continue
+			}
+			problems = append(problems,
+				inspectionProblems(r.File, r.Alert, r.Line(), src, merged, sampled, now)...)
 		}
 	}
 	return problems
+}
+
+// samplingFromPolicy translates the resolved policy into what a sample should
+// do, and says whether to sample at all.
+//
+// A check at severity off is not sampled for, rather than sampled and then
+// dropped. That is the line checksFromPolicy draws for the metadata checks, and
+// it matters more here: honouring `off` after the fact would read rows an
+// operator asked nobody to read.
+func samplingFromPolicy(p *policy.Policy) (query.SampleChecks, bool) {
+	setting := p.For(lint.CheckRuleAttributeKey)
+	if setting.Severity == lint.SeverityOff {
+		return query.SampleChecks{}, false
+	}
+
+	maxRows, _ := setting.Limit(lint.LimitSampleRows)
+
+	return query.SampleChecks{
+		MaxRows:     maxRows,
+		RequireRows: setting.Flag(lint.FlagRequireRows),
+	}, true
 }
 
 // querierFor opens one connection per source and reuses it for every rule

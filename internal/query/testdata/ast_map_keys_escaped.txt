@@ -1,0 +1,24 @@
+SelectWithUnionQuery (children 1)
+ ExpressionList (children 1)
+  SelectQuery (children 2)
+   ExpressionList (children 4)
+    Function arrayElement (alias quoted) (children 1)
+     ExpressionList (children 2)
+      Identifier LogAttributes
+      Literal \'quote\\\'d\'
+    Function arrayElement (alias backslash) (children 1)
+     ExpressionList (children 2)
+      Identifier LogAttributes
+      Literal \'back\\\\slash\'
+    Function arrayElement (alias empty) (children 1)
+     ExpressionList (children 2)
+      Identifier LogAttributes
+      Literal \'\'
+    Function arrayElement (alias utf) (children 1)
+     ExpressionList (children 2)
+      Identifier LogAttributes
+      Literal \'utf-8 ☃\'
+   TablesInSelectQuery (children 1)
+    TablesInSelectQueryElement (children 1)
+     TableExpression (children 1)
+      TableIdentifier otel.otel_traces

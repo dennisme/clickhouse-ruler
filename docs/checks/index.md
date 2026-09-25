@@ -14,6 +14,7 @@ Generated from the check table in `internal/lint/checks.go`. Edit the table, the
 | [`policy/fixed-check`](policy.md#policy-fixed-check) | fixed, always `error` | a policy file configuring a correctness check, which cannot be softened |
 | [`policy/severity`](policy.md#policy-severity) | fixed, always `error` | a severity that is not off, warn or error |
 | [`policy/unknown-check`](policy.md#policy-unknown-check) | fixed, always `error` | a policy file configuring a check that does not exist |
+| [`rule/attribute-key`](rule.md#rule-attribute-key) | `warning` by default | a map key the query reads that no recent row actually has |
 | [`rule/columns`](rule.md#rule-columns) | fixed, always `error` | a query naming a column or table that does not exist, or returning no value column |
 | [`rule/complexity`](rule.md#rule-complexity) | `warning` by default | a query with more joins or subqueries than the configured ceiling |
 | [`rule/cost`](rule.md#rule-cost) | `warning` by default | a query predicted to read more than the ceiling allows, per evaluation or per second |

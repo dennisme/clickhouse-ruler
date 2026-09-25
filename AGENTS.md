@@ -41,6 +41,7 @@ Running the binary directly:
 ```bash
 go run ./cmd/ruler check --sources rules/sources.yaml rules/
 go run ./cmd/ruler check --online --sources rules/sources.yaml rules/
+go run ./cmd/ruler check --sample --sources rules/sources.yaml rules/
 go run ./cmd/ruler run --rules ./rules --sources ./rules/sources.yaml \
   --alertmanager http://localhost:9093
 ```

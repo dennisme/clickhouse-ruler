@@ -1,6 +1,7 @@
 package policy
 
 import (
+	"slices"
 	"strconv"
 	"strings"
 
@@ -44,6 +45,15 @@ func (s Setting) Limit(name string) (int, bool) {
 		}
 	}
 	return out, found
+}
+
+// Flag reports whether a bare name is in a check's key list.
+//
+// Union is what carries it through the merge, so a flag any scope set is set,
+// and none can remove it. That is the only direction a setting which makes a
+// check stricter can merge in (spec 7.7).
+func (s Setting) Flag(name string) bool {
+	return slices.Contains(s.Keys, name)
 }
 
 // Defaults returns the shipped policy, used when no file configures anything.

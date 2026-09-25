@@ -143,28 +143,38 @@ func checkLimits(r *lint.Reader, n *yaml.Node, check string) {
 	if !lint.Ceiling(check) {
 		return
 	}
-	names := limitNames(check)
+	limits, flags := lint.Limits(check), lint.Flags(check)
 
 	for _, item := range n.Content {
 		s := Setting{Keys: []string{item.Value}}
 
 		name, _, split := strings.Cut(item.Value, ":")
-		if _, valid := s.Limit(name); split && valid && slices.Contains(names, name) {
-			continue
+		switch {
+		case split:
+			if _, valid := s.Limit(name); valid && slices.Contains(limits, name) {
+				continue
+			}
+		default:
+			// A bare name is a flag, and only one the check declared. Reading
+			// any bare name as a flag would let a ceiling written without its
+			// number parse, merge, and silently do nothing.
+			if slices.Contains(flags, item.Value) {
+				continue
+			}
 		}
 		r.Add(item.Line, lint.CheckPolicyLimit, lint.SeverityError,
-			"%s takes ceilings written as name:number, one of %s, got %q",
-			check, strings.Join(names, " or "), item.Value)
+			"%s takes %s, got %q", check, accepted(limits, flags), item.Value)
 	}
 }
 
-// limitNames are the ceilings a check takes, for the message that reports a
-// malformed one.
-func limitNames(check string) []string {
-	if check == lint.CheckRuleCost {
-		return []string{lint.LimitRowsRead, lint.LimitRowsPerSecond}
+// accepted describes what a check's list may carry, for the message that
+// reports a key it may not.
+func accepted(limits, flags []string) string {
+	out := "ceilings written as name:number, one of " + strings.Join(limits, " or ")
+	if len(flags) > 0 {
+		out += ", or the flag " + strings.Join(flags, " or ")
 	}
-	return []string{lint.LimitJoins, lint.LimitSubqueries}
+	return out
 }
 
 func parseKeys(r *lint.Reader, n *yaml.Node) []string {

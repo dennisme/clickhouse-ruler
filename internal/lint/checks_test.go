@@ -1,6 +1,7 @@
 package lint
 
 import (
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -57,7 +58,9 @@ func TestConfigurableChecksShipOnAndExplained(t *testing.T) {
 }
 
 // The ceilings are read back out of the key list by policy, so the shipped
-// ones have to be in the form it parses.
+// ones have to be in the form it parses. A bare name is a flag, and only where
+// the check declares one: policy refuses any other, so shipping one would be
+// shipping a default its own parser rejects.
 func TestCeilingKeysParse(t *testing.T) {
 	for _, c := range All() {
 		if c.List != ListCeiling {
@@ -65,13 +68,31 @@ func TestCeilingKeysParse(t *testing.T) {
 		}
 		for _, key := range c.Keys {
 			name, value, ok := strings.Cut(key, ":")
-			if !ok || name == "" {
-				t.Errorf("%s ships %q, which is not name:number", c.Name, key)
+			if !ok {
+				if !slices.Contains(c.Flags, key) {
+					t.Errorf("%s ships %q, which is neither name:number nor a flag it declares", c.Name, key)
+				}
 				continue
+			}
+			if !slices.Contains(c.Limits, name) {
+				t.Errorf("%s ships the ceiling %q, which it does not declare", c.Name, name)
 			}
 			if n, err := strconv.Atoi(value); err != nil || n < 0 {
 				t.Errorf("%s ships %q, whose ceiling is not a whole number", c.Name, key)
 			}
+		}
+	}
+}
+
+// A ceiling or flag a check declares and nothing can read is a setting an
+// operator writes, sees parse, and never has applied.
+func TestEveryCeilingCheckDeclaresItsNames(t *testing.T) {
+	for _, c := range All() {
+		if c.List == ListCeiling && len(c.Limits) == 0 {
+			t.Errorf("%s takes ceilings and names none, so policy cannot tell a real one from a typo", c.Name)
+		}
+		if c.List != ListCeiling && (len(c.Limits) > 0 || len(c.Flags) > 0) {
+			t.Errorf("%s names ceilings or flags but its list is not a ceiling list", c.Name)
 		}
 	}
 }

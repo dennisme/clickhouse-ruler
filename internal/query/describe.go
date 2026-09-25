@@ -83,7 +83,22 @@ type Column struct {
 // reads data, so the cost is a parse and a network hop, and inspectTimeout
 // now covers both.
 func (q *Querier) describe(ctx context.Context, sql string) ([]Column, error) {
-	rows, err := q.conn.Query(ctx, "DESCRIBE ("+sql+")")
+	return q.describing(ctx, "DESCRIBE ("+sql+")")
+}
+
+// describeTable asks what a table holds, rather than what a query returns.
+//
+// The column types are what tell a map from an array, which is what a key
+// lookup has to know before it can be probed for (spec 7.3). Asked of the table
+// rather than read from `system.columns` for the same reason describe asks the
+// server at all, and because it needs no privilege beyond the SELECT on that
+// table a rule already requires.
+func (q *Querier) describeTable(ctx context.Context, database, table string) ([]Column, error) {
+	return q.describing(ctx, "DESCRIBE TABLE "+quoteIdent(database)+"."+quoteIdent(table))
+}
+
+func (q *Querier) describing(ctx context.Context, statement string) ([]Column, error) {
+	rows, err := q.conn.Query(ctx, statement)
 	if err != nil {
 		return nil, err
 	}

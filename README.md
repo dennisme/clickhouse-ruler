@@ -225,7 +225,13 @@ on.
 
 `ruler check` stays offline unless it is asked not to. `--online` runs the
 checks that need a connection, connecting as each source's own user, because
-that user is what is being checked.
+that user is what is being checked. Those read metadata and no rows.
+
+`--sample` additionally runs the checks that read rows, and implies `--online`.
+It is separate because a connection is not consent: asking ClickHouse what a
+query is costs a parse, while sampling runs statements against the source's
+data. The sample is bounded by `max-sample-rows` and reads as the source's own
+user, so row policies apply to it.
 
 | Flag | Default | What it does |
 | --- | --- | --- |
@@ -480,6 +486,12 @@ Working:
   is predicted to read per evaluation and per second, measured against
   configurable ceilings. A rule over one is told why when the query plan says
   its primary key excluded nothing
+- The one check that reads rows, behind `--sample`: `rule/attribute-key`
+  confirms that the map keys a rule reads are actually present in recent data,
+  because `LogAttributes['payment_id']` resolves whether or not the key exists
+  and a renamed OTel attribute silences an alert forever. One query answers for
+  every key a rule reads, an empty window reports nothing rather than guessing,
+  and the finding says so when the data covered less than the window asked for
 - The ClickHouse user contract: `source/privileges` checks each source's user
   for revoked table-function privileges, `readonly = 2`, a constraint behind
   every limit the ruler sends, and the grant on its own table. Probed rather
@@ -546,6 +558,7 @@ its own to list every recipe.
 ```bash
 go run ./cmd/ruler check --sources rules/sources.yaml rules/
 go run ./cmd/ruler check --online --sources rules/sources.yaml rules/
+go run ./cmd/ruler check --sample --sources rules/sources.yaml rules/
 just init               # mise tool versions and pre-commit hooks
 just check              # lint, unit tests with -race, markdownlint
 just test               # unit tests with -race, no container needed

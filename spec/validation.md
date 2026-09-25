@@ -264,15 +264,89 @@ Tier 1, metadata only, reads no table data:
   tree, and that refusal is a finding about the rule rather than a ruler that
   could not ask.
 
-Tier 2, bounded data reads:
+Tier 2, bounded data reads. Everything above this line answers from metadata,
+so tier 2 is where the ruler starts reading rows and needs its own opt in
+(below).
 
-- attribute key presence. For OTel map columns such as
+- `rule/attribute-key`. For OTel map columns such as
   `LogAttributes['payment_id']` the column exists even when the key does not.
-  Sample a short recent window and confirm the key is actually present.
+  Sample a recent window and confirm the key is actually present.
 
   **This is the highest value check in the tool.** Someone renames an OTel
   attribute, the alert silently stops firing forever, and nobody notices until
   the outage. That class of bug is most of the reason `pint` exists.
+
+  **Found by position and by literal form, never by name.** ClickHouse writes
+  a map subscript and an array index as the same node: `LogAttributes['k']`
+  and `arr[1]` are both `Function arrayElement` over an `Identifier` and a
+  `Literal`. What separates them is the literal, `\'k\'` against `UInt64_1`,
+  so the tree answers it and no type lookup is needed for that half. Tuple
+  access is `Function tupleElement` and is a different question. Three shapes
+  carry a key and are checked: a quoted subscript, the same subscript on a
+  table alias, and `mapContains(col, 'k')`, which breaks silently in exactly
+  the same way. Four are skipped because there is nothing to ask: a numeric
+  index, a tuple element, a key that is an expression rather than a literal,
+  and `col.keys`, which names no key at all. A base column that is not a
+  `Map` on the source's table is skipped too, which needs the table's column
+  types: `DESCRIBE TABLE` answers it, the same way `rule/columns` asks
+  `DESCRIBE` what a rule's result is, and it needs no privilege beyond the
+  `SELECT` on that table the rule already requires.
+
+  **One query for every key, not one per key.** A `countIf(has(col, 'k'))`
+  per key plus a `count()`, over the window, in a single statement. A rule
+  with a dozen subscripts is one round trip.
+
+  **The window is derived, not configured, and 7.7 is why.** A sample window
+  has no stricter direction: shorter is cheaper and sees less, longer is
+  better evidence and costs more. A setting like that cannot ride the merge
+  (7.7), so the window is the rule's own `window`, floored so that a rule
+  asking about 30 seconds does not sample 30 seconds and call a live key
+  missing, and shifted back by the source's `evaluation_delay` so it reads
+  the data an evaluation would. What is configurable is the row ceiling,
+  `max-sample-rows`, which does have a direction.
+
+  **A window longer than the data under reports, and the sample says so.**
+  Same problem 7.4 has with a cheaper answer: the sample already reads the
+  oldest timestamp in its window, so when that is newer than the window's
+  start the finding reports how far back the rows actually went. A table that
+  TTLs shorter than the rule's window, one created this morning, and one whose
+  retention was cut all produce the same shortfall and all three are worth
+  saying out loud, where reading the TTL out of `system.tables` would answer
+  only the first and would mean interpreting a TTL expression to do it. Which
+  is also why this is not a separate finding: a key reported absent over a span
+  the data never covered is the same finding with a caveat, not two problems.
+
+  **It fails open.** No rows in the window means no answer, not a finding. A
+  rule can legitimately land before the first data does, and a cluster that
+  has not started receiving a service's telemetry is the normal case for a
+  new rule rather than a mistake. `pint` makes the same call, and reporting
+  it would train people to ignore the check on exactly the rules that are
+  fine. Subsequent edits to the file get validated again, so the finding
+  arrives once there is data to find it in. An operator who would rather an
+  unverifiable rule block adds `require-rows` to the check's keys, which
+  turns an empty sample into a finding of its own.
+
+  **A clean result is not a statement about the table.** The sample runs as
+  the source's own user, `readonly = 2` with row policies applied (6.7.2), so
+  it answers what that user can see, which is what the evaluation will read
+  too. Both directions of that need saying. A key present only in rows the
+  policy hides reports as *absent*, so the check can report a missing
+  attribute on a rule that works perfectly, and the author cannot see the
+  rows that would tell them otherwise. And a key written once an hour is
+  absent to a five minute sample and present in reality. The finding names
+  the source and says the answer is scoped to it, because a message that
+  reads as a claim about the schema sends people to debug a schema that is
+  fine. That is the same reason this warns rather than blocks (7.6).
+
+  **Keys on joined tables are not checked.** A subscript's column is resolved
+  against the source's own table, which by 7.6 is exactly one, so a key read
+  from a joined table is skipped. The alternative is resolving each map
+  column against every table the tree names, through `system.columns`, and
+  sampling each one. It buys the joined case and costs a second query path
+  and a per-table window question that `timestamp_column` only answers for
+  the source's own table. Not taken. Skipped keys are counted and reported,
+  because a check that silently examined nothing looks exactly like a check
+  that passed.
 - single evaluation of the rule as of now, to confirm it runs
 
 Tier 3, backfill. See 7.4.
@@ -281,11 +355,35 @@ Configuration:
 
 ```yaml
 check:
-  clickhouse: "clickhouse://ruler_ci@host:9000"   # presence enables tiers 1 and 2
+  clickhouse: "clickhouse://ruler_ci@host:9000"   # presence enables tier 1
+  sample:
+    enabled: true                                 # tier 2, which reads rows
   backfill:
     enabled: true
     window: 24h
 ```
+
+**Tier 2 is opt in, and a connection is not consent.** An address enables the
+checks that read metadata, because asking ClickHouse what a query is costs a
+parse and nothing else. Tier 2 executes statements against the source's data,
+and inheriting that from the presence of an address would mean an operator who
+wanted their SQL parsed started reading rows without saying so. It is the same
+line 7.10 draws around running rules in continuous integration: the capability
+is defensible, and it still has to be asked for.
+
+**The gate is `ruler check --sample` today**, and that flag implies `--online`
+rather than replacing it: the tier 1 checks resolve the columns and types tier 2
+samples against, so the sampling checks have nothing to ask without them.
+
+The `check:` block above is what this becomes when that file exists, and it does
+not yet. `ruler.yaml` is the policy file and its only section is `checks:`, the
+per-check severities in 7.6; the connection is not configured there at all,
+because a source carries its own address in `sources.yaml` (6.6), which is also
+why the `clickhouse:` key above describes something the ruler does not read.
+Sampling is a `ruler check` concern either way: `ruler run` evaluates rules
+rather than validating them, so there is nothing for the two to disagree about
+and no drift for the file to prevent (7.1). What does belong in `ruler.yaml` is
+already there: the check's severity, its ceiling and its flag.
 
 Per team severity overrides by path or rule name matcher, so the central team
 can hard fail while product teams get warnings during rollout. Without this,
@@ -414,6 +512,14 @@ and where they take a list of keys that list is configurable too:
   Default `warn`.
 - `rule/select-star` and `rule/nondeterministic`. Both produce rules that
   evaluate; they just evaluate badly, so both default to `warn`.
+- `rule/attribute-key`, a map key no recent row has. Default `warn`, and the
+  ceiling `max-sample-rows` and the flag `require-rows` are its keys. A rule
+  failing it evaluates and returns nothing, which is the same shape as the two
+  above, but the reason for `warn` is stronger here: the answer is a sample
+  read through row policies, so it can be wrong about a rule that works (7.3).
+  Blocking on it would be blocking on evidence the author cannot inspect. An
+  operator who has satisfied themselves the validation user sees everything
+  raises it.
 - `rule/foreign-table`, a rule reading outside its source's database. Default
   `warn`: the grants are the control and this is early feedback on hitting
   them (6.7.1). Configurable because a user deliberately granted a second
@@ -582,6 +688,34 @@ both kinds of list, and a numeric ceiling all have an unambiguous stricter
 direction: maximum, union, intersection, minimum. Each is a meet or a join, so
 order independence survives. A setting with no such direction, a free-form
 string for example, breaks it and needs a different home.
+
+The sample window in 7.3 is the case that shows this is a real constraint
+rather than a formality. It is a number, so it looks like a ceiling, and it is
+not one: a shorter window costs less and sees less evidence, a longer one sees
+more and costs more, and neither direction is the strict one. Merging it would
+mean picking a winner, which is the precedence rule this section exists to
+avoid, so the window is derived from the rule instead and only the row ceiling
+beside it is configured.
+
+**A flag rides the ceiling list.** `require-rows` on `rule/attribute-key`
+(7.3) is a name in the check's `keys`, not a boolean field of its own. Union
+already means a scope can add it and none can drop it, which is the direction a
+flag that makes a check stricter has to merge in, so it needs no new concept. A
+flag whose stricter direction is *off* would not work this way and would be the
+wrong shape for this section.
+
+That check carries both a ceiling and a flag, which is the first one to carry
+two shapes of key, so what a ceiling list permits has to be said rather than
+inferred from the two checks that have one today. A ceiling list is a set of
+names, each optionally carrying `:N`. The merge is the union of the names and
+the lowest value for any name that has one, which is what both kinds already
+do, so a bare name is a flag and a name with a value is a ceiling and neither
+needs its own list kind. What does not follow is that any bare name is
+accepted: a check declares its ceiling names and its flag names, and a key
+that is neither is a `policy/check-limit` error the same way a malformed
+ceiling is. Without that, `max-sample-rows` written without its number parses
+as a flag nobody declared and silently does nothing, which is the failure that
+error exists to prevent.
 
 A ceiling rides the same `keys` list as everything else, written `name:N`, so
 the merge needs no new concept: the lists union and the lowest value for a name
