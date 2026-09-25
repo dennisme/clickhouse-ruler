@@ -77,6 +77,8 @@ func check(args []string, stdout, stderr io.Writer) int {
 	explain := fs.Bool("explain", false, "print each rule's resolved policy and where every setting came from")
 	online := fs.Bool("online", false,
 		"also run the checks that need a ClickHouse connection, connecting as each source's own user")
+	sample := fs.Bool("sample", false,
+		"also run the checks that read rows, which implies -online")
 
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
@@ -108,7 +110,10 @@ func check(args []string, stdout, stderr io.Writer) int {
 	set, ruleProblems := ruleset.Load(dir, sources, root)
 	problems = append(problems, ruleProblems...)
 
-	if *online {
+	// Sampling implies a connection: the checks that read rows need the columns
+	// and types the metadata checks resolve, so asking for one without the other
+	// would leave nothing to sample against (spec 7.3).
+	if *online || *sample {
 		ctx := context.Background()
 
 		// Every source in the file, not only the ones a rule matched. The
@@ -118,7 +123,7 @@ func check(args []string, stdout, stderr io.Writer) int {
 
 		// Rules are the other way round: only the sources they matched, since
 		// a rule is read through the cluster it will run on.
-		problems = append(problems, inspectRules(ctx, set, root)...)
+		problems = append(problems, inspectRules(ctx, set, root, *sample)...)
 	}
 
 	if err := lint.Format(stdout, *format, problems); err != nil {

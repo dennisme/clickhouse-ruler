@@ -93,7 +93,24 @@ func keys(c lint.Check) string {
 	for _, k := range c.Keys {
 		quoted = append(quoted, "`"+k+"`")
 	}
-	return fmt.Sprintf("%s: %s", listKind(c.List), strings.Join(quoted, ", "))
+	return fmt.Sprintf("%s: %s", listName(c), strings.Join(quoted, ", "))
+}
+
+// listName describes what a check ships in its list. A ceiling list can carry
+// flags as well, and calling one of those a ceiling would send a reader looking
+// for a number it does not take (spec 7.7). What is named is what is shipped: a
+// flag a check merely permits is documented in its own section, not here, or the
+// table would read as though it were set.
+func listName(c lint.Check) string {
+	if c.List != lint.ListCeiling {
+		return listKind(c.List)
+	}
+	for _, k := range c.Keys {
+		if !strings.Contains(k, ":") {
+			return "ceilings and flags"
+		}
+	}
+	return listKind(c.List)
 }
 
 // listKind names the direction a scope combines the list in, because that is

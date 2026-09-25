@@ -25,6 +25,7 @@ stricter, and a ceiling binds at its lowest value. See spec 7.6 and 7.7.
 | [`annotations/runbook`](#annotations-runbook) | `warning` by default | none | [7.6](https://github.com/dennisme/clickhouse-ruler/blob/main/spec.md) |
 | [`annotations/template`](#annotations-template) | `warning` by default | none | [7.6](https://github.com/dennisme/clickhouse-ruler/blob/main/spec.md) |
 | [`labels/required`](#labels-required) | `warning` by default | required: `severity`, `team` | [7.6](https://github.com/dennisme/clickhouse-ruler/blob/main/spec.md) |
+| [`rule/attribute-key`](#rule-attribute-key) | `warning` by default | ceilings: `max-sample-rows:10000000` | [7.3](https://github.com/dennisme/clickhouse-ruler/blob/main/spec.md) |
 | [`rule/columns`](#rule-columns) | fixed, always `error` | none | [7.3](https://github.com/dennisme/clickhouse-ruler/blob/main/spec.md) |
 | [`rule/complexity`](#rule-complexity) | `warning` by default | ceilings: `max-joins:2`, `max-subqueries:2` | [7.3](https://github.com/dennisme/clickhouse-ruler/blob/main/spec.md) |
 | [`rule/cost`](#rule-cost) | `warning` by default | ceilings: `max-rows-per-second:1000000`, `max-rows-read:100000000` | [7.3](https://github.com/dennisme/clickhouse-ruler/blob/main/spec.md) |
@@ -475,3 +476,105 @@ WHERE toDate(EventDate) >= today() - 1 AND Duration > 0
 -- after: bounded on the ordering key the ruler already supplies
 WHERE Timestamp >= {{ .From }} AND Timestamp < {{ .To }}
 ```
+
+## What the data says
+
+Everything above answers from metadata: what the query is, what it resolves to,
+what it would read. This one reads rows, so it runs only when sampling was
+asked for, with `ruler check --sample` or `check.sample.enabled` in
+`ruler.yaml`. A connection alone does not turn it on.
+
+<a id="rule-attribute-key"></a>
+
+### rule/attribute-key
+
+A map key the query reads that no recent row actually has.
+
+For an OTel attribute map the column exists whether or not the key does, so
+`LogAttributes['payment_id']` resolves, type checks, plans, and returns nothing
+at all once somebody renames the attribute. The alert then stops firing
+forever, and every check that reads only metadata passes it. Confirming the key
+is really there needs the data, which is what this asks for.
+
+```sql
+-- the attribute was renamed to payment.id last quarter, and this still parses
+SELECT ServiceName, count() AS value
+FROM otel.otel_logs
+WHERE Timestamp >= {{ .From }} AND Timestamp < {{ .To }}
+  AND LogAttributes['payment_id'] != ''
+GROUP BY ServiceName
+```
+
+One query answers for every key a rule reads: a `countIf(has(...))` per key
+plus a row count, over the window. The window is the rule's own `window`,
+floored at an hour so a rule alerting on the last thirty seconds is not judged
+against thirty seconds of data, and shifted back by the source's
+`evaluation_delay` so the sample reads what an evaluation would.
+
+```yaml
+checks:
+  rule/attribute-key:
+    severity: warn
+    keys: [max-sample-rows:5000000]
+```
+
+`max-sample-rows` caps what one sample reads. The cap stops the read rather
+than failing it, so a sample that runs out of budget still answers for the rows
+it got to.
+
+**An empty window says nothing.** A rule that lands before its service starts
+sending, or against a cluster that does not carry that service yet, has nothing
+to verify against, and reporting it would train people to ignore the check on
+exactly the rules that are fine. A later edit to the file gets validated again,
+so the finding arrives once there is data to find it in. An operator who would
+rather an unverifiable rule be reported adds the flag:
+
+```yaml
+checks:
+  rule/attribute-key:
+    keys: [require-rows]
+```
+
+**A clean result is not a statement about the table, and this is the part worth
+reading before raising the severity.** The sample runs as the source's own
+ClickHouse user, under `readonly = 2` with that user's row policies applied. So
+the answer is scoped to the rows that user can see, which is the right scope,
+because it is what the evaluation will read too. But it cuts both ways:
+
+- A key present only in rows a row policy hides reads as **absent**. The
+  finding then reports a missing attribute on a rule that works perfectly, and
+  the author cannot see the rows that would tell them otherwise.
+- A key written once an hour is absent to a short window and present in
+  reality.
+
+That is why this warns by default. Raising it to `error` means blocking a
+contributor on evidence they cannot inspect, which is worth doing only once you
+are satisfied the validating user sees everything the evaluating user will. The
+finding names the source for the same reason: on an estate the answer can
+legitimately differ per cluster.
+
+**A sample can cover less than it asked for.** When the oldest row it read is
+newer than the start of the window, the finding says so. A table that TTLs
+shorter than the rule's window, one created this morning, and one whose
+retention was cut all produce that, and without saying so the check would
+report a key as missing over a span the data never covered.
+
+```text
+ResourceAttributes["payment_id"] is in none of the 4127 rows sampled between
+2026-09-25 11:00:00Z and 2026-09-25 12:00:00Z, so the rule reads a key nothing
+writes (the oldest row sampled is from 2026-09-25 11:42:10Z, so the data covers
+less than the window)
+```
+
+**What it does not check.** Three cases are reported as unchecked rather than
+passed over, because a check that quietly examined nothing looks exactly like
+one that found nothing wrong: a key built at evaluation time,
+`LogAttributes[concat(...)]`, which is not known yet; a key read from a joined
+table, which is out of scope because the window and the timestamp column
+describe the source's own table; and a numeric key on a `Map(UInt64, ...)`,
+which is a real lookup this check does not probe for.
+
+Two cases are silent, because nothing in them could go missing. `arr[1]` is an
+array index rather than a key. And a key under a Nested block,
+`Events.Attributes[1]['code']`, reads the map an array index returned rather
+than a column, so there is no column to name in a finding or to sample from.

@@ -1,0 +1,50 @@
+SelectWithUnionQuery (children 1)
+ ExpressionList (children 1)
+  SelectQuery (children 3)
+   ExpressionList (children 8)
+    Function arrayElement (alias paid) (children 1)
+     ExpressionList (children 2)
+      Identifier LogAttributes
+      Literal \'payment_id\'
+    Function arrayElement (alias tenant) (children 1)
+     ExpressionList (children 2)
+      Identifier t.SpanAttributes
+      Literal \'tenant\'
+    Function mapContains (alias present) (children 1)
+     ExpressionList (children 2)
+      Identifier LogAttributes
+      Literal \'checkout\'
+    Function arrayElement (alias first_duration) (children 1)
+     ExpressionList (children 2)
+      Identifier Durations
+      Literal UInt64_1
+    Function tupleElement (alias lower) (children 1)
+     ExpressionList (children 2)
+      Identifier Bounds
+      Literal UInt64_1
+    Function arrayElement (alias dynamic) (children 1)
+     ExpressionList (children 2)
+      Identifier LogAttributes
+      Function concat (children 1)
+       ExpressionList (children 2)
+        Literal \'pay\'
+        Literal \'ment\'
+    Identifier LogAttributes.keys (alias names)
+    Function arrayElement (alias deep) (children 1)
+     ExpressionList (children 2)
+      Function arrayElement (children 1)
+       ExpressionList (children 2)
+        Identifier Nested
+        Literal \'outer\'
+      Literal \'inner\'
+   TablesInSelectQuery (children 1)
+    TablesInSelectQueryElement (children 1)
+     TableExpression (children 1)
+      TableIdentifier otel.otel_traces (alias t)
+   Function greaterOrEquals (children 1)
+    ExpressionList (children 2)
+     Identifier Timestamp
+     Function toDateTime64 (children 1)
+      ExpressionList (children 2)
+       Literal \'2026-01-01 00:00:00.000\'
+       Literal UInt64_3

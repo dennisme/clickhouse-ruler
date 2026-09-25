@@ -271,3 +271,51 @@ func TestChecksFromPolicyCostTurnedOff(t *testing.T) {
 		t.Errorf("ceilings = %+v, want none: the check is off", *got.Cost)
 	}
 }
+
+func TestSamplingFromPolicyReadsTheCeilingAndTheFlag(t *testing.T) {
+	merged := policy.Merge(&policy.Policy{Checks: map[string]policy.Setting{
+		lint.CheckRuleAttributeKey: {
+			Severity: lint.SeverityWarning,
+			Keys:     []string{lint.LimitSampleRows + ":5000", lint.FlagRequireRows},
+		},
+	}})
+
+	got, wanted := samplingFromPolicy(merged)
+	if !wanted {
+		t.Fatal("sampling is not wanted, but the check is on")
+	}
+	if got.MaxRows != 5000 {
+		t.Errorf("MaxRows = %d, want 5000", got.MaxRows)
+	}
+	if !got.RequireRows {
+		t.Error("RequireRows = false, want the flag the policy set")
+	}
+}
+
+// Honouring off after the fact would mean reading rows an operator asked nobody
+// to read, so the answer has to come before the query.
+func TestSamplingFromPolicyRefusesWhenTheCheckIsOff(t *testing.T) {
+	merged := policy.Merge(&policy.Policy{Checks: map[string]policy.Setting{
+		lint.CheckRuleAttributeKey: {Severity: lint.SeverityOff},
+	}})
+
+	if _, wanted := samplingFromPolicy(merged); wanted {
+		t.Error("sampling is wanted, but the check is off")
+	}
+}
+
+// The shipped ceiling applies when nobody configures one, and the flag does not
+// ship set: an unverifiable rule is reported only where somebody asked.
+func TestSamplingFromPolicyDefaults(t *testing.T) {
+	got, wanted := samplingFromPolicy(policy.Merge())
+
+	if !wanted {
+		t.Fatal("sampling is not wanted by default, but the check ships on")
+	}
+	if got.MaxRows <= 0 {
+		t.Errorf("MaxRows = %d, want the shipped ceiling", got.MaxRows)
+	}
+	if got.RequireRows {
+		t.Error("RequireRows = true by default, which would report every rule with no data yet")
+	}
+}

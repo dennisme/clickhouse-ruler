@@ -205,3 +205,58 @@ func TestComplexityScopeMayRaiseTheShippedCeiling(t *testing.T) {
 		t.Errorf("joins ceiling = %d, want 4", got)
 	}
 }
+
+// A flag is a bare name the check declares, so it parses where a ceiling
+// without its number does not. Reading any bare name as a flag would let
+// `max-sample-rows` written without a value merge and quietly do nothing.
+func TestParseAcceptsADeclaredFlag(t *testing.T) {
+	in := []byte("checks:\n  rule/attribute-key:\n    keys: [require-rows]\n")
+
+	p, problems := Parse("ruler.yaml", in)
+	if len(problems) != 0 {
+		t.Fatalf("problems = %v, want none", problems)
+	}
+	if !p.For(lint.CheckRuleAttributeKey).Flag(lint.FlagRequireRows) {
+		t.Error("require-rows did not survive parsing")
+	}
+}
+
+func TestParseRejectsACeilingWrittenAsAFlag(t *testing.T) {
+	in := []byte("checks:\n  rule/attribute-key:\n    keys: [max-sample-rows]\n")
+
+	_, problems := Parse("ruler.yaml", in)
+	if len(problems) != 1 {
+		t.Fatalf("problems = %v, want one", problems)
+	}
+	if problems[0].Check != lint.CheckPolicyLimit {
+		t.Errorf("check = %q, want %s", problems[0].Check, lint.CheckPolicyLimit)
+	}
+}
+
+// A flag no check declared is a typo, and silence about it is a setting an
+// operator believes they made.
+func TestParseRejectsAnUndeclaredFlag(t *testing.T) {
+	in := []byte("checks:\n  rule/attribute-key:\n    keys: [require-row]\n")
+
+	if _, problems := Parse("ruler.yaml", in); len(problems) != 1 {
+		t.Fatalf("problems = %v, want one", problems)
+	}
+}
+
+// A flag merges by union, which is the only direction that works for a setting
+// making a check stricter: one scope can add it and none can take it away.
+func TestFlagSurvivesTheMerge(t *testing.T) {
+	instance := &Policy{Checks: map[string]Setting{
+		lint.CheckRuleAttributeKey: {Severity: lint.SeverityWarning},
+	}}
+	datasource := &Policy{Checks: map[string]Setting{
+		lint.CheckRuleAttributeKey: {Severity: lint.SeverityWarning, Keys: []string{lint.FlagRequireRows}},
+	}}
+
+	if !Merge(instance, datasource).For(lint.CheckRuleAttributeKey).Flag(lint.FlagRequireRows) {
+		t.Error("a scope's flag did not survive the merge")
+	}
+	if !Merge(datasource, instance).For(lint.CheckRuleAttributeKey).Flag(lint.FlagRequireRows) {
+		t.Error("the merge depends on the order the scopes were given")
+	}
+}

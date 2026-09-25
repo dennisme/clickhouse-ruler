@@ -181,6 +181,201 @@ func countKind(root *Node, kind string) int {
 	return len(find(root, func(n *Node) bool { return n.Kind == kind }))
 }
 
+// MapKey is one subscript a query performs: a column and the key read from it.
+// The column exists whether or not the key does, which is the whole reason spec
+// 7.3 asks the data rather than the schema.
+type MapKey struct {
+	Column string
+	Key    string
+
+	// Numeric says the key was written as a number. That is usually an array
+	// index and not a map key at all, but `Map(UInt64, String)` exists, so the
+	// tree cannot settle it and the column's type does (see resolveKeys).
+	Numeric bool
+}
+
+// MapKeySkip is a lookup that could not be turned into a question. Reported
+// rather than dropped: a check that examined nothing looks exactly like a
+// check that passed (spec 7.3).
+type MapKeySkip struct {
+	Column string
+	Reason string
+}
+
+// Why a subscript carried no key to ask about.
+const skipDynamicKey = "a key that is an expression, so it is only known at evaluation time"
+
+// mapKeys returns every subscript the query performs, and every one whose key
+// cannot be read from the file.
+//
+// Position, never the name. ClickHouse writes `LogAttributes['k']` and `arr[1]`
+// as the same `Function arrayElement` over an Identifier and a Literal, so a
+// name list could never tell a map lookup from an array index. Tuple access is
+// its own function and is a different question. `mapContains(col, 'k')` names a
+// key too, and breaks in exactly the same way when the attribute is renamed
+// (spec 7.3).
+//
+// What the tree cannot settle is which of those subscripts is a map lookup: the
+// literal's form is a strong hint and not proof, because a `Map(UInt64, String)`
+// is keyed by a number. The keys come back tagged and resolveKeys decides from
+// the column's type.
+//
+// A subscript whose base is not an identifier is left alone: in `m['a']['b']`
+// the outer one reads the map the inner one returned, and the inner one is
+// found on its own.
+func mapKeys(root *Node) ([]MapKey, []MapKeySkip) {
+	keys := map[MapKey]bool{}
+	skips := map[MapKeySkip]bool{}
+
+	for _, n := range find(root, isSubscript) {
+		args := n.Children[0].Children
+		base, key := args[0], args[1]
+
+		if key.Kind != "Literal" {
+			skips[MapKeySkip{Column: base.Detail, Reason: skipDynamicKey}] = true
+			continue
+		}
+
+		text, quoted := literalString(key.Detail)
+		if !quoted {
+			text = literalNumber(key.Detail)
+		}
+		keys[MapKey{Column: base.Detail, Key: text, Numeric: !quoted}] = true
+	}
+
+	return sortedKeys(keys), sortedSkips(skips)
+}
+
+// isSubscript reports whether a node reads one element out of a column by key,
+// with the two arguments that shape has. Tuple access is excluded: a tuple has
+// positions rather than keys, so nothing about it could be missing.
+//
+// A base that is not an identifier is excluded too. The key it names belongs to
+// whatever produced that value, and there is no column to ask about.
+func isSubscript(n *Node) bool {
+	if n.Kind != "Function" {
+		return false
+	}
+	switch strings.ToLower(n.Detail) {
+	case "arrayelement", "mapcontains":
+	default:
+		return false
+	}
+	if len(n.Children) != 1 || n.Children[0].Kind != "ExpressionList" {
+		return false
+	}
+	args := n.Children[0].Children
+
+	return len(args) == 2 && args[0].Kind == "Identifier"
+}
+
+// bareColumn drops the qualifier an identifier carries, so a subscript written
+// on a table alias resolves to the column: `t.SpanAttributes` is the table's
+// `SpanAttributes`.
+//
+// Only ever a fallback, because a dot is not always a qualifier. A Nested column
+// flattens into real columns whose names contain one, and `Events.Attributes` is
+// the whole name rather than `Attributes` on something called `Events`. Which of
+// the two a name is cannot be read off the tree, so resolveKeys asks the table
+// and tries the full name first.
+func bareColumn(identifier string) string {
+	if i := strings.LastIndex(identifier, "."); i >= 0 {
+		return identifier[i+1:]
+	}
+	return identifier
+}
+
+// literalString decodes a string literal as `EXPLAIN AST` prints one, and
+// reports whether it was a string at all. A numeric literal arrives as
+// `UInt64_1` and is how an array index is told from a map key.
+//
+// Two layers, because the output is the SQL literal text escaped once more:
+// the key `a'b` is written `'a\'b'` in SQL and printed as `\'a\\\'b\'`. Probing
+// for either intermediate form looks for a key nobody wrote.
+func literalString(detail string) (string, bool) {
+	text := unescape(detail)
+
+	if len(text) < 2 || text[0] != '\'' || text[len(text)-1] != '\'' {
+		return "", false
+	}
+
+	return unescape(text[1 : len(text)-1]), true
+}
+
+// literalNumber reads the value off a numeric literal, which `EXPLAIN AST`
+// writes with its type in front: `UInt64_1`, `Float64_0.99`. The type is not
+// what a key is compared against, so only the value is kept.
+func literalNumber(detail string) string {
+	if _, value, found := strings.Cut(detail, "_"); found {
+		return value
+	}
+	return detail
+}
+
+// unescape removes one layer of backslash escaping. Beyond the quote and the
+// backslash the output escapes, ClickHouse writes the usual control-character
+// forms inside a string literal, so they are decoded here rather than left to
+// arrive as a bare letter.
+func unescape(s string) string {
+	var out strings.Builder
+	out.Grow(len(s))
+
+	for i := 0; i < len(s); i++ {
+		if s[i] != '\\' || i+1 >= len(s) {
+			out.WriteByte(s[i])
+			continue
+		}
+
+		i++
+		switch s[i] {
+		case 'n':
+			out.WriteByte('\n')
+		case 't':
+			out.WriteByte('\t')
+		case 'r':
+			out.WriteByte('\r')
+		case '0':
+			out.WriteByte(0)
+		default:
+			out.WriteByte(s[i])
+		}
+	}
+
+	return out.String()
+}
+
+// sortedKeys orders by column then key, so a finding reads the same way twice
+// and a rule reading one key in two places reports it once.
+func sortedKeys(set map[MapKey]bool) []MapKey {
+	out := make([]MapKey, 0, len(set))
+	for k := range set {
+		out = append(out, k)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Column != out[j].Column {
+			return out[i].Column < out[j].Column
+		}
+		return out[i].Key < out[j].Key
+	})
+
+	return out
+}
+
+func sortedSkips(set map[MapKeySkip]bool) []MapKeySkip {
+	out := make([]MapKeySkip, 0, len(set))
+	for s := range set {
+		out = append(out, s)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Column != out[j].Column {
+			return out[i].Column < out[j].Column
+		}
+		return out[i].Reason < out[j].Reason
+	})
+
+	return out
+}
+
 // functionsNamed returns the called functions appearing in the given set,
 // sorted and deduplicated, so a rule calling now() twice is reported once.
 func functionsNamed(root *Node, names map[string]bool) []string {
