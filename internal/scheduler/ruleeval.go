@@ -242,3 +242,29 @@ func (e *RuleEval) Evaluate(ctx context.Context, now time.Time) Result {
 	res.SendError = e.cadence.Send(ctx, now, e.rule.Group.Interval, current)
 	return res
 }
+
+// carry takes over the alert state prev accumulated for the same rule, so a
+// reload does not restart the `for` timer of an alert that is already pending
+// (spec.md open question 2).
+//
+// Per source, because state is per rule per source (spec 6.10.1): a rule whose
+// selector reached a second cluster on this reload carries the first cluster's
+// instances and starts fresh on the new one, which is what the source labels on
+// the alerts already say. Whether the reloaded definition is the same alert as
+// the one prev was tracking is alert.State's decision, and a state that refuses
+// leaves this evaluator with the fresh one NewRuleEval already built.
+//
+// resolvedRetention is passed rather than read from the state because it is
+// derived from the reloaded group's interval, which an author can change in the
+// same edit.
+func (e *RuleEval) carry(prev *RuleEval, resolvedRetention time.Duration) {
+	for _, src := range e.rule.Sources {
+		state, ok := prev.states[src.Name]
+		if !ok {
+			continue
+		}
+		if state.Adopt(e.rule.Rule, e.rule.Labels, src, resolvedRetention) {
+			e.states[src.Name] = state
+		}
+	}
+}

@@ -12,9 +12,10 @@ import (
 // one metric series per rule, or the ruler becomes the cardinality problem
 // it exists to fix (spec 8.3).
 //
-// The watch mode metrics (clickhouse_ruler_problem,
-// clickhouse_ruler_config_last_reload_*) are not here: they belong to
-// `ruler watch`, which does not exist yet.
+// clickhouse_ruler_problem is not here: it re-validates loaded rules on a
+// timer, which belongs to `ruler watch` and does not exist yet. The config
+// reload pair below does, because SIGHUP reloads the files this ruler is
+// running (spec 8.2).
 type Metrics struct {
 	EvaluationsTotal        *prometheus.CounterVec
 	EvaluationFailuresTotal *prometheus.CounterVec
@@ -33,6 +34,9 @@ type Metrics struct {
 	NotificationLatency prometheus.Histogram
 
 	RulesUnmatched *prometheus.GaugeVec
+
+	ConfigLastReloadSuccessful prometheus.Gauge
+	ConfigLastReloadTimestamp  prometheus.Gauge
 
 	QueryReadRowsTotal  *prometheus.CounterVec
 	QueryReadBytesTotal *prometheus.CounterVec
@@ -131,6 +135,32 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 			Help: "Number of loaded rules that matched no source, so this ruler will never evaluate them.",
 		}, []string{"rule_group"}),
 
+		// What the two reload gauges say, and deliberately not the same thing.
+		//
+		// ConfigLastReloadSuccessful is about the last attempt: a reload the
+		// ruler refused sets it to 0 and it stays there until one succeeds.
+		// That is the alert an operator wants, because a refused reload is
+		// silent otherwise. The files on disk say one thing, the ruler is
+		// running another, and nothing about the rules that are evaluating
+		// looks wrong.
+		//
+		// ConfigLastReloadTimestamp is about the running configuration, so a
+		// refused reload leaves it alone. The query it exists for is
+		// `time() - clickhouse_ruler_config_last_reload_timestamp_seconds`,
+		// read as "how old is what this ruler is evaluating". Stamping it on a
+		// refusal would answer that question with the moment the ruler declined
+		// to change anything, which claims the running rules are current when
+		// they are precisely not (spec 7.6).
+		ConfigLastReloadSuccessful: f.NewGauge(prometheus.GaugeOpts{
+			Name: "clickhouse_ruler_config_last_reload_successful",
+			Help: "Whether the last attempt to load the rules, sources and policy files succeeded.",
+		}),
+
+		ConfigLastReloadTimestamp: f.NewGauge(prometheus.GaugeOpts{
+			Name: "clickhouse_ruler_config_last_reload_timestamp_seconds",
+			Help: "Unix timestamp of the load that produced the configuration this ruler is evaluating.",
+		}),
+
 		// What a rule costs the cluster, read from the driver's callbacks
 		// during the query rather than from system.query_log afterwards
 		// (spec 8.2). These are what make the caps in 6.7 observable rather
@@ -182,4 +212,55 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 			Buckets: prometheus.DefBuckets,
 		}, []string{"source"}),
 	}
+}
+
+// deleteGroup removes every series a group left behind, which is every metric
+// labelled by rule_group whatever else it carries: DeletePartialMatch matches
+// on the labels given and ignores the rest.
+func (m *Metrics) deleteGroup(group string) {
+	labels := prometheus.Labels{"rule_group": group}
+
+	m.EvaluationsTotal.DeletePartialMatch(labels)
+	m.EvaluationFailuresTotal.DeletePartialMatch(labels)
+	m.AnnotationFailures.DeletePartialMatch(labels)
+	m.EvaluationDuration.DeletePartialMatch(labels)
+	m.IterationsTotal.DeletePartialMatch(labels)
+	m.IterationsMissedTotal.DeletePartialMatch(labels)
+	m.LastEvaluationTimestamp.DeletePartialMatch(labels)
+	m.LastDuration.DeletePartialMatch(labels)
+	m.AlertsActive.DeletePartialMatch(labels)
+	m.RulesUnmatched.DeletePartialMatch(labels)
+}
+
+// deleteRule removes the series of one rule inside a group that is still
+// loaded. Only the metrics carrying both labels: the group's own series,
+// its iterations and its evaluation duration, belong to the group and not to
+// the rule that left it.
+func (m *Metrics) deleteRule(group, rule string) {
+	labels := prometheus.Labels{"rule_group": group, "rule": rule}
+
+	m.EvaluationsTotal.DeletePartialMatch(labels)
+	m.EvaluationFailuresTotal.DeletePartialMatch(labels)
+	m.AnnotationFailures.DeletePartialMatch(labels)
+	m.AlertsActive.DeletePartialMatch(labels)
+}
+
+// deleteRuleName removes the query cost series of a rule, which carry the rule
+// and not its group (spec 8.2). The caller has to be sure no group still holds
+// a rule by this name, because an alert name may legitimately repeat across
+// groups and these series cannot tell two of them apart.
+func (m *Metrics) deleteRuleName(rule string) {
+	labels := prometheus.Labels{"rule": rule}
+
+	m.QueryReadRowsTotal.DeletePartialMatch(labels)
+	m.QueryReadBytesTotal.DeletePartialMatch(labels)
+	m.QueryMemoryUsage.DeletePartialMatch(labels)
+	m.QueryDuration.DeletePartialMatch(labels)
+}
+
+// deleteSource removes the queue wait series of a source no rule reaches any
+// more. Left behind, a histogram of waits against a source this ruler no longer
+// connects to reads as a concurrency limit that is still being hit.
+func (m *Metrics) deleteSource(source string) {
+	m.QueryQueueWait.DeletePartialMatch(prometheus.Labels{"source": source})
 }

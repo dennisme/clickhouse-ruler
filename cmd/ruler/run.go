@@ -8,14 +8,15 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 
-	"github.com/dennisme/clickhouse-ruler/internal/lint"
 	"github.com/dennisme/clickhouse-ruler/internal/notify"
 	"github.com/dennisme/clickhouse-ruler/internal/query"
-	"github.com/dennisme/clickhouse-ruler/internal/ruleset"
 	"github.com/dennisme/clickhouse-ruler/internal/scheduler"
 )
 
@@ -89,67 +90,61 @@ func runRun(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	}
 	log := slog.New(slog.NewTextHandler(stdout, &slog.HandlerOptions{Level: level}))
 
-	sources, problems, err := loadSources(*sourcesPath)
-	if err != nil {
-		printf(stderr, "%s\n", err)
-		return exitUsage
-	}
-
-	root, configProblems, err := loadPolicy(*configPath, *rulesDir)
-	if err != nil {
-		printf(stderr, "%s\n", err)
-		return exitUsage
-	}
-	problems = append(problems, configProblems...)
-
-	set, ruleProblems := ruleset.Load(*rulesDir, sources, root)
-	problems = append(problems, ruleProblems...)
-
-	if err := lint.Format(stderr, lint.FormatText, problems); err != nil {
-		printf(stderr, "%s\n", err)
-		return exitUsage
-	}
-
-	// An error-severity finding refuses to start; a warning is logged above
-	// and the ruler runs anyway (spec 7.6).
-	for _, p := range problems {
-		if p.Severity == lint.SeverityError {
-			printf(stderr, "refusing to start: at least one rule failed a correctness check\n")
-			return exitFinding
-		}
-	}
-
-	// The contract check runs before the evaluation connections are opened,
-	// so a refused source is never connected to at all. Unlike the findings
-	// above it does not refuse to start: a source failing the contract is
-	// refused on its own, and every other source carries on (spec 6.7.3).
-	if refused := refusedSources(ctx, *sourcesPath, set, root, stderr, log); len(refused) > 0 {
-		refuseSources(set, refused)
-	}
-
 	reg := prometheus.NewRegistry()
-	metrics := scheduler.NewMetrics(reg)
-	clock := scheduler.NewRealClock()
+	rn := &runner{
+		rulesDir:    *rulesDir,
+		sourcesPath: *sourcesPath,
+		configPath:  *configPath,
+		log:         log,
+		stderr:      stderr,
+		metrics:     scheduler.NewMetrics(reg),
+		clock:       scheduler.NewRealClock(),
+		concurrency: *queryConcurrency,
+		// Both the cadence and each rule's resolved-alert retention are sized
+		// from these two, so they travel as the pair they are (spec 6.5).
+		resend: scheduler.Resend{Interval: *resendInterval, Tolerance: *resendTolerance},
+	}
+	rn.cadence = scheduler.NewCadence(notify.NewClient(*alertmanagerURL), *alertmanagerURL,
+		rn.resend, rn.metrics, rn.clock)
 
-	queriers, err := openQueriers(set, queryCost{metrics})
+	// SIGHUP is the whole trigger. Nothing watches the filesystem: an operator
+	// or whatever rolled the files out says when they are complete, and a
+	// watcher would read a rules tree half way through being written.
+	//
+	// Registered before the first load, because the default disposition of
+	// SIGHUP is to terminate: a signal arriving while the ruler is still
+	// connecting to twelve clusters would otherwise kill it, which is a
+	// confusing way to learn that a reload is only accepted once startup
+	// finished.
+	hup := make(chan os.Signal, 1)
+	signal.Notify(hup, syscall.SIGHUP)
+	defer signal.Stop(hup)
+
+	cfg, err := rn.load()
 	if err != nil {
+		printf(stderr, "%s\n", err)
+		return exitUsage
+	}
+	rn.report(cfg.problems)
+
+	// An error-severity finding refuses to start; a warning is reported above
+	// and the ruler runs anyway (spec 7.6).
+	if cfg.refused() {
+		printf(stderr, "refusing to start: at least one rule failed a correctness check\n")
+		return exitFinding
+	}
+
+	if err := rn.connect(ctx, cfg); err != nil {
 		printf(stderr, "%s\n", err)
 		return exitRun
 	}
-	defer closeQueriers(queriers)
+	defer rn.close()
 
-	// Both the cadence and each rule's resolved-alert retention are sized from
-	// these two, so they are passed as the pair they are (spec 6.5).
-	resend := scheduler.Resend{Interval: *resendInterval, Tolerance: *resendTolerance}
-
-	client := notify.NewClient(*alertmanagerURL)
-	cadence := scheduler.NewCadence(client, *alertmanagerURL, resend, metrics, clock)
-
-	sched := scheduler.New(set, toQuerierMap(queriers), cadence, metrics, clock, *queryConcurrency, log, resend)
+	rn.build(cfg)
 
 	httpSrv := &http.Server{
 		Addr:              *listen,
-		Handler:           scheduler.Handler(reg, readiness(len(set.Rules), toPingers(queriers))),
+		Handler:           scheduler.Handler(reg, rn.ready),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	go func() {
@@ -158,12 +153,20 @@ func runRun(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		}
 	}()
 
-	sched.Start(ctx)
-	log.Info("ruler running", "rules", len(set.Rules), "listen", *listen)
+	rn.sched.Start(ctx)
+	log.Info("ruler running", "rules", len(cfg.set.Rules), "listen", *listen)
 
-	<-ctx.Done()
+	for running := true; running; {
+		select {
+		case <-ctx.Done():
+			running = false
+		case <-hup:
+			rn.reload(ctx)
+		}
+	}
+
 	log.Info("shutting down", "timeout", shutdownTimeout.String())
-	sched.Shutdown(*shutdownTimeout)
+	rn.sched.Shutdown(*shutdownTimeout)
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -226,27 +229,6 @@ func toPingers(queriers map[string]*query.Querier) map[string]pinger {
 		out[name] = q
 	}
 	return out
-}
-
-// openQueriers connects to every source any loaded rule matched, once each,
-// so a rule that matches several sources shares a connection with any other
-// rule matching the same one.
-func openQueriers(set *ruleset.Set, rec query.Recorder) (map[string]*query.Querier, error) {
-	out := map[string]*query.Querier{}
-	for _, r := range set.Rules {
-		for _, src := range r.Sources {
-			if _, ok := out[src.Name]; ok {
-				continue
-			}
-			q, err := query.Open(src, rec)
-			if err != nil {
-				closeQueriers(out)
-				return nil, fmt.Errorf("opening source %q: %w", src.Name, err)
-			}
-			out[src.Name] = q
-		}
-	}
-	return out, nil
 }
 
 func closeQueriers(queriers map[string]*query.Querier) {

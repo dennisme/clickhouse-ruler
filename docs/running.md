@@ -101,11 +101,21 @@ series per rule.
 | `clickhouse_ruler_alerts_send_failures_total` | counter | `alertmanager` |
 | `clickhouse_ruler_notification_latency_seconds` | histogram | none |
 | `clickhouse_ruler_rules_unmatched` | gauge | `rule_group` |
+| `clickhouse_ruler_config_last_reload_successful` | gauge | none |
+| `clickhouse_ruler_config_last_reload_timestamp_seconds` | gauge | none |
 | `clickhouse_ruler_query_read_rows_total` | counter | `rule`, `team` |
 | `clickhouse_ruler_query_read_bytes_total` | counter | `rule`, `team` |
 | `clickhouse_ruler_query_memory_usage_bytes` | histogram | `rule` |
 | `clickhouse_ruler_query_duration_seconds` | histogram | `rule` |
 | `clickhouse_ruler_query_queue_wait_seconds` | histogram | `source` |
+
+The two reload gauges are about the files rather than the rules.
+`clickhouse_ruler_config_last_reload_successful` is the last attempt, so a
+reload the ruler refused holds it at 0 until one succeeds;
+`clickhouse_ruler_config_last_reload_timestamp_seconds` is only stamped by a
+load that succeeded, so it dates the configuration actually being evaluated.
+[Operating the ruler](operations.md) has what a reload refuses and what survives
+one.
 
 The four query cost metrics come from the ClickHouse driver's own callbacks
 as the query runs, so they cost no extra query and do not depend on how long

@@ -249,3 +249,49 @@ and are what the code comments cite.
   change behind another team's cluster. The severity of the finding is the
   operator's to raise, and for them it is about a file they can act on.
   See 6.10, 7.3, 7.6.
+- **Hot reload is `SIGHUP`, and the same rule across a reload is the same
+  label set.** Nothing watches the filesystem: whoever rolled the files out is
+  the only party that knows when a rules tree is complete, and a watcher would
+  read one half written. A reload goes through the loader startup uses, so
+  validation still has one entry point for the ruler and one for CI (7.1), and
+  an error-severity finding refuses the whole reading while a warning is
+  reported and applied (7.6). What carries over is the alert state of every
+  rule whose name, effective labels and source have not changed, because those
+  three are what an alert's identity is assembled from (6.3): change one and
+  every instance being tracked has a fingerprint no later evaluation will
+  produce, so it would resolve on the next tick and be re-created with its
+  `for` starting from zero. Refusing to carry it is that outcome in one step
+  instead of two, and without a resolve notification for an alert that did not
+  recover. Everything else about a rule is free to change and the instance
+  survives: a new threshold, a new window, a shorter `for`, an edited
+  annotation. State is looked up per group and alert name, so a rule moved to
+  another file or group starts fresh anyway: matching on labels alone across the
+  whole tree would hand a deleted rule's state to an unrelated rule that happens
+  to agree with it, and a move already renames every series the rule has. The notify.Cadence outlives a reload too, so a firing alert keeps
+  its place in the resend interval rather than being re-posted because somebody
+  edited a file. See 6.3, 6.5, 6.10.1, 7.6.
+- **A refused reload keeps the previous version and says so on one of the two
+  reload gauges, not both.** `clickhouse_ruler_config_last_reload_successful`
+  is about the last attempt, so a refusal sets it to 0 and it stays there until
+  a load succeeds: that is the alert, because the rules still running are valid
+  and nothing about them looks wrong from the outside.
+  `clickhouse_ruler_config_last_reload_timestamp_seconds` is about the
+  configuration being evaluated, so a refusal leaves it alone. It exists for
+  `time() - ...`, read as how old the running rules are, and stamping it on a
+  refusal would answer that with the moment the ruler declined to change
+  anything. The refusal is all or nothing, including the files in the reading
+  that are fine, because a rules tree is loaded as a tree and half of one is not
+  a configuration anybody wrote down. Series for a group or rule the reload
+  dropped are deleted, since a counter left at its last value is
+  indistinguishable from a rule that is loaded and quiet. See 7.6, 8.2.
+- **A reload re-checks the user contract.** 6.7.3 lists three places the
+  contract is checked and a reload is one of them, so this is the decision to
+  honour it rather than to make. The argument for doing it is the window 6.7.3
+  names: a grant revoked while the ruler runs is not noticed until the next
+  check or reload, and a ruler up for a month that never re-read the report
+  would make that window the process lifetime. The argument against is cost, and
+  it does not hold: a handful of statements per source, each refused before it
+  does any work, at a moment an operator chose, and never once per evaluation.
+  It runs before any connection is opened, so a source refused at error severity
+  is never connected to, and it refuses that source alone while the rest of the
+  reload proceeds. See 6.7.3, 7.6.

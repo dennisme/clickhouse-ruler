@@ -663,7 +663,9 @@ Once per source, in three places, and never in the evaluation path:
   who own it.
 - `ruler run` at startup, per source, while connections are being opened
   anyway.
-- On hot reload, once that exists, since a reload already reconciles sources.
+- On a `SIGHUP` reload, since a reload already reconciles sources. Checked
+  before any connection is opened, the same as at startup, so a source refused
+  at error severity is never connected to.
 
 Not per evaluation. Grants do not change between two ticks in any way worth
 paying for, and four refused queries on every tick would be load on the cluster
@@ -677,7 +679,9 @@ its rules do not evaluate. At `warn` it loads and logs which assertions failed.
 At `off` the probes are not sent at all.
 
 **What this leaves open, stated rather than hidden.** An operator who grants
-`REMOTE` an hour after startup is not noticed until the next check or reload.
+`REMOTE` an hour after startup is not noticed until the next check or reload,
+which is why the reload checks it: without that, the window would be the
+process lifetime rather than the gap between two deliberate acts.
 That is acceptable because of 6.7.1 and would not be acceptable without it: the
 probe is a report, and the grants are the control. The window where the report
 is stale is a window where the database is still refusing the query.

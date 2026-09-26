@@ -139,7 +139,7 @@ rule happened to wait says nothing about what to change. Only sources that set
 `max_concurrent_queries` reach it, so a series here means a limit exists and
 is being hit.
 
-Validation and config, used by watch mode:
+Validation and config:
 
 | Metric | Type | Labels |
 | --- | --- | --- |
@@ -156,8 +156,18 @@ Alerting on it staying raised is how the soft failure in 6.10 stops being
 ignored: the check warns at authoring time, this catches the case where nobody
 read the warning.
 
-Of these four, only `clickhouse_ruler_rules_unmatched` exists. The other three belong to
-`ruler watch`.
+Of these four, only `clickhouse_ruler_problem` is outstanding: it re-validates
+loaded rules on a timer, which is what `ruler watch` is. The reload pair exists
+because `SIGHUP` reloads the files, and the two deliberately do not say the same
+thing. `clickhouse_ruler_config_last_reload_successful` is about the last
+attempt, so a refused reload leaves it at 0 until one succeeds, which is the
+alert: the rules that are running are valid and nothing about them looks wrong,
+so a ruler running last week's rules is invisible otherwise.
+`clickhouse_ruler_config_last_reload_timestamp_seconds` is about the
+configuration being evaluated, so a refused reload leaves it alone. The query it
+exists for is `time() - clickhouse_ruler_config_last_reload_timestamp_seconds`,
+read as how old the running rules are, and stamping it on a refusal would answer
+that with the moment the ruler declined to change anything.
 
 The query cost table above is read from the driver's callbacks as the query
 runs. Progress packets carry what each block read rather than a running
@@ -541,14 +551,22 @@ Borrowed from `pint`:
 Built so far: `ruler check` with configurable policy, tiers 0 through 2 of
 section 7 including the checks that read the query through the database and
 the one that reads rows, and `ruler run`, which ticks groups on their
-intervals, evaluates against every matched source, and delivers to
-Alertmanager. The observability in section 8 is complete apart from the watch
-mode metrics.
+intervals, evaluates against every matched source, delivers to Alertmanager,
+and reloads all three files on `SIGHUP`. The observability in section 8 is
+complete apart from `clickhouse_ruler_problem`.
 
-`ruler watch` does not exist, so rules are not reloaded without a restart.
+Hot reload is `SIGHUP` and nothing else: nothing watches the filesystem,
+because whoever rolled the files out is the only party that knows when they are
+complete. A reload is all or nothing, keeps the pending state of every rule that
+is still the same rule, and refuses a reading that fails a correctness check
+(7.6). What it does not do is notice a rule that became broken while nothing
+changed on disk, which needs re-validation on a timer rather than on a signal.
 
-Next: watch mode, which brings hot reload and the three remaining metrics in
-8.2, then tier 3 backfill (7.4).
+`ruler watch` does not exist, so loaded rules are not re-validated on a timer
+and `clickhouse_ruler_problem` is not exported.
+
+Next: watch mode, which brings that timer and the last metric in 8.2, then tier
+3 backfill (7.4).
 
 The validation package is already re-runnable against loaded rules, so watch
 mode is a caller rather than a rewrite.

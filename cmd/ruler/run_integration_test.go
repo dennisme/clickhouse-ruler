@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -231,6 +232,147 @@ func rewriteAddress(t *testing.T, path, addr string) string {
 	rewritten := bytes.ReplaceAll(data, []byte("address: 127.0.0.1:9000"), []byte("address: "+addr))
 	if err := os.WriteFile(out, rewritten, 0o600); err != nil {
 		t.Fatalf("writing %s: %v", out, err)
+	}
+	return out
+}
+
+// Whether a reload earns an integration test of its own, argued rather than
+// assumed: it does, and exactly one.
+//
+// The unit tests already cover what a reload decides. They prove pending state
+// survives a rule nobody edited, that an error-severity finding keeps the
+// running version, that the connections are reconciled, and they do it on a
+// fake clock with no container. What none of them can show is that the signal
+// arrives at a process that is running, that the files are re-read from disk
+// rather than from something the test handed over, that a connection opened
+// mid-flight reaches a real cluster, and that the alert a reload brought in is
+// delivered end to end. That is four seams at once and it is the seam a reload
+// is: everything above is a unit test, everything below is `ruler run` as an
+// operator runs it.
+//
+// One test, and not a matrix. A refused reload's behaviour is the same code the
+// unit tests drive, and paying a container for a second case would buy the same
+// assertion at thirty seconds a run.
+func TestRunReloadsOnSighup(t *testing.T) {
+	amURL := os.Getenv("RULER_ALERTMANAGER_URL")
+	chAddr := os.Getenv("RULER_CLICKHOUSE_ADDR")
+	if amURL == "" || chAddr == "" {
+		t.Fatal("RULER_ALERTMANAGER_URL and RULER_CLICKHOUSE_ADDR must be set, run `just integration`")
+	}
+
+	s := startSink(t)
+
+	serviceName := "checkout-" + strconv.FormatInt(time.Now().UnixNano(), 36)
+	seed(t, chAddr, serviceName)
+
+	// A copy of the rules tree, because this test adds a file to it and the
+	// checked-in fixture is shared with every other test in this package.
+	rulesDir := copyTree(t, filepath.Join("testdata", "rules"))
+	rewritten := rewriteAddress(t, filepath.Join("testdata", "sources.yaml"), chAddr)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var stdout, stderr bytes.Buffer
+	runDone := make(chan int, 1)
+	go func() {
+		runDone <- runRun(ctx, []string{
+			"--rules", rulesDir,
+			"--sources", rewritten,
+			"--alertmanager", amURL,
+			"--listen", ":0",
+		}, &stdout, &stderr)
+	}()
+
+	delivered := func(alertname string) func([]delivery) bool {
+		return func(ds []delivery) bool {
+			for _, d := range ds {
+				for _, a := range d.Alerts {
+					if a.Labels["alertname"] == alertname && a.Labels["ServiceName"] == serviceName {
+						return true
+					}
+				}
+			}
+			return false
+		}
+	}
+
+	// Wait for the ruler to be up and delivering before reloading it, so the
+	// second alert can only come from a reload of a running process.
+	s.waitFor(t, 30*time.Second, delivered("CheckoutIsSlow"))
+
+	// A second rule over the same seeded row, in a file the ruler has never
+	// read. `for` is absent, so it fires on the first evaluation after the
+	// reload.
+	added := `groups:
+  - name: checkout_reloaded
+    interval: 2s
+    rules:
+      - alert: CheckoutIsStillSlow
+        sources:
+          team: payments
+        expr: |
+          SELECT ServiceName, max(Duration) / 1e6 AS value
+          FROM otel.otel_traces
+          WHERE Timestamp >= {{ .From }} AND Timestamp < {{ .To }}
+          GROUP BY ServiceName
+          HAVING value > 1000
+        window: 5m
+        labels:
+          team: payments
+          severity: warning
+        annotations:
+          summary: "{{ .ServiceName }} is still slow"
+`
+	if err := os.WriteFile(filepath.Join(rulesDir, "payments", "reloaded.yaml"), []byte(added), 0o600); err != nil {
+		t.Fatalf("writing the added rule: %v", err)
+	}
+
+	// The test binary is the process running the ruler, so this is the signal
+	// an operator sends.
+	if err := syscall.Kill(os.Getpid(), syscall.SIGHUP); err != nil {
+		t.Fatalf("sending SIGHUP: %v", err)
+	}
+
+	s.waitFor(t, 30*time.Second, delivered("CheckoutIsStillSlow"))
+
+	cancel()
+	select {
+	case code := <-runDone:
+		if code != exitOK {
+			t.Errorf("ruler run exited %d\nstdout: %s\nstderr: %s", code, stdout.String(), stderr.String())
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("ruler run did not shut down within 10s of cancellation")
+	}
+}
+
+// copyTree copies a rules tree into the test's temp directory, so a test that
+// adds or edits a file leaves the checked-in fixture alone.
+func copyTree(t *testing.T, dir string) string {
+	t.Helper()
+
+	out := filepath.Join(t.TempDir(), "rules")
+	err := filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(dir, path)
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(out, rel)
+		if d.IsDir() {
+			return os.MkdirAll(target, 0o755)
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(target, data, 0o600)
+	})
+	if err != nil {
+		t.Fatalf("copying %s: %v", dir, err)
 	}
 	return out
 }

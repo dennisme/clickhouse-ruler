@@ -686,9 +686,9 @@ checks:
 
 Two consequences worth stating before this is built.
 
-**Severity is runtime behaviour, not only CI output.** With hot reload, a check
-at `error` means the ruler refuses the file and keeps the previous version of
-it; `warn` means it loads and logs. Turning a check down does not just quiet
+**Severity is runtime behaviour, not only CI output.** On a reload, a check at
+`error` means the ruler refuses the reading and keeps the previous version of
+it; `warn` means it loads and reports. Turning a check down does not just quiet
 CI, it changes what the running ruler will accept.
 
 **CI and the ruler must read the same `ruler.yaml`**, or a rule passes CI and
