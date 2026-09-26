@@ -37,6 +37,21 @@ The one failure that stops everything, because nothing after it can be read.
 Every other check collects problems and carries on, so a single run reports as
 much as it can rather than making a contributor fix one line at a time.
 
+```yaml
+# before: the value opens a quote it never closes, so nothing after this
+# line is read and no other check reports anything about the file
+- alert: CheckoutIsSlow
+  annotations:
+    summary: "{{ .ServiceName }} is slow
+    runbook_url: https://runbooks.internal/checkout-is-slow
+
+# after
+- alert: CheckoutIsSlow
+  annotations:
+    summary: "{{ .ServiceName }} is slow"
+    runbook_url: https://runbooks.internal/checkout-is-slow
+```
+
 <a id="yaml-unknown-field"></a>
 
 ### yaml/unknown-field
@@ -68,6 +83,20 @@ A field holding the wrong shape, such as a list where a mapping belongs.
 
 Reported with the line of the offending node, like every other finding, so the
 fix is visible on the diff rather than in a stack trace.
+
+```yaml
+# before: labels is a list of one mapping, where a mapping belongs
+- alert: CheckoutIsSlow
+  labels:
+    - team: payments
+      severity: warning
+
+# after
+- alert: CheckoutIsSlow
+  labels:
+    team: payments
+    severity: warning
+```
 
 <a id="ruleset-directory"></a>
 
@@ -141,6 +170,19 @@ the file for a year looking like a control that is in place.
 Every check the ruler can report is listed in the [index](index.md). A name
 that is not on that page cannot be configured, because nothing would read it.
 
+```yaml
+# before: the check is called rule/select-star, so this line reads as a
+# control that is in place and configures nothing
+checks:
+  rule/select-stars:
+    severity: error
+
+# after
+checks:
+  rule/select-star:
+    severity: error
+```
+
 <a id="policy-fixed-check"></a>
 
 ### policy/fixed-check
@@ -156,6 +198,19 @@ If what you actually need is one cluster where a check is expected to fire,
 that is an exemption on the source rather than a change in policy, and it
 still cannot apply to a fixed check.
 
+```yaml
+# before: rule/expr is a correctness check, so this would leave an
+# operator believing they had softened something that still blocks
+checks:
+  rule/expr:
+    severity: warn
+
+# after: the convention check next to it is the one that has a severity
+checks:
+  rule/select-star:
+    severity: warn
+```
+
 <a id="policy-severity"></a>
 
 ### policy/severity
@@ -165,6 +220,27 @@ A severity that is not `off`, `warn` or `error`.
 `warning` is accepted as a spelling of `warn`. Anything else is refused rather
 than guessed at, because the guess would decide whether a repository blocks on
 a finding.
+
+```yaml
+# before: not a severity, and guessing would decide whether the
+# repository blocks on the finding
+checks:
+  labels/required:
+    severity: warn-only
+
+# after: off, warn or error, and warning is accepted for warn
+checks:
+  labels/required:
+    severity: warn
+```
+
+Note the quotes on `off`. YAML reads a bare `off` as a boolean:
+
+```yaml
+checks:
+  rule/table-access:
+    severity: "off"
+```
 
 <a id="policy-check-limit"></a>
 
