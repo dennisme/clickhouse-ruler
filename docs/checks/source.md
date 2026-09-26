@@ -47,6 +47,23 @@ The name is how a finding says which cluster disagreed, how `--explain` lists
 what a rule matched, and what the `source` label on every alert carries. Two
 sources sharing one makes all three ambiguous.
 
+```yaml
+# before: two clusters, one name. A finding cannot say which of them
+# disagreed, and every alert from either carries source="otel_traces".
+sources:
+  - name: otel_traces
+    address: ch-dc1:9000
+  - name: otel_traces
+    address: ch-dc2:9000
+
+# after
+sources:
+  - name: otel_dc1
+    address: ch-dc1:9000
+  - name: otel_dc2
+    address: ch-dc2:9000
+```
+
 <a id="source-address"></a>
 
 ### source/address
@@ -57,6 +74,17 @@ Expected as `host:port`. A sharded cluster is only partly handled today: the
 field takes a single node, so this is the node the ruler connects to rather
 than a description of the whole cluster.
 
+```yaml
+# before: the key is there and the value is not, which a projected
+# config map that rendered an empty value also produces
+- name: otel_dc1
+  address: ""
+
+# after
+- name: otel_dc1
+  address: ch-dc1:9000
+```
+
 <a id="source-database"></a>
 
 ### source/database
@@ -65,6 +93,20 @@ A source naming no database.
 
 It is also what `rule/foreign-table` measures a query against, so a source
 without one cannot tell its own tables from anybody else's.
+
+```yaml
+# before: nothing to resolve an unqualified table name against, and
+# nothing for rule/foreign-table to measure a query against
+- name: otel_dc1
+  address: ch-dc1:9000
+  table: otel_traces
+
+# after
+- name: otel_dc1
+  address: ch-dc1:9000
+  database: otel
+  table: otel_traces
+```
 
 <a id="source-username"></a>
 
@@ -78,6 +120,21 @@ and they are attached to the user. The username is deliberately written in the
 file in plain sight rather than hidden in the environment, so a reviewer can
 see that `payments` connects as `ruler_payments` and not as something with
 wider grants.
+
+```yaml
+# before: no user, and the tenancy boundary is whatever the connection
+# happens to authenticate as
+- name: otel_dc1
+  address: ch-dc1:9000
+  database: otel
+
+# after: the user is in the file, so a reviewer can see that payments
+# connects as ruler_payments and not as something with wider grants
+- name: otel_dc1
+  address: ch-dc1:9000
+  database: otel
+  username: ruler_payments
+```
 
 <a id="source-password"></a>
 
@@ -115,6 +172,19 @@ to assert. Rules are not required to read it, but a rule that reads something
 else is reading outside what was reviewed, which is what `rule/foreign-table`
 reports.
 
+```yaml
+# before: nothing for the contract check to assert is readable
+- name: otel_dc1
+  database: otel
+  username: ruler_payments
+
+# after
+- name: otel_dc1
+  database: otel
+  username: ruler_payments
+  table: otel_traces
+```
+
 ## Windows and caps
 
 <a id="source-timestamp-column"></a>
@@ -127,6 +197,20 @@ It is the column the evaluation window is bound against, so without it there
 is nothing for `{{ .From }}` and `{{ .To }}` to compare to and no rule on this
 source can be given a time bound at all.
 
+```yaml
+# before: no column to bind the window against, so no rule on this
+# source can be given a time bound at all
+- name: otel_dc1
+  database: otel
+  table: otel_traces
+
+# after
+- name: otel_dc1
+  database: otel
+  table: otel_traces
+  timestamp_column: Timestamp
+```
+
 <a id="source-evaluation-delay"></a>
 
 ### source/evaluation-delay
@@ -137,6 +221,16 @@ The delay keeps an evaluation off the newest, still-filling window. Data
 arriving through a batch pipeline is not complete the instant it is timestamped,
 and a rule reading the last few seconds sees a dip that is ingestion lag rather
 than an outage. A negative delay asks to read the future.
+
+```yaml
+# before: asks to read the future
+- name: otel_dc1
+  evaluation_delay: -30s
+
+# after: stays off the newest, still-filling window
+- name: otel_dc1
+  evaluation_delay: 30s
+```
 
 <a id="source-max-rows"></a>
 
@@ -149,6 +243,18 @@ instances a single evaluation may produce, so a query returning millions of
 rows fails on its own instead of exhausting the process everything else is
 running in.
 
+A plain count of rows, not a duration and not a size:
+
+```yaml
+# before
+- name: otel_dc1
+  max_rows: 0
+
+# after: one evaluation may produce at most a thousand alert instances
+- name: otel_dc1
+  max_rows: 1000
+```
+
 <a id="source-max-execution-time"></a>
 
 ### source/max-execution-time
@@ -159,6 +265,21 @@ Sent to ClickHouse as a query setting, so the cluster enforces it rather than
 the ruler noticing late. Paired with a settings profile constraint on the
 source's user, which is what stops a rule raising it for itself.
 
+A duration, so it takes a unit:
+
+```yaml
+# before
+- name: otel_dc1
+  max_execution_time: 0s
+
+# after
+- name: otel_dc1
+  max_execution_time: 30s
+```
+
+The matching profile constraint is what stops a rule raising it. See
+[`source/privileges`](#source-privileges).
+
 <a id="source-max-memory-usage"></a>
 
 ### source/max-memory-usage
@@ -168,6 +289,18 @@ A memory cap that is not positive.
 Sent with every query for the same reason as the execution time cap: a rule
 that trips it fails on its own rather than degrading everything else sharing
 the cluster.
+
+Bytes, as a number. Unlike the execution time cap it takes no unit:
+
+```yaml
+# before
+- name: otel_dc1
+  max_memory_usage: 0
+
+# after: one gigabyte
+- name: otel_dc1
+  max_memory_usage: 1073741824
+```
 
 <a id="source-max-concurrent-queries"></a>
 
@@ -184,6 +317,17 @@ it.
 It has no default. Leaving it unset means the source is bounded only by the
 ruler-wide limit, which is the right answer until
 `clickhouse_ruler_query_queue_wait_seconds` shows this source waiting.
+
+```yaml
+# before
+- name: otel_dc1
+  max_concurrent_queries: -1
+
+# after: leave it unset until the queue wait metric names this source,
+# then bound it
+- name: otel_dc1
+  max_concurrent_queries: 4
+```
 
 ## Cluster state
 
@@ -221,6 +365,41 @@ role membership instead of what the roles contain. Every probe reads, and
 every one names an endpoint that can do nothing if the privilege turns out to
 be granted.
 
+The contract as DDL, which is the reference the probes assert against.
+`deploy/clickhouse/init/02-ruler-user.sql` is this file, and the integration
+tests connect as both of these users:
+
+```sql
+-- after: SELECT on exactly the source's table, and a profile whose
+-- constraints a query cannot argue with
+CREATE SETTINGS PROFILE ruler SETTINGS
+    readonly = 2,
+    max_execution_time = 30 MAX 60,
+    max_memory_usage = 1073741824 MAX 2147483648,
+    max_result_rows = 1001 MAX 2000;
+
+CREATE ROLE ruler_reader;
+GRANT SELECT ON otel.otel_traces TO ruler_reader;
+
+CREATE USER ruler_payments IDENTIFIED WITH no_password SETTINGS PROFILE ruler;
+GRANT ruler_reader TO ruler_payments;
+ALTER USER ruler_payments DEFAULT ROLE ALL;
+```
+
+```sql
+-- before: every rule evaluates perfectly as this user, and nothing about
+-- an evaluation looks different. It reads the whole database, reaches
+-- data no row policy sees, and raises any limit the ruler sends.
+CREATE USER ruler_wide IDENTIFIED WITH no_password;
+GRANT SELECT ON otel.* TO ruler_wide;
+GRANT CREATE TEMPORARY TABLE ON *.* TO ruler_wide;
+GRANT READ ON URL TO ruler_wide;
+GRANT REMOTE ON *.* TO ruler_wide;
+```
+
+That second user is what the check exists to find. It is the silent failure:
+nobody learns about it until somebody writes the query that uses it.
+
 <a id="source-exemption"></a>
 
 ### source/exemption
@@ -249,3 +428,16 @@ offset for a particular local moment.
 
 Expiry is the point rather than an inconvenience: renewing means stating the
 reason again, in front of a reviewer.
+
+```yaml
+# before: no reason and no expiry, so nothing says who decided this or
+# when it gets looked at again
+exempt:
+  - check: rule/foreign-table
+
+# before: a fixed check, which can never be exempted
+exempt:
+  - check: rule/expr
+    reason: these rules bind the window in a subquery
+    until: 2026-12-01
+```

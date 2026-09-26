@@ -66,6 +66,27 @@ no wider: the same name in another group or another file is a different alert,
 because it carries different group labels and reaches different sources. Two
 teams in a shared repository both wanting `HighErrorRate` is normal.
 
+```yaml
+# before: one group, one name twice, so both alerts carry
+# alertname="CheckoutIsSlow" and nothing tells them apart
+groups:
+  - name: checkout
+    rules:
+      - alert: CheckoutIsSlow
+        expr: SELECT ServiceName, max(Duration) AS value FROM otel.otel_traces ...
+      - alert: CheckoutIsSlow
+        expr: SELECT ServiceName, count() AS value FROM otel.otel_traces ...
+
+# after: one name per alert
+groups:
+  - name: checkout
+    rules:
+      - alert: CheckoutLatencyIsHigh
+        expr: SELECT ServiceName, max(Duration) AS value FROM otel.otel_traces ...
+      - alert: CheckoutErrorRateIsHigh
+        expr: SELECT ServiceName, count() AS value FROM otel.otel_traces ...
+```
+
 <a id="rule-group-name"></a>
 
 ### rule/group-name
@@ -76,6 +97,27 @@ A group's identity is its file and its name together. That pair is what the
 scheduler keys a group by and what the `rule_group` metric label carries, so
 two groups sharing a name in one file become a single metric series with two
 goroutines reporting into it. The same name in a different file is fine.
+
+```yaml
+# before: one file, one name twice, so both groups report into
+# rule_group="checkout" and two goroutines share one metric series
+groups:
+  - name: checkout
+    interval: 1m
+    rules: [...]
+  - name: checkout
+    interval: 5m
+    rules: [...]
+
+# after
+groups:
+  - name: checkout-latency
+    interval: 1m
+    rules: [...]
+  - name: checkout-errors
+    interval: 5m
+    rules: [...]
+```
 
 <a id="rule-expr"></a>
 
@@ -113,6 +155,28 @@ be enumerated, so a rule inventing one routes to somewhere nobody configured.
 A rule may still set `team` in its own `labels` block: that value is in the
 file and shows up in a diff.
 
+```sql
+-- before: the alias produces team at evaluation time, so the value is
+-- never in the file the route tree is generated from
+SELECT ServiceName AS team, count() AS value
+FROM otel.otel_traces
+WHERE Timestamp >= {{ .From }} AND Timestamp < {{ .To }}
+GROUP BY ServiceName
+
+-- after: the column keeps its own name
+SELECT ServiceName, count() AS value
+FROM otel.otel_traces
+WHERE Timestamp >= {{ .From }} AND Timestamp < {{ .To }}
+GROUP BY ServiceName
+```
+
+Setting the same label in the file is fine, because a reviewer sees it:
+
+```yaml
+labels:
+  team: payments
+```
+
 <a id="rule-source-match"></a>
 
 ### rule/source-match
@@ -126,6 +190,19 @@ That is why it is a warning: the alternative refuses to load a rule that is
 correct somewhere else. An empty or missing selector matches nothing on
 purpose, because choosing a source chooses the ClickHouse user the query runs
 as.
+
+```yaml
+# before: no source this ruler holds carries team=paymnets, so the rule
+# is loaded and never evaluated
+- alert: CheckoutIsSlow
+  sources:
+    team: paymnets
+
+# after
+- alert: CheckoutIsSlow
+  sources:
+    team: payments
+```
 
 <a id="rule-duplicate-alert"></a>
 
@@ -164,6 +241,25 @@ The fix is to give one of them a label the other does not carry, narrow one
 selector so they reach different sources, or delete the rule that is
 redundant.
 
+```yaml
+# before: two files, two owners, one alert. Both reach the same sources
+# and agree on every label, so Alertmanager holds one of them.
+# rules/payments/latency.yaml
+- alert: CheckoutIsSlow
+  sources: {team: payments}
+  labels: {team: payments, severity: warning}
+
+# rules/checkout/latency.yaml
+- alert: CheckoutIsSlow
+  sources: {team: payments}
+  labels: {team: payments, severity: warning}
+
+# after: a label the other does not carry
+- alert: CheckoutIsSlow
+  sources: {team: payments}
+  labels: {team: payments, severity: warning, signal: latency}
+```
+
 ## Labels and annotations
 
 <a id="labels-required"></a>
@@ -195,6 +291,17 @@ usually either a channel nobody reads or everybody's. Raising this check to
 impossible, and it is the reason the severity is configurable rather than
 chosen here.
 
+```yaml
+# before: no team, so the alert matches no team branch of the route tree
+labels:
+  severity: warning
+
+# after
+labels:
+  severity: warning
+  team: payments
+```
+
 <a id="annotations-required"></a>
 
 ### annotations/required
@@ -205,6 +312,17 @@ Nothing here stops the rule evaluating; it stops the person woken by it from
 knowing what to do. That is exactly the split severity exists for, which is
 why it ships as a warning the author can act on alone.
 
+```yaml
+# before: pages somebody with nothing to act on
+annotations:
+  summary: "{{ .ServiceName }} p99 is {{ .value }}ms"
+
+# after
+annotations:
+  summary: "{{ .ServiceName }} p99 is {{ .value }}ms"
+  runbook_url: https://runbooks.internal/high-p99-latency
+```
+
 <a id="annotations-runbook"></a>
 
 ### annotations/runbook
@@ -213,6 +331,16 @@ A `runbook_url` that is not an absolute `http` or `https` URL.
 
 A relative path renders as text in a notification and leads nowhere from a
 phone at 3am, which is the only time it is read.
+
+```yaml
+# before: renders as text in the notification
+annotations:
+  runbook_url: /runbooks/high-p99-latency
+
+# after
+annotations:
+  runbook_url: https://runbooks.internal/high-p99-latency
+```
 
 <a id="annotations-template"></a>
 
@@ -249,6 +377,25 @@ by the first evaluation that sees the condition, which makes it the same as no
 `for` at all while reading as though it debounces something. A negative value
 is nonsense and always errors, whatever policy says.
 
+```yaml
+# before: for is under the interval, so the first evaluation that sees
+# the condition fires it and the for reads as a debounce that is not one
+groups:
+  - name: checkout
+    interval: 1m
+    rules:
+      - alert: CheckoutIsSlow
+        for: 30s
+
+# after: three evaluations have to agree before it pages
+groups:
+  - name: checkout
+    interval: 1m
+    rules:
+      - alert: CheckoutIsSlow
+        for: 3m
+```
+
 <a id="rule-window"></a>
 
 ### rule/window
@@ -260,6 +407,25 @@ to the group interval, which reads exactly the data produced since the last
 evaluation. Setting it shorter leaves a gap between one window and the next
 that no evaluation ever reads, so an alert can be missed entirely while every
 evaluation succeeds.
+
+```yaml
+# before: each evaluation reads 30s out of the 1m since the last one,
+# so half the data is never read by anything
+groups:
+  - name: checkout
+    interval: 1m
+    rules:
+      - alert: CheckoutIsSlow
+        window: 30s
+
+# after: leaving window unset defaults it to the interval, which is the
+# span an evaluation is supposed to cover
+groups:
+  - name: checkout
+    interval: 1m
+    rules:
+      - alert: CheckoutIsSlow
+```
 
 ## The query itself
 
@@ -276,6 +442,24 @@ Reported alone, because three further findings about a statement nobody could
 parse would bury the one that matters. The second statement case is refused by
 ClickHouse itself rather than by hunting semicolons in a string, and it
 matters because a second statement is a second thing nobody reviewed.
+
+```sql
+-- before: ClickHouse will not parse this, and it is the only finding
+-- reported for the rule
+SELECT ServiceName, count() AS value
+FROM otel.otel_traces
+WHERE Timestamp >= {{ .From }} AND Timestamp < {{ .To }}
+GROUP BY
+
+-- before: a second statement, which is a second thing nobody reviewed
+SELECT ServiceName, count() AS value FROM otel.otel_traces; SELECT 1
+
+-- after
+SELECT ServiceName, count() AS value
+FROM otel.otel_traces
+WHERE Timestamp >= {{ .From }} AND Timestamp < {{ .To }}
+GROUP BY ServiceName
+```
 
 <a id="rule-inspect"></a>
 
@@ -336,6 +520,21 @@ checks:
 Because it is an allowlist, scopes intersect it: a source can refuse a
 function the instance policy permits and can never add one.
 
+```sql
+-- before: remote() reads rows the source's row policies never apply to,
+-- and no grant refuses it
+SELECT ServiceName, count() AS value
+FROM remote('other-cluster', otel.otel_traces)
+WHERE Timestamp >= {{ .From }} AND Timestamp < {{ .To }}
+GROUP BY ServiceName
+
+-- after: the source's own table, which the grants and policies cover
+SELECT ServiceName, count() AS value
+FROM otel.otel_traces
+WHERE Timestamp >= {{ .From }} AND Timestamp < {{ .To }}
+GROUP BY ServiceName
+```
+
 <a id="rule-nondeterministic"></a>
 
 ### rule/nondeterministic
@@ -375,6 +574,31 @@ The settings profile behind the source's user is the backstop, and it answers
 first: `EXPLAIN` applies the clause to its own parse, so a constrained setting
 comes back as a refusal naming the limit it exceeded.
 
+```sql
+-- before: one clause replaces max_execution_time, max_memory_usage and
+-- max_rows together
+SELECT ServiceName, count() AS value
+FROM otel.otel_traces
+WHERE Timestamp >= {{ .From }} AND Timestamp < {{ .To }}
+GROUP BY ServiceName
+SETTINGS max_execution_time = 300
+
+-- after
+SELECT ServiceName, count() AS value
+FROM otel.otel_traces
+WHERE Timestamp >= {{ .From }} AND Timestamp < {{ .To }}
+GROUP BY ServiceName
+```
+
+A rule that genuinely needs longer is a decision the source owner makes,
+in the file the caps are already written in:
+
+```yaml
+sources:
+  - name: otel_traces
+    max_execution_time: 60s
+```
+
 <a id="rule-foreign-table"></a>
 
 ### rule/foreign-table
@@ -389,6 +613,32 @@ connection's database, which is the source's own, so it is not foreign.
 Configurable because a user deliberately granted a second database is a
 legitimate setup. Where that is true of one cluster only, the source can
 exempt the check rather than the whole repository turning it off.
+
+```sql
+-- before: the source's database is otel, and this reads another
+SELECT ServiceName, count() AS value
+FROM analytics.checkout_events
+WHERE Timestamp >= {{ .From }} AND Timestamp < {{ .To }}
+GROUP BY ServiceName
+
+-- after: an unqualified name resolves to the source's own database
+SELECT ServiceName, count() AS value
+FROM otel_traces
+WHERE Timestamp >= {{ .From }} AND Timestamp < {{ .To }}
+GROUP BY ServiceName
+```
+
+Where the second database is a deliberate grant on one cluster, the source
+exempts the check rather than the repository turning it off:
+
+```yaml
+sources:
+  - name: otel_traces
+    exempt:
+      - check: rule/foreign-table
+        reason: this user is granted analytics for the capacity rules
+        until: 2026-12-01
+```
 
 <a id="rule-complexity"></a>
 
@@ -412,6 +662,25 @@ Scopes union the lists and the lowest value for a name binds, so a source can
 be stricter than the instance policy and can never be looser. The shipped
 ceilings apply only when no scope sets any, so raising one is a decision an
 operator gets to make.
+
+```sql
+-- before: four subqueries, and the count is all that can be said about
+-- the cost without reading data
+SELECT ServiceName, count() AS value
+FROM otel.otel_traces
+WHERE Timestamp >= {{ .From }} AND Timestamp < {{ .To }}
+  AND TraceId IN (SELECT TraceId FROM ...)
+  AND ServiceName IN (SELECT ServiceName FROM ...)
+GROUP BY ServiceName
+
+-- after: one pass, with the filter expressed as a join the optimiser
+-- can prune
+SELECT ServiceName, count() AS value
+FROM otel.otel_traces
+WHERE Timestamp >= {{ .From }} AND Timestamp < {{ .To }}
+  AND StatusCode = 'Error'
+GROUP BY ServiceName
+```
 
 <a id="rule-columns"></a>
 
