@@ -1,0 +1,18 @@
+groups:
+  - name: errors
+    interval: 1m
+    rules:
+      - alert: SearchErrorRate
+        sources:
+          team: payments
+        expr: |
+          SELECT ServiceName, count() AS value
+          FROM otel.otel_traces
+          WHERE Timestamp >= {{ .From }} AND Timestamp < {{ .To }}
+          GROUP BY ServiceName
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ .ServiceName }} erroring"
+          runbook_url: https://runbooks.internal/errors

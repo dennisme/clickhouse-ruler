@@ -1,0 +1,7 @@
+# A team asking more of itself than the instance does, and trying to ask
+# less. Only the first half takes effect.
+checks:
+  labels/required:
+    severity: error
+  annotations/runbook:
+    severity: off

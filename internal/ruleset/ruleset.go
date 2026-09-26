@@ -40,6 +40,13 @@ type Rule struct {
 	// one datacenter's sources, most rules in a shared repository will
 	// (spec 6.10, 10.2).
 	Sources []source.Source
+
+	// Policy is the instance scope merged with every team file above the
+	// rule, which is every scope the rule's location decides. The source
+	// scope is left out because a rule can match several sources and each
+	// can tighten a check differently, so the checks that run per source
+	// merge their own in (spec 7.7).
+	Policy *policy.Policy
 }
 
 // GroupID names a group the way every metric label, log line and
@@ -62,58 +69,147 @@ type Set struct {
 	Rules []Rule
 }
 
-// Load reads every *.yaml under dir, resolves each rule against sources, and
-// returns all problems rather than stopping at the first.
+// Load reads every rule file under dir, resolves each rule against sources,
+// and returns all problems rather than stopping at the first.
 //
-// root is the instance-wide policy. Each rule is validated against root merged
-// with its own source's policy, so a source that pages on-call can demand more
-// than the baseline without every rule in the repository having to (spec 7.7).
-// A nil root means the shipped defaults.
+// root is the instance-wide policy. Each rule is validated against root
+// merged with the team files above it in the tree and with its own sources'
+// policy, so a source that pages on-call and a team that holds itself to more
+// can both demand more than the baseline, and neither can demand less
+// (spec 7.7). A nil root means the shipped defaults.
 func Load(dir string, sources *source.File, root *policy.Policy) (*Set, []lint.Problem) {
 	set := &Set{Dir: dir}
 	var problems []lint.Problem
 
-	files, err := ruleFiles(dir)
+	files, policies, err := ruleFiles(dir)
 	if err != nil {
 		return set, []lint.Problem{
 			lint.NewProblem(dir, 0, lint.CheckRulesetDirectory, lint.SeverityError, err.Error()),
 		}
 	}
 
+	l := &loader{dir: filepath.Clean(dir), sources: sources, root: root}
+	problems = append(problems, l.readTeamPolicies(policies)...)
+
 	for _, path := range files {
-		loaded, found := loadFile(path, sources, root)
+		loaded, found := l.loadFile(path)
 		set.Rules = append(set.Rules, loaded...)
 		problems = append(problems, found...)
 	}
-	problems = append(problems, duplicateAlerts(set.Rules, sources, root)...)
+	problems = append(problems, l.duplicateAlerts(set.Rules)...)
 	return set, problems
 }
 
-// ruleFiles walks dir for rule files, sorted so that problems come back in a
-// stable order no matter how the filesystem enumerates.
-func ruleFiles(dir string) ([]string, error) {
-	var out []string
-	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+// loader carries what resolving one rule needs beyond the rule itself: the
+// sources it may match, the instance policy, and the team policy files found
+// in the tree, keyed by the directory each governs.
+type loader struct {
+	dir     string
+	sources *source.File
+	root    *policy.Policy
+	teams   map[string]*policy.Policy
+}
+
+// readTeamPolicies parses the ruler.yaml files found under the rules root.
+//
+// Their problems are returned rather than swallowed. A team file that will
+// not parse is a file whose author believes a check is raised and it is not,
+// and silence there is the one failure this scope cannot afford: the whole
+// reason a team may own policy is that it can only make its own life
+// stricter, which stops being true if a typo quietly drops the setting.
+func (l *loader) readTeamPolicies(paths []string) []lint.Problem {
+	l.teams = make(map[string]*policy.Policy, len(paths))
+
+	var problems []lint.Problem
+	for _, path := range paths {
+		// The path comes from walking the directory the operator pointed us
+		// at, so G304 has nothing to warn about.
+		data, err := os.ReadFile(path) //nolint:gosec
+		if err != nil {
+			problems = append(problems, lint.NewProblem(path, 0,
+				lint.CheckRulesetDirectory, lint.SeverityError, err.Error()))
+			continue
+		}
+		p, found := policy.Parse(path, data)
+		l.teams[filepath.Dir(path)] = p
+		problems = append(problems, found...)
+	}
+	return problems
+}
+
+// scopesFor returns the policy that the location of a rule file decides: the
+// instance scope, then every team file at or above the file's directory.
+//
+// Merge is a maximum, so the order these are collected in does not matter and
+// a nested directory neither overrides nor is overridden by the one above it.
+// Both apply, and the stricter of the two binds (spec 7.7).
+func (l *loader) scopesFor(file string) *policy.Policy {
+	scopes := []*policy.Policy{l.root}
+	for d := filepath.Dir(file); ; d = filepath.Dir(d) {
+		if p, ok := l.teams[d]; ok {
+			scopes = append(scopes, p)
+		}
+		// Stopping at the rules root also stops before a ruler.yaml outside
+		// the tree, which is nobody's team file, and the walk never offered
+		// one anyway. The second condition is the guard for a path that is
+		// somehow not under the root, so this cannot spin at the filesystem
+		// root.
+		if d == l.dir || d == filepath.Dir(d) {
+			break
+		}
+	}
+	return policy.Merge(scopes...)
+}
+
+// ruleFiles walks dir for rule files and for the team policy files beside
+// them, sorted so that problems come back in a stable order no matter how the
+// filesystem enumerates.
+//
+// Which of the two a file is, or whether it is neither, is decided by its
+// name. Two names are reserved in the rules tree: ruler.yaml is policy and
+// sources.yaml is the sources file the quick start keeps beside the rules.
+// Reading either as a rule file reports a pile of unknown fields against a
+// file that is exactly right, and the alternative to a name is sniffing the
+// contents, which guesses about a file an author can see the name of.
+//
+// The ruler.yaml at the root is the instance scope and is not a team file.
+// It is already read by whoever calls Load, and reading it twice changes no
+// severity under a maximum, but the origin on a finding would name the team
+// scope for a setting the platform made and send --explain at the wrong file.
+func ruleFiles(dir string) (rules, policies []string, err error) {
+	root := filepath.Clean(dir)
+
+	err = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 		if d.IsDir() {
 			return nil
 		}
-		if ext := filepath.Ext(path); ext == ".yaml" || ext == ".yml" {
-			out = append(out, path)
+		if ext := filepath.Ext(path); ext != ".yaml" && ext != ".yml" {
+			return nil
+		}
+
+		switch filepath.Base(path) {
+		case "ruler.yaml":
+			if filepath.Dir(path) != root {
+				policies = append(policies, path)
+			}
+		case "sources.yaml":
+		default:
+			rules = append(rules, path)
 		}
 		return nil
 	})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	// WalkDir already yields lexical order, but sorting is cheap insurance
 	// against that guarantee changing underneath deterministic problem lists.
-	return out, nil
+	return rules, policies, nil
 }
 
-func loadFile(path string, sources *source.File, root *policy.Policy) ([]Rule, []lint.Problem) {
+func (l *loader) loadFile(path string) ([]Rule, []lint.Problem) {
 	// The path comes from walking the directory the operator pointed us at.
 	// Reading rule files by path is the entire job of this package, so G304
 	// has nothing to warn about here.
@@ -129,7 +225,8 @@ func loadFile(path string, sources *source.File, root *policy.Policy) ([]Rule, [
 		return nil, problems
 	}
 
-	policyForRule := func(r rule.Rule) *policy.Policy { return policyFor(r, sources, root) }
+	located := l.scopesFor(path)
+	policyForRule := func(r rule.Rule) *policy.Policy { return policyFor(r, l.sources, located) }
 	problems = append(problems, rule.Validate(parsed, policyForRule)...)
 
 	var out []Rule
@@ -137,7 +234,7 @@ func loadFile(path string, sources *source.File, root *policy.Policy) ([]Rule, [
 		for _, r := range g.Rules {
 			labels := g.EffectiveLabels(r)
 
-			matched := sources.Match(r.Sources)
+			matched := l.sources.Match(r.Sources)
 
 			loaded := Rule{
 				Rule:    r,
@@ -145,6 +242,7 @@ func loadFile(path string, sources *source.File, root *policy.Policy) ([]Rule, [
 				Group:   g,
 				Labels:  labels,
 				Sources: matched,
+				Policy:  located,
 			}
 			problems = append(problems, protectedLabels(path, r, matched)...)
 			problems = append(problems, sourceMatch(path, r, matched, policyForRule(r))...)
@@ -155,13 +253,14 @@ func loadFile(path string, sources *source.File, root *policy.Policy) ([]Rule, [
 	return out, problems
 }
 
-// policyFor resolves the policy a rule is validated against.
+// policyFor resolves the policy a rule is validated against, from the scopes
+// its location already decided and the sources its labels reach.
 //
 // Resolved per rule because a rule's labels decide which sources it reaches,
 // and each of those can tighten a check. A rule matching several gets the
 // strictest any of them asks for (spec 7.7).
-func policyFor(r rule.Rule, sources *source.File, root *policy.Policy) *policy.Policy {
-	scopes := []*policy.Policy{root}
+func policyFor(r rule.Rule, sources *source.File, located *policy.Policy) *policy.Policy {
+	scopes := []*policy.Policy{located}
 	for _, src := range sources.Match(r.Sources) {
 		scopes = append(scopes, src.Policy)
 	}
@@ -194,7 +293,7 @@ func policyFor(r rule.Rule, sources *source.File, root *policy.Policy) *policy.P
 // so it produces no alert to collide with, and a ruler holding one data
 // centre's sources would otherwise report every unmatched pair in a shared
 // repository against each other (spec 6.10, 10.2).
-func duplicateAlerts(rules []Rule, sources *source.File, root *policy.Policy) []lint.Problem {
+func (l *loader) duplicateAlerts(rules []Rule) []lint.Problem {
 	var out []lint.Problem
 
 	first := map[string]Rule{}
@@ -213,8 +312,8 @@ func duplicateAlerts(rules []Rule, sources *source.File, root *policy.Policy) []
 		// stricter of the two decides. Merging is a maximum, so which of
 		// them is reported does not change the severity (spec 7.7).
 		setting := policy.Merge(
-			policyFor(prev.Rule, sources, root),
-			policyFor(r.Rule, sources, root),
+			policyFor(prev.Rule, l.sources, prev.Policy),
+			policyFor(r.Rule, l.sources, r.Policy),
 		).For(lint.CheckRuleDuplicateAlert)
 		if setting.Severity == lint.SeverityOff {
 			continue

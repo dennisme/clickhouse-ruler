@@ -212,3 +212,17 @@ and are what the code comments cite.
   because such a pair is relying on that with nothing in either file saying
   so, while the reverse case needs the result and is not a tier 0 question.
   See 7.6.
+- **Team-scoped policy files are read, and the rules tree reserves two
+  names.** A `ruler.yaml` in a team directory applies to every rule at or
+  below it, alongside the instance file and the matched sources. It needs no
+  precedence rule, because the merge is a maximum and the worst a team can do
+  with its own file is hold itself to more than the baseline. Which files are
+  policy is decided by name, not by content: `ruler.yaml` is policy,
+  `sources.yaml` is the sources file the quick start keeps beside the rules,
+  and neither is a rule file. Sniffing for a `groups:` key instead would guess
+  about a file whose name the author can already read, and would report
+  nothing useful about a rule file that misspelled that one key. The
+  `ruler.yaml` at the rules root is the instance scope and not also a team
+  file: the severity would be the same either way under a maximum, but the
+  origin a finding carries is what `--explain` prints, and it has to name the
+  scope that actually set it. See 7.7.

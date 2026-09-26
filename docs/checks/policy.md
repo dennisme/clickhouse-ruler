@@ -80,6 +80,52 @@ blocks: a directory that could not be read has reported nothing about the
 rules inside it, and carrying on would check fewer rules than the author
 thinks and pass.
 
+## Where policy lives
+
+Three files can configure a check, and all three apply at once.
+
+| Scope | Where | Owned by |
+| --- | --- | --- |
+| instance | `ruler.yaml` at the rules root | whoever runs the ruler |
+| datasource | a `checks:` block on a source in `sources.yaml` | whoever runs the ruler |
+| team | `ruler.yaml` in a directory inside the rules tree | that team |
+
+A team file applies to every rule at or below its own directory, so a
+`rules/payments/ruler.yaml` is policy for `rules/payments/` and nothing else:
+
+```text
+rules/
+  ruler.yaml            instance policy
+  sources.yaml          the sources file
+  payments/
+    ruler.yaml          policy for every rule under payments/
+    latency.yaml
+    critical/
+      ruler.yaml        policy for every rule under payments/critical/
+      pager.yaml
+  search/
+    errors.yaml         unaffected by either payments file
+```
+
+**The strictest setting wins, so there is no precedence to learn.** A
+severity takes the maximum of every scope that applies, a required list takes
+the union, an allowlist takes the intersection, and a ceiling binds at its
+lowest value. Nested team directories are not a chain: both files apply and
+the stricter of the two decides, the same as any other pair of scopes.
+
+That is what makes a team-owned file safe to put in a team's own directory.
+The only thing a team can do with it is hold itself to more than the baseline;
+a `severity: off` written over a check the instance file set to `error` parses,
+merges, and leaves the error in place.
+
+`--explain` prints the resolved policy per rule and names the file behind each
+severity, which is how you find out which of the three to argue with.
+
+Two file names are reserved inside the rules tree and are never read as rule
+files: `ruler.yaml` is policy and `sources.yaml` is the sources file. Policy
+in any other file is not read, and a rule in a file called `ruler.yaml` is not
+evaluated.
+
 ## The policy file
 
 <a id="policy-unknown-check"></a>

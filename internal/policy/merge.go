@@ -20,8 +20,10 @@ import (
 // added here has to have an unambiguous stricter direction, or that property
 // is lost (spec 7.7).
 //
-// Scopes are variadic rather than a fixed pair so that adding team-level
-// policy later changes call sites and nothing else.
+// Scopes are variadic because how many apply to a rule is not fixed: the
+// instance file, every team file above the rule in the tree, and one per
+// source its selector reached.
+//
 // The shipped defaults are not a scope. They are what a check falls back to
 // when no scope configures it, which is what makes `severity: off` reachable:
 // as a scope they would be a floor, the default warning would win every

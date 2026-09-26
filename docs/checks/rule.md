@@ -8,12 +8,13 @@ rule failing one cannot do its job: it will not parse, has no identity, has
 nothing to query, or breaks routing. Softening those produces rules that look
 fine in review and never fire, which is the failure this tool exists to
 prevent. **Convention checks** take their severity from policy, default to
-`warning`, and can be raised to `error` or turned `off` in `ruler.yaml` or on
-a source. Severity decides who has to be involved to unblock a contributor: a
+`warning`, and can be raised to `error` or turned `off` in `ruler.yaml`, in a
+team directory's own `ruler.yaml`, or on a source (see [where policy
+lives](policy.md#where-policy-lives)). Severity decides who has to be involved to unblock a contributor: a
 warning is theirs to act on, an error needs whoever owns policy.
 
-Scopes only tighten. A source can raise a check or add a required key, and
-can never lower one the instance policy set. Where a check takes a list, the
+Scopes only tighten. A source or a team directory can raise a check or add a
+required key, and neither can lower one another scope set. Where a check takes a list, the
 direction matters: a required list grows stricter, an allowlist shrinks
 stricter, and a ceiling binds at its lowest value. See spec 7.6 and 7.7.
 
