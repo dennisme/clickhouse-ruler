@@ -344,7 +344,7 @@ Everything in 8.1 through 8.6 is a mechanism. What an operator needs at three in
 the morning is the reading of it, and that is a page rather than a spec section:
 `docs/operations.md`, published with the check pages.
 
-Four things belong on it, and nothing else:
+Five things belong on it, and nothing else:
 
 - **What to watch, as expressions they can paste.** A missed iteration, an
   evaluation failure rate, a last evaluation going stale, send failures,
@@ -360,10 +360,21 @@ Four things belong on it, and nothing else:
   somebody who has not read 7.1, and both are the design working.
 - **The ClickHouse side.** `system.query_log` queries keyed on the
   `log_comment` from 8.5: what a rule cost, what it read, what timed out.
+- **A rule that broke while running**, which is the one item here not addressed
+  to the operator. `clickhouse_ruler_problem` (8.2, 10.4) is fixed by whoever
+  owns the query, so this section has a second job the other four do not: it has
+  to be readable by somebody who has never operated this ruler and does not want
+  to. It says what a raised gauge means, that the rule is still evaluating and
+  still paging, that `team` and `file` name who and where, and that `check` is
+  the link to the explanation. It also says what clearing means, because a gauge
+  that clears when the schema is fixed and a gauge that clears because a pass
+  could not run are different events and only the first is good news.
 
 What does not belong on it is a second description of the checks. Those have
 their own pages and their own generated facts (7.8), and an operations page
-restating a severity default is one more thing to go stale.
+restating a severity default is one more thing to go stale. That applies to the
+item above as much as the rest: it explains the signal and hands the reader to
+the check page, it does not re-explain `rule/attribute-key`.
 
 ---
 
@@ -823,4 +834,18 @@ paging for the condition on the strength of a schema change nobody reviewed.
 **The validation package is already re-runnable against loaded rules** (7.1), so
 neither feed is a rewrite. The evaluator comparison needs somewhere to keep the
 previous result's shape and the timer needs a caller, and the checks themselves
-are the ones CI runs.
+are the ones CI runs. The shape does not currently leave `internal/query`: the
+column names and types are read, spent on scanning, and dropped, so carrying
+them out to the scheduler is a signature change rather than a pure addition.
+
+**Neither feed ships without its page.** The signal is addressed to somebody who
+owns a rule and may never have operated this ruler, so a gauge nobody explained
+is a gauge whose finding lands on the operator anyway, which is the outcome this
+whole section exists to avoid. 8.7 says what the operations page has to carry.
+Two rules keep it from sprawling: it explains the signal and links to the check
+page rather than re-explaining the check (7.8), and it states which feed found a
+thing, because "your rule's result changed shape" and "your rule's map key is
+gone from recent data" are different problems with different fixes and arrive on
+different clocks. How evaluation notices drift at all belongs on the how-it-works
+page, in a paragraph, not a section: it is one comparison on a result the
+evaluation already had.
