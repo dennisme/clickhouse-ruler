@@ -176,6 +176,13 @@ Not built yet:
 
 Known gaps that will change:
 
+- A restart loses pending alert state. `ActiveAt` is held in memory, so every
+  alert part way through its `for` starts again, and one whose condition clears
+  inside that second `for` never pages. Firing alerts survive, because
+  Alertmanager holds them until the expiry on the last send. Reloading keeps
+  pending alerts; restarting does not. See
+  [operations](https://dennisme.github.io/clickhouse-ruler/operations/#what-a-restart-loses).
+
 - Sharded clusters are only partly handled. `skip_unavailable_shards` is
   pinned to `0`, so a dead shard fails the evaluation rather than silently
   resolving alerts, but `address` still takes a single node and the cost caps

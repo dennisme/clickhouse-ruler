@@ -295,3 +295,18 @@ and are what the code comments cite.
   It runs before any connection is opened, so a source refused at error severity
   is never connected to, and it refuses that source alone while the rest of the
   reload proceeds. See 6.7.3, 7.6.
+- **A restart loses pending state and that is accepted, not solved.**
+  `ActiveAt` lives in memory, so a restart makes every pending alert serve its
+  `for` again and a condition that clears inside that second `for` never pages.
+  Prometheus restores it from an `ALERTS_FOR_STATE` series written back to its
+  own storage. The ruler has no storage: it reads ClickHouse as a user pinned to
+  `readonly = 2` (6.7.2), so keeping alert state means granting it somewhere to
+  write and owning a schema, a retention policy and a migration path for it,
+  which buys back one `for` of latency on a restart. Prometheus behaves the same
+  way when that series is unavailable. What is done instead is a reload that
+  keeps pending alerts (7.6), an alert expiry long enough that a firing alert
+  survives an ordinary deploy (6.5), and documenting the loss where an operator
+  reads about restarts rather than leaving it as an open question. This is the
+  answer for a single ruler and for a replica joining a set; the high
+  availability question in 12 is still open and is the one that would change it.
+  See 6.5, 6.7.2, 7.6.

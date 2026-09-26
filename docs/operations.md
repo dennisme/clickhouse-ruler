@@ -267,7 +267,7 @@ What survives a reload is as important as what it refuses:
   unchanged keeps the instances it is tracking, so an alert part way through its
   `for` does not start again from zero. Change any of those three and it is a
   different alert, which starts fresh. A process restart keeps nothing, which is
-  the reason to reload rather than restart.
+  the reason to reload rather than restart, and what that costs is below.
 - **A firing alert keeps its resend cadence.** It is not re-posted to
   Alertmanager because of the reload.
 - **A connection is reused.** A source whose definition did not change keeps the
@@ -281,6 +281,49 @@ What survives a reload is as important as what it refuses:
 Series for a group or rule the reload dropped are deleted from `/metrics`. A
 counter left at its last value reads as a rule that still runs and has gone
 quiet, which is the one thing a deleted rule must not look like.
+
+## What a restart loses
+
+The ruler holds every pending alert's `ActiveAt` in memory and writes it
+nowhere. A restart is the event that loses it, and that is most of the reason
+reload exists.
+
+**Every pending alert serves its `for` again.** An alert nine minutes into a ten
+minute `for` when the process stopped is back at zero when it returns, so the
+page it was about to produce arrives ten minutes later than it would have.
+
+**A condition that clears inside that second `for` never pages at all.** The
+effect is usually a delay and sometimes it is a page that does not happen. A
+restart in the middle of an incident is the worst moment for both.
+
+**A firing alert survives, because Alertmanager is holding it.** Every send
+carries an expiry of `--resend-interval` times `--resend-tolerance`, which is
+6m40s on the defaults. A restart shorter than that renews the alert before it
+lapses and nobody sees anything. A restart longer than it lets Alertmanager
+resolve the alert, and the ruler then sends it again as new: a resolved
+notification followed by a fresh page, for a condition that never went away.
+
+**A replica added to an existing set is the same event read from the other
+end.** It starts with no pending state, so it contributes nothing to an alert
+part way through its `for` until it has served that `for` itself. The replicas
+already tracking it are what cover the gap, which is in
+[deployment](deployment.md#central-rulers-highly-available).
+
+There is no store to keep any of this in. Prometheus solves the same problem by
+writing an `ALERTS_FOR_STATE` series and reading it back at startup. This ruler
+writes nothing anywhere, and the ClickHouse user it is given runs at
+`readonly = 2` so that it cannot; giving it somewhere to keep alert state means
+giving it a database to own, which is the thing this tool is built without.
+Prometheus without that series behaves exactly the way described above.
+
+What to do about it:
+
+- **Reload rather than restart.** `SIGHUP` keeps every pending alert whose
+  name, labels and source are unchanged.
+- **Keep a deploy shorter than an alert's expiry** and no firing alert lapses
+  across it.
+- **Expect a restart to delay a page by one `for`**, and do not deploy the
+  ruler during an incident you are relying on it to tell you about.
 
 ## Finding the ruler's queries in ClickHouse
 

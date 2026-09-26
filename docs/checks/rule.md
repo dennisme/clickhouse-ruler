@@ -185,6 +185,15 @@ checks:
 
 A source can add to that list and cannot shorten it.
 
+Shipping as a warning means a rule with no `team` is reported, merged, loaded
+and evaluated: only an error-severity finding refuses to start or to reload.
+The alert then reaches Alertmanager carrying nothing any team branch of the
+route tree matches, so it lands on whatever the default route is, which is
+usually either a channel nobody reads or everybody's. Raising this check to
+`error` is how a repository whose routing depends on `team` makes that
+impossible, and it is the reason the severity is configurable rather than
+chosen here.
+
 <a id="annotations-required"></a>
 
 ### annotations/required
