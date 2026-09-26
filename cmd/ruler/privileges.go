@@ -45,7 +45,7 @@ func checkPrivileges(ctx context.Context, file string, sources []source.Source, 
 // in `ruler check` too, where nothing is evaluating, and a connection per
 // source at load is not worth complicating either path for.
 func assertSource(ctx context.Context, src source.Source, setting policy.Setting) []query.Assertion {
-	q, err := query.Open(src)
+	q, err := query.Open(src, nil)
 	if err != nil {
 		return unreachable(setting, fmt.Sprintf("connecting as %s: %s", src.Username, err))
 	}

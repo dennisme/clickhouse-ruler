@@ -12,6 +12,7 @@ import (
 
 	"github.com/dennisme/clickhouse-ruler/internal/alert"
 	"github.com/dennisme/clickhouse-ruler/internal/notify"
+	"github.com/dennisme/clickhouse-ruler/internal/query"
 	"github.com/dennisme/clickhouse-ruler/internal/rule"
 	"github.com/dennisme/clickhouse-ruler/internal/ruleset"
 )
@@ -19,7 +20,7 @@ import (
 // Querier runs one rule and returns a sample per matched row. query.Querier
 // satisfies this; the interface exists so a test can stand in for ClickHouse.
 type Querier interface {
-	Run(ctx context.Context, r rule.Rule, group string, now time.Time) ([]alert.Sample, error)
+	Run(ctx context.Context, r rule.Rule, who query.Attribution, now time.Time) ([]alert.Sample, error)
 }
 
 // Reasons a source produced no samples that are not the query's own error.
@@ -111,6 +112,13 @@ func NewRuleEval(r ruleset.Rule, queriers map[string]Querier, cadence *notify.Ca
 	return &RuleEval{rule: r, queriers: queriers, cadence: cadence, states: states, queries: queries}
 }
 
+// attribution is what this rule's queries are recorded against: its group,
+// which names them in system.query_log, and its team, which their cost is
+// billed to (spec 8.5, 8.2).
+func (e *RuleEval) attribution() query.Attribution {
+	return query.Attribution{Group: e.rule.GroupID(), Team: e.rule.Team()}
+}
+
 // Evaluate runs the rule against every matched source and sends whatever
 // fired or resolved. A source the evaluation failed against is skipped for
 // this tick only, whether its query failed or its rows could not be turned
@@ -156,7 +164,7 @@ func (e *RuleEval) Evaluate(ctx context.Context, now time.Time) Result {
 				results[i].err = errQueueAbandoned
 				return
 			}
-			samples, err := q.Run(ctx, e.rule.Rule, e.rule.GroupID(), now)
+			samples, err := q.Run(ctx, e.rule.Rule, e.attribution(), now)
 			release()
 
 			if err != nil {

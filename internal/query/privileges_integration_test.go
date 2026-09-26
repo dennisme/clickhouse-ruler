@@ -17,7 +17,7 @@ func assertions(t *testing.T, username string) map[string]Assertion {
 	src := testSource(t)
 	src.Username = username
 
-	q, err := Open(src)
+	q, err := Open(src, nil)
 	if err != nil {
 		t.Fatalf("Open as %s: %v", username, err)
 	}
@@ -99,7 +99,7 @@ func TestPrivilegesReadsPastAFailedProbeQuery(t *testing.T) {
 func TestPrivilegesRunsOnlyWhatIsRequired(t *testing.T) {
 	src := testSource(t)
 
-	q, err := Open(src)
+	q, err := Open(src, nil)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -121,7 +121,7 @@ func TestPrivilegesUnderGrantedUser(t *testing.T) {
 	src := testSource(t)
 	src.Table = "does_not_exist_for_this_user"
 
-	q, err := Open(src)
+	q, err := Open(src, nil)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}

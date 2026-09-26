@@ -49,6 +49,12 @@ func GroupID(file, group string) string { return file + ":" + group }
 // GroupID is the rule's own group.
 func (r Rule) GroupID() string { return GroupID(r.File, r.Group.Name) }
 
+// Team is who owns the rule, read from its effective labels so a group can
+// set it once for every rule in the file. Empty when nobody claimed it,
+// which is what the cost metrics report rather than inventing an owner
+// (spec 8.2).
+func (r Rule) Team() string { return r.Labels["team"] }
+
 // Set is every rule found under a directory.
 type Set struct {
 	Dir   string

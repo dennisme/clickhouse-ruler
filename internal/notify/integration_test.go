@@ -150,13 +150,13 @@ func TestEndToEndFiringAlertReachesAlertmanager(t *testing.T) {
 	// loop a scheduler will run.
 	var fired []alert.Alert
 	for _, src := range r.Sources {
-		q, err := query.Open(src)
+		q, err := query.Open(src, nil)
 		if err != nil {
 			t.Fatalf("opening querier for %s: %v", src.Name, err)
 		}
 		defer func() { _ = q.Close() }()
 
-		samples, err := q.Run(ctx, r.Rule, r.GroupID(), now)
+		samples, err := q.Run(ctx, r.Rule, query.Attribution{Group: r.GroupID(), Team: r.Team()}, now)
 		if err != nil {
 			t.Fatalf("running rule against %s: %v", src.Name, err)
 		}

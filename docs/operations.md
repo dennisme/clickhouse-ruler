@@ -82,6 +82,34 @@ latency here becomes evaluation duration, and evaluation duration becomes the
 missed iterations above. Latency climbing alongside send failures is
 Alertmanager being overloaded rather than the ruler.
 
+### A rule reading more than it should
+
+```promql
+topk(5, sum by (rule, team) (rate(clickhouse_ruler_query_read_bytes_total[5m])))
+```
+
+**Trouble when one rule is reading more per second than the rest of the
+estate put together.** There is no universal number here, because a rule over
+a wide table legitimately reads more than one over a narrow one. The shape to
+watch for is a step change: a rule that was reading megabytes and is now
+reading gigabytes had its table grow, its window widened, or its primary key
+stop being used.
+
+The same number against the cap rather than against its neighbours:
+
+```promql
+histogram_quantile(0.99, sum by (rule, le) (rate(clickhouse_ruler_query_memory_usage_bytes_bucket[5m])))
+```
+
+**Trouble at 80% of the source's `max_memory_usage`.** Past that the rule is
+one data spike away from failing every evaluation, and it fails as an
+evaluation error rather than as anything that says "memory".
+
+These come from the driver as the query runs, so they are recorded whether or
+not the evaluation succeeded. A query ClickHouse refused outright reports a
+duration and no rows, which is the one case where the counters undercount
+what a rule is costing. `system.query_log` has the full account, below.
+
 ### Rules that will never run
 
 ```promql

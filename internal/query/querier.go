@@ -18,6 +18,21 @@ import (
 type Querier struct {
 	src  source.Source
 	conn driver.Conn
+
+	// recorder is told what each evaluation cost. Nil on the check paths,
+	// which run from a CLI with no registry to report into.
+	recorder Recorder
+}
+
+// Attribution is who a query belongs to, beyond its own name.
+//
+// The group names it in system.query_log (spec 8.5) and the team is what its
+// cost is billed to (8.2). Both are the caller's to know: a rule carries
+// neither on its own, because a group is a file and a team is a label the
+// group may have set.
+type Attribution struct {
+	Group string
+	Team  string
 }
 
 // Open connects to a source. The caller closes the Querier.
@@ -25,7 +40,9 @@ type Querier struct {
 // Connection options are built field by field rather than from a DSN string.
 // A DSN would carry the password through string handling, where any error
 // that echoes the input puts the credential in a log.
-func Open(src source.Source) (*Querier, error) {
+// A nil Recorder means nothing is recorded, which is what the check paths
+// want: they run from a command line with no registry to report into.
+func Open(src source.Source, rec Recorder) (*Querier, error) {
 	conn, err := clickhouse.Open(&clickhouse.Options{
 		Addr: []string{src.Address},
 		Auth: clickhouse.Auth{
@@ -37,7 +54,7 @@ func Open(src source.Source) (*Querier, error) {
 	if err != nil {
 		return nil, fmt.Errorf("source %q: connecting: %s", src.Name, redact(err.Error(), src.Password))
 	}
-	return &Querier{src: src, conn: conn}, nil
+	return &Querier{src: src, conn: conn, recorder: rec}, nil
 }
 
 func (q *Querier) Close() error { return q.conn.Close() }
@@ -66,23 +83,34 @@ func settings(src source.Source) clickhouse.Settings {
 }
 
 // Run evaluates one rule and returns a sample per returned row.
-//
-// group is the rule's group, which only the caller knows and which the query
-// carries into system.query_log (spec 8.5).
-func (q *Querier) Run(ctx context.Context, r rule.Rule, group string, now time.Time) ([]alert.Sample, error) {
+func (q *Querier) Run(ctx context.Context, r rule.Rule, who Attribution, now time.Time) ([]alert.Sample, error) {
 	sql, err := render(r.Expr)
 	if err != nil {
 		return nil, fmt.Errorf("rule %q: %w", r.Alert, err)
 	}
 	from, to := window(q.src, r, now)
 
+	// The driver reports what the query read as it reads it, which is where
+	// the cost metrics in spec 8.2 come from: no follow-up query, and no
+	// dependency on how long system.query_log is kept.
+	var m meter
+
 	ctx = clickhouse.Context(ctx,
 		clickhouse.WithParameters(clickhouse.Parameters{
 			"from": from.UTC().Format("2006-01-02 15:04:05.000"),
 			"to":   to.UTC().Format("2006-01-02 15:04:05.000"),
 		}),
-		clickhouse.WithSettings(withLogComment(settings(q.src), group, r.Alert)),
+		clickhouse.WithSettings(withLogComment(settings(q.src), who.Group, r.Alert)),
+		clickhouse.WithProgress(m.progress),
+		clickhouse.WithProfileEvents(m.profileEvents),
 	)
+
+	// Recorded however this returns, because a rule that tripped a cap is
+	// the one an operator is looking for. What gets recorded is whatever
+	// the server reported before the failure, which is nothing at all when
+	// it refused the query outright.
+	started := time.Now()
+	defer func() { q.record(r.Alert, who.Team, &m, time.Since(started)) }()
 
 	rows, err := q.conn.Query(ctx, sql)
 	if err != nil {
@@ -119,4 +147,14 @@ func (q *Querier) Run(ctx context.Context, r rule.Rule, group string, now time.T
 		return nil, fmt.Errorf("rule %q: %w", r.Alert, err)
 	}
 	return samples, nil
+}
+
+// record hands one evaluation's cost to whoever is collecting it.
+func (q *Querier) record(rule, team string, m *meter, waited time.Duration) {
+	if q.recorder == nil {
+		return
+	}
+	usage := m.read()
+	usage.Duration = waited
+	q.recorder.QueryCost(rule, team, usage)
 }

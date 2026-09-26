@@ -9,6 +9,7 @@ import (
 
 	"github.com/dennisme/clickhouse-ruler/internal/alert"
 	"github.com/dennisme/clickhouse-ruler/internal/notify"
+	"github.com/dennisme/clickhouse-ruler/internal/query"
 	"github.com/dennisme/clickhouse-ruler/internal/rule"
 	"github.com/dennisme/clickhouse-ruler/internal/ruleset"
 	"github.com/dennisme/clickhouse-ruler/internal/source"
@@ -32,7 +33,7 @@ func newBarrierQuerier(expect int) *barrierQuerier {
 	return b
 }
 
-func (b *barrierQuerier) Run(ctx context.Context, _ rule.Rule, _ string, _ time.Time) ([]alert.Sample, error) {
+func (b *barrierQuerier) Run(ctx context.Context, _ rule.Rule, _ query.Attribution, _ time.Time) ([]alert.Sample, error) {
 	n := b.inFlight.Add(1)
 	for {
 		peak := b.peak.Load()

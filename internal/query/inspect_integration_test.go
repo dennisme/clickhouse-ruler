@@ -19,7 +19,7 @@ import (
 func inspect(t *testing.T, expr string, c Checks) []Finding {
 	t.Helper()
 
-	q, err := Open(testSource(t))
+	q, err := Open(testSource(t), nil)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -378,7 +378,7 @@ GROUP BY s`
 // Annotation variables resolve against the real output columns, which is the
 // claim spec 7.3 makes about this check.
 func TestInspectReportsAnAnnotationReadingNothing(t *testing.T) {
-	q, err := Open(testSource(t))
+	q, err := Open(testSource(t), nil)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -433,7 +433,7 @@ GROUP BY database`
 // The rule the compose stack's fixture uses, with annotations that resolve.
 // A check that cannot stay quiet on a working rule is one nobody keeps on.
 func TestInspectSaysNothingAboutAWorkingRuleWithAnnotations(t *testing.T) {
-	q, err := Open(testSource(t))
+	q, err := Open(testSource(t), nil)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}

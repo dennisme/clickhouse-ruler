@@ -149,6 +149,9 @@ Working:
   can fail, structured logs naming the rule and source behind every failure,
   a `log_comment` on every query for reading cost back out of
   `system.query_log`, and two Grafana dashboards in `deploy/grafana`.
+- What each rule costs the cluster, per rule and per team: rows and bytes
+  read, peak memory and query duration, taken from the driver as the query
+  runs rather than from a follow-up query.
 - A ClickHouse and Alertmanager compose stack, with an end to end test taking
   a rule from a file all the way to a delivered notification.
 
@@ -158,8 +161,6 @@ Not built yet:
   but how often a rule would have fired over the last week needs the query run
   across historical windows. Spec 7.4.
 - No `ruler watch`, so rules are not reloaded without a restart.
-- No ClickHouse query cost metrics. Rows and bytes read per rule need a driver
-  progress callback. Spec 8.2.
 - No Alertmanager route tree generation.
 - No pull request summary comment. Findings annotate the diff inline today;
   a table of what each rule will cost per evaluation is spec 7.10, and the

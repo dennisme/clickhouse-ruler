@@ -9,7 +9,7 @@ import (
 )
 
 // testGroup is what every test in this package sends as the rule's group.
-const testGroup = "probe.yaml:probe"
+var testGroup = Attribution{Group: "probe.yaml:probe", Team: "payments"}
 
 // The comment is read back on the cluster, by an operator who has the query
 // text in front of them already. What they cannot get from system.query_log

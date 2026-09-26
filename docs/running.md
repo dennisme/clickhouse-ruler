@@ -57,6 +57,17 @@ series per rule.
 | `clickhouse_ruler_alerts_send_failures_total` | counter | `alertmanager` |
 | `clickhouse_ruler_notification_latency_seconds` | histogram | none |
 | `clickhouse_ruler_rules_unmatched` | gauge | `rule_group` |
+| `clickhouse_ruler_query_read_rows_total` | counter | `rule`, `team` |
+| `clickhouse_ruler_query_read_bytes_total` | counter | `rule`, `team` |
+| `clickhouse_ruler_query_memory_usage_bytes` | histogram | `rule` |
+| `clickhouse_ruler_query_duration_seconds` | histogram | `rule` |
+
+The four query cost metrics come from the ClickHouse driver's own callbacks
+as the query runs, so they cost no extra query and do not depend on how long
+`system.query_log` is kept. They are recorded whether or not the evaluation
+succeeded, because a rule that trips a cap is the one worth finding. `team`
+is read from the rule's labels and is empty when the author set none, which
+is a rule nobody has claimed rather than one owned by nobody in particular.
 
 `clickhouse_ruler_annotation_failures_total` is separate from the evaluation failures on
 purpose: an annotation that will not render still pages, carrying the template

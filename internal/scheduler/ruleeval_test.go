@@ -9,6 +9,7 @@ import (
 
 	"github.com/dennisme/clickhouse-ruler/internal/alert"
 	"github.com/dennisme/clickhouse-ruler/internal/notify"
+	"github.com/dennisme/clickhouse-ruler/internal/query"
 	"github.com/dennisme/clickhouse-ruler/internal/rule"
 	"github.com/dennisme/clickhouse-ruler/internal/ruleset"
 	"github.com/dennisme/clickhouse-ruler/internal/source"
@@ -22,7 +23,7 @@ type fakeQuerier struct {
 	calls   int
 }
 
-func (q *fakeQuerier) Run(context.Context, rule.Rule, string, time.Time) ([]alert.Sample, error) {
+func (q *fakeQuerier) Run(context.Context, rule.Rule, query.Attribution, time.Time) ([]alert.Sample, error) {
 	q.calls++
 	if q.err != nil {
 		return nil, q.err

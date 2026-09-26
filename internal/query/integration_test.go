@@ -57,7 +57,7 @@ func testSource(t *testing.T) source.Source {
 func openQuerier(t *testing.T, src source.Source) *Querier {
 	t.Helper()
 
-	q, err := Open(src)
+	q, err := Open(src, nil)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
