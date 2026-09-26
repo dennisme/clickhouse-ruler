@@ -117,7 +117,8 @@ for, which was never the risk. So `CLICKHOUSE_IMAGE` points the same stack at
 another server and continuous integration runs both: the pinned leg is required,
 and a second leg on the newest release is advisory, because a server changing
 its output is worth knowing about and is not the problem of whichever pull
-request ran next.
+request ran next. Which servers those legs are, and what may be claimed in
+public about the ones they cover, is 9.7.
 
 That leg earned itself immediately. `EXPLAIN PLAN indexes=1` gained
 box-drawing glyphs between 25.8 and 26.9, so the reader in `internal/query`

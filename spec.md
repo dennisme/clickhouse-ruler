@@ -31,6 +31,7 @@ another file keeps its number and this table is the only thing that changes.
 | 10. Operational modes | [spec/operations.md](spec/operations.md) | Validation for others, deployment topologies |
 | 11. Decisions made | [spec/decisions.md](spec/decisions.md) | Settled questions, with the reasoning |
 | 12. Open questions | this file | What is not settled |
+| 14. Documentation | this file | What the README says, what the site says, what this says |
 | 13. Sources | this file | Everything cited |
 
 Where to start, by what you are changing:
@@ -243,6 +244,48 @@ That is the property we are copying. Everything else follows from it.
     it is worth flagging.
 
 ---
+
+## 14. Documentation
+
+Three places describe this project and they keep describing the same things,
+which is how a README reaches six hundred lines and how a default ends up
+stated in two places with one of them wrong.
+
+What each is for:
+
+- **The README is a front door.** What this is, why it exists, a quickstart
+  somebody can paste, an honest status section, and links. Somebody deciding
+  whether to keep reading is the only reader it has. Target is under two
+  hundred lines, and every section that grows past a screen is a section that
+  belongs on the site.
+- **The site is the manual.** Reference material, in pages that are navigated
+  rather than scrolled: how evaluation works, what is exposed, the check
+  pages (7.8), the operations page (8.7), the deployment page (10.2), and how
+  this compares to the alternatives. It is built `--strict`, so a link to a
+  page that does not exist fails the build.
+- **This spec is the reasoning.** Why each of those is the way it is. It is
+  written for whoever changes the code, and it is the only one of the three
+  where an argument belongs.
+
+**The status section stays in the README**, alone of the reference material.
+It is the honesty section, it is what somebody checks before depending on
+this, and a status published one navigation click away from the front door is
+a status people find after they have already started. One home, and the
+convention in `AGENTS.md` that it is kept current when something lands.
+
+**A fact lives in one of the three, and the other two link to it.** The metric
+table is currently in 8.2, in the README, and partly on the operations page,
+which is two copies waiting to disagree. The rule is the site for what the
+tool does, the spec for why, and the README for neither. Where the site needs
+a fact the code decides, it is generated (7.8), not transcribed.
+
+The cost of this split is links. Moving a section off the README breaks every
+deep link into it, including the ones on the site, and `--strict` does not
+check links to `github.com` because it cannot. Whoever does the move walks
+both directions.
+
+Done. The README is a front door again, and `how-it-works`, `running` and
+`comparison` are pages on the site.
 
 ## 13. Sources
 
