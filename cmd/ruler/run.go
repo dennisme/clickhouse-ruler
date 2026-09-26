@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -146,7 +147,11 @@ func runRun(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 
 	sched := scheduler.New(set, toQuerierMap(queriers), cadence, metrics, clock, *queryConcurrency, log, resend)
 
-	httpSrv := &http.Server{Addr: *listen, Handler: scheduler.Handler(reg), ReadHeaderTimeout: 5 * time.Second}
+	httpSrv := &http.Server{
+		Addr:              *listen,
+		Handler:           scheduler.Handler(reg, readiness(len(set.Rules), toPingers(queriers))),
+		ReadHeaderTimeout: 5 * time.Second,
+	}
 	go func() {
 		if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Error("metrics listener stopped", "listen", *listen, "error", err.Error())
@@ -165,6 +170,41 @@ func runRun(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	_ = httpSrv.Shutdown(shutdownCtx)
 
 	return exitOK
+}
+
+// pinger is all readiness asks of a source: whether it answers.
+// query.Querier is one.
+type pinger interface {
+	Ping(ctx context.Context) error
+}
+
+// readiness answers whether sending traffic to this ruler is useful: rules
+// loaded, and at least one source answering (spec 8.1).
+//
+// Not a source-by-source answer. One unreachable cluster out of twelve is a
+// finding for source/privileges and the evaluation failure counters, not a
+// reason to declare the whole ruler unfit, and a probe that flaps with any
+// cluster's availability is one whoever is on call disables.
+func readiness(rules int, sources map[string]pinger) scheduler.Ready {
+	return func(ctx context.Context) error {
+		if rules == 0 {
+			return errors.New("no rules loaded, so there is nothing to evaluate")
+		}
+		for _, src := range sources {
+			if err := src.Ping(ctx); err == nil {
+				return nil
+			}
+		}
+		return errors.New("no source answering, so every rule this ruler holds fails to evaluate")
+	}
+}
+
+func toPingers(queriers map[string]*query.Querier) map[string]pinger {
+	out := make(map[string]pinger, len(queriers))
+	for name, q := range queriers {
+		out[name] = q
+	}
+	return out
 }
 
 // openQueriers connects to every source any loaded rule matched, once each,

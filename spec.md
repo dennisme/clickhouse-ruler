@@ -26,7 +26,7 @@ another file keeps its number and this table is the only thing that changes.
 | 5. Non-goals | this file | What this will never do |
 | 6. Design | [spec/design.md](spec/design.md) | Rule files, sources, evaluation, alerting, tenancy, guard rails, the user contract, scheduling |
 | 7. Validation | [spec/validation.md](spec/validation.md) | Check tiers, the line between our checks and the database's, check policy |
-| 8. Observability of the ruler itself | [spec/operations.md](spec/operations.md) | Metrics, the HTTP surface, logging |
+| 8. Observability of the ruler itself | [spec/operations.md](spec/operations.md) | Metrics, the HTTP surface, logging, finding a rule's queries in ClickHouse, dashboards |
 | 9. End to end testing | [spec/operations.md](spec/operations.md) | The compose stack and what it proves |
 | 10. Operational modes | [spec/operations.md](spec/operations.md) | Validation for others, deployment topologies |
 | 11. Decisions made | [spec/decisions.md](spec/decisions.md) | Settled questions, with the reasoning |

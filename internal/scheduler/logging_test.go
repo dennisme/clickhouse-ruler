@@ -211,7 +211,7 @@ type blockingQuerier struct {
 	once    bool
 }
 
-func (q *blockingQuerier) Run(context.Context, rule.Rule, time.Time) ([]alert.Sample, error) {
+func (q *blockingQuerier) Run(context.Context, rule.Rule, string, time.Time) ([]alert.Sample, error) {
 	if !q.once {
 		q.once = true
 		close(q.started)

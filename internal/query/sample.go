@@ -67,9 +67,15 @@ type sampleResult struct {
 //
 // An error means the sample could not be taken and is never a finding about the
 // rule, the same line classifyExplain draws.
-func (q *Querier) Sample(ctx context.Context, r rule.Rule, c SampleChecks, now time.Time) ([]Finding, error) {
+func (q *Querier) Sample(ctx context.Context, r rule.Rule, group string, c SampleChecks, now time.Time) ([]Finding, error) {
 	ctx, cancel := context.WithTimeout(ctx, sampleTimeout)
 	defer cancel()
+
+	// The parse and the DESCRIBE below carry the comment as well as the
+	// sample does. They are cheap, but they are still this rule's queries,
+	// and an operator picking its work out of system.query_log wants all of
+	// it (spec 8.5).
+	ctx = clickhouse.Context(ctx, clickhouse.WithSettings(withLogComment(nil, group, r.Alert)))
 
 	sql, err := renderForCheck(r.Expr)
 	if err != nil {
@@ -102,7 +108,7 @@ func (q *Querier) Sample(ctx context.Context, r rule.Rule, c SampleChecks, now t
 
 	from, to := sampleWindow(q.src, r, now)
 
-	res, err := q.sample(ctx, keys, from, to, c)
+	res, err := q.sample(ctx, keys, from, to, c, group, r.Alert)
 	if err != nil {
 		return nil, err
 	}
@@ -117,6 +123,7 @@ func (q *Querier) sample(
 	keys []MapKey,
 	from, to time.Time,
 	c SampleChecks,
+	group, rule string,
 ) (sampleResult, error) {
 	if len(keys) == 0 {
 		return sampleResult{}, nil
@@ -127,7 +134,8 @@ func (q *Querier) sample(
 
 	args = append(args, from, to)
 
-	ctx = clickhouse.Context(ctx, clickhouse.WithSettings(sampleSettings(c.MaxRows)))
+	ctx = clickhouse.Context(ctx, clickhouse.WithSettings(
+		withLogComment(sampleSettings(c.MaxRows), group, rule)))
 
 	var (
 		res      sampleResult

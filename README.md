@@ -290,6 +290,10 @@ operator needs.
 Usage errors and check findings are separate: unstructured, on stderr, because
 those are for the person who typed the command.
 
+What to watch, with the number that means trouble, what each log line means,
+and the `system.query_log` queries that say what a rule cost are on the
+[operations page](https://dennisme.github.io/clickhouse-ruler/operations/).
+
 ## How it compares
 
 |                                     | Rules in git   | ClickHouse SQL | Your Alertmanager | File is the only write path | Validates the query |
@@ -497,11 +501,11 @@ Working:
   every limit the ruler sends, and the grant on its own table. Probed rather
   than read out of `SHOW GRANTS`, which reports role membership instead of
   what the roles contain
-- Nine offline checks: seven on a rule file, plus the two needing the sources
+- Eleven offline checks: nine on a rule file, plus the two needing the sources
   file (which sources the labels match, and whether the query sets a protected
   label)
 - Sources file parsing, with secrets read from a file or the environment, and
-  eleven checks
+  twelve checks
 - Per-source exemptions: a source owner drops one check for their own cluster
   with a stated reason and an expiry date, and an exemption that has run out
   fails the build rather than lingering. `until` is the first day no longer
@@ -523,16 +527,28 @@ Working:
   Prometheus gives itself
 - Resolved alerts are retried rather than sent once, so a notification that
   fails does not leave Alertmanager showing an alert that has recovered
-- Metrics on `/metrics`, with `/-/healthy` and `/-/ready`, and structured logs
-  naming the rule and source behind every failure
+- Metrics on `/metrics`, `/-/healthy` for the process, and a `/-/ready` that
+  fails when no rules are loaded or no source answers, so a rollout of a ruler
+  that reaches no cluster is not a successful one
+- Structured logs naming the rule and source behind every failure, and a
+  `log_comment` on every query the ruler sends, so what a rule cost is a
+  `WHERE` clause on `system.query_log` rather than a guess
+- Two Grafana dashboards in `deploy/grafana`, one for operating the ruler and
+  one for rule authors, with a test that fails the build if a panel queries a
+  metric nothing registers
+- An [operations page](https://dennisme.github.io/clickhouse-ruler/operations/)
+  and a [deployment page](https://dennisme.github.io/clickhouse-ruler/deployment/):
+  what to watch with the number that means trouble, what each log line means,
+  what refuses to start, the `system.query_log` queries, and the five
+  topologies
 - A ClickHouse and Alertmanager compose stack, with an end to end test that
   takes a rule from a file all the way to a delivered notification
 
 Not built yet:
 
-- The query checks stop short of reading data. A rule returning nothing at all
-  still passes: whether an attribute key is actually present, and how often a
-  rule would have fired, both need real rows. Spec 7.3 tier 2, and 7.4.
+- No backfill. `--sample` reads rows to confirm a rule's attribute keys exist,
+  but how often a rule would have fired over the last week needs the query run
+  across historical windows. Spec 7.4.
 - No `ruler watch`, so rules are not reloaded without a restart.
 - No ClickHouse query cost metrics. Rows and bytes read per rule need a driver
   progress callback. Spec 8.2.

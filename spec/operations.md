@@ -21,6 +21,29 @@ There are no rule create, update, or delete endpoints, and there never will be.
 That is section 4 restated as an API decision. The absence of a write path is
 the security model.
 
+**The two health endpoints answer different questions, and today they do not.**
+Both return 200 unconditionally, which makes them the same endpoint written
+twice. What each has to mean:
+
+- `/-/healthy` is about the process. It is alive and its listener is serving,
+  which is what an unconditional 200 already says. Correct as it stands.
+- `/-/ready` is about whether sending traffic here is useful, and that is a
+  different question: rules loaded, and at least one source answering. A ruler
+  that cannot reach any ClickHouse is running perfectly and evaluating nothing.
+
+The distinction is not decoration, because the two are wired to different
+things. A failed `/-/healthy` gets a process restarted; a failed `/-/ready`
+takes it out of a load balancer or stops a rollout. A readiness probe that
+cannot fail turns a deployment of a ruler that cannot reach its cluster into a
+successful one, and 10.2's highly available topology depends on that
+distinction: with several rulers behind one deployment, readiness is what stops
+a rollout replacing working replicas with broken ones.
+
+Readiness is deliberately not a source-by-source answer. One unreachable
+cluster out of twelve is a finding for `source/privileges` and the evaluation
+failure counters, not a reason to declare the whole ruler unfit, and a probe
+that flaps with any cluster's availability gets disabled by whoever is on call.
+
 ### 8.2 Metric names
 
 Names track the Prometheus ruler's own metrics wherever an equivalent exists,
@@ -181,6 +204,93 @@ Credentials never reach a log. A ClickHouse driver error may echo connection
 detail, so every error `internal/query` returns goes through `redact` first.
 The address and the database survive, because an operator reading the line
 needs them; the password does not.
+
+### 8.5 Finding the ruler's queries in ClickHouse
+
+Half of operating this thing happens on the other side of the connection. A
+rule that times out, reads more than the estimate predicted, or trips a memory
+cap leaves its evidence in `system.query_log` on the cluster, not in anything
+the ruler exposes, and 8.2 cannot help: a counter says an evaluation failed,
+and the query text, the rows read and the peak memory are all over there.
+
+Today the only way to pick those queries out of `query_log` is the source's
+username, which fails exactly when it matters. A username identifies a source,
+so it cannot separate one rule from another, and 10.2's ruler-per-team and
+ruler-as-a-service topologies deliberately share a user across many rules.
+
+**So every query the ruler sends carries a `log_comment`.** ClickHouse stores
+that setting per query in `system.query_log`, which turns "what did this rule
+cost last night" into a `WHERE` clause. It carries the rule and its group, not
+the SQL and not the alert's labels: the query text is already in the log, and
+label values are data, which would put unbounded cardinality into a column
+operators group by (8.3 applies here too).
+
+It is a query setting rather than a comment in the SQL, so it cannot change
+what runs, and it sits beside the caps in 6.7 that every evaluation already
+sends. The sampling and inspection queries carry it as well, since a check that
+read more than expected is the same question asked at check time.
+
+### 8.6 Dashboards
+
+Metric names that carry over (8.2) are not the same as somebody having
+something to look at. Two dashboards ship in `deploy/grafana/dashboards`,
+because there are two audiences and one dashboard for both serves neither.
+
+- **Operations.** Is the ruler doing its job: missed iterations first, because
+  that is 8.2's most important signal, then evaluation failures, evaluation
+  duration against the group interval, staleness of the last evaluation, send
+  failures and notification latency.
+- **Alert rules.** Whether a team's own rules work: which of their rules are
+  failing to evaluate, which matched no source and will therefore never run,
+  what is firing and pending now, and which annotations will not render. The
+  distinction from the first one is ownership. A rule author cannot act on
+  notification latency and should not be shown it.
+
+They are files in the repository rather than screenshots in a wiki, for the
+reason rules are: a dashboard that is provisioned from git is one that can be
+reviewed, and one that can be fixed when a metric is renamed.
+
+**A panel querying a metric nobody exposes renders an empty graph, which looks
+exactly like a healthy system.** That is the failure this area produces, and it
+is the same shape as a check page documenting a default the tool does not have
+(7.8), so it gets the same answer: a test reads every expression in both
+dashboards and asserts each metric it names is registered. Renaming a metric
+then fails the build rather than quietly emptying a panel somebody is on call
+with.
+
+Two consequences of shipping them. The dashboards may only use the metrics in
+8.2, because anything else is a panel that cannot work; where one would need a
+signal that does not exist yet, the gap is named in this spec rather than
+papered over with an expression that returns nothing. And they are portable: a
+datasource variable rather than a hardcoded UID, since the UID is local to
+whoever imports it.
+
+### 8.7 The operations page
+
+Everything in 8.1 through 8.6 is a mechanism. What an operator needs at three in
+the morning is the reading of it, and that is a page rather than a spec section:
+`docs/operations.md`, published with the check pages.
+
+Four things belong on it, and nothing else:
+
+- **What to watch, as expressions they can paste.** A missed iteration, an
+  evaluation failure rate, a last evaluation going stale, send failures,
+  notification latency. Each with the number that means trouble and what to do
+  about it, because a threshold nobody can justify is a threshold somebody
+  silences.
+- **Every log line, with what it means.** The table in 8.4 says what is logged.
+  The page says what to do when a line appears, which is a different table and
+  the one people actually need.
+- **What refuses to start, and why that is deliberate.** An error-severity
+  finding stops the ruler; a source failing the user contract is refused on its
+  own while every other source carries on (6.7.3). Both look like an outage to
+  somebody who has not read 7.1, and both are the design working.
+- **The ClickHouse side.** `system.query_log` queries keyed on the
+  `log_comment` from 8.5: what a rule cost, what it read, what timed out.
+
+What does not belong on it is a second description of the checks. Those have
+their own pages and their own generated facts (7.8), and an operations page
+restating a severity default is one more thing to go stale.
 
 ---
 
@@ -352,10 +462,49 @@ different sources file, rather than four products.
   in 6.10: adding a cluster or a user is an admin change, writing an alert
   against one is not.
 
-None of these need code that does not already exist, with one exception: a
-rule matching several sources has to evaluate once per source, and its alert
-instances must stay distinct per source. That is a fingerprint question
-(6.3), and it is open, see 12.6.
+None of these need code that does not already exist. The one exception used to
+be a rule matching several sources, which has to evaluate once per source with
+its alert instances staying distinct per source; that is settled, because
+`source` is part of an alert's label set and therefore of its fingerprint
+(6.3).
+
+#### Running more than one ruler
+
+The highly available topology above is worth spelling out, because "mostly
+safe" is doing a lot of work in one bullet and an operator deciding between one
+ruler and three needs the actual trade.
+
+**It works by duplication, not by coordination.** Two rulers with the same
+sources file produce the same alerts: an alert's identity is its final label
+set, and every part of that set comes from the files and the query result
+rather than from the process, so both rulers arrive at the same fingerprint and
+Alertmanager deduplicates them (6.5). That is how Prometheus HA pairs work and
+it needs no leader election, no shared state and no new features here.
+
+**Which makes the sources file the thing to get right.** Source `labels`
+(6.10.1) land on alerts, so two rulers meant to be replicas of each other must
+carry the same ones. A label naming the replica, the obvious thing to reach
+for when two processes are emitting the same alert, is precisely what breaks
+deduplication: it makes every alert two alerts, and 6.5's route tree then
+routes both.
+
+**The cost is query load, and it is linear.** Each replica evaluates every
+matched rule against every matched source, so three rulers is three times the
+queries and three times the cost caps in 6.7 consumed. That is the argument for
+sharding by source rather than replicating for its own sake, and it is why the
+per-source concurrency limit in 6.11 matters more here than anywhere else: a
+cluster already carrying triple the rule traffic is the one that starts queueing.
+
+**Two rough edges, both known.** A ruler holds `ActiveAt` in memory, so a
+replica that restarts, or one added to an existing set, re-serves every pending
+alert's full `for` before it will fire (12.2). And each ruler computes its own
+window from its own clock, so skew between replicas shifts what each one reads;
+`evaluation_delay` absorbs the ordinary case, and 12.3 is where the rest of
+that sits, still deferred.
+
+Neither is a reason to run one ruler instead of three. They are reasons the
+deduplicated alerts can disagree about *when*, never about *what*, and an
+operator should know that before they are paged about it.
 
 ### 10.3 Checking a pull request
 

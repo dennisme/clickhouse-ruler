@@ -41,6 +41,14 @@ type Rule struct {
 	Sources []source.Source
 }
 
+// GroupID names a group the way every metric label, log line and
+// system.query_log comment spells it. A group name is unique within its file
+// and not across the directory, so the file is part of the identity (spec 7.6).
+func GroupID(file, group string) string { return file + ":" + group }
+
+// GroupID is the rule's own group.
+func (r Rule) GroupID() string { return GroupID(r.File, r.Group.Name) }
+
 // Set is every rule found under a directory.
 type Set struct {
 	Dir   string

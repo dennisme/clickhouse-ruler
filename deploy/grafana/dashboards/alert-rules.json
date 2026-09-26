@@ -1,0 +1,116 @@
+{
+  "title": "clickhouse-ruler / alert rules",
+  "uid": "clickhouse-ruler-alert-rules",
+  "description": "Whether a team's own rules work. For rule authors: what is failing, what matches no source, what is firing, and which annotations will not render (spec 8.6).",
+  "tags": ["clickhouse-ruler"],
+  "editable": true,
+  "schemaVersion": 39,
+  "refresh": "1m",
+  "time": { "from": "now-6h", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "datasource",
+        "label": "Prometheus",
+        "type": "datasource",
+        "query": "prometheus",
+        "current": {},
+        "hide": 0
+      },
+      {
+        "name": "rule_group",
+        "label": "Rule group",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "${datasource}" },
+        "query": "label_values(clickhouse_ruler_rule_evaluations_total, rule_group)",
+        "refresh": 2,
+        "includeAll": true,
+        "allValue": ".*",
+        "multi": true,
+        "current": {}
+      }
+    ]
+  },
+  "panels": [
+    {
+      "title": "Rules failing to evaluate",
+      "description": "A rule here is not being evaluated at all, so it cannot fire. The ruler's log names the source and what the database replied.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 0 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "sum by (rule_group, rule) (rate(clickhouse_ruler_rule_evaluation_failures_total{rule_group=~\"$rule_group\"}[$__rate_interval]))",
+          "legendFormat": "{{rule_group}} / {{rule}}"
+        }
+      ]
+    },
+    {
+      "title": "Rules matching no source",
+      "description": "Loaded rules this ruler will never evaluate, because their selector matched none of the sources it holds. Normal on a per-data-centre ruler reading a shared repository, and expected back to zero after a cluster rollout finishes. Staying raised means nobody read the check that warned at authoring time.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 0 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "clickhouse_ruler_rules_unmatched{rule_group=~\"$rule_group\"}",
+          "legendFormat": "{{rule_group}}"
+        }
+      ]
+    },
+    {
+      "title": "Firing now",
+      "description": "Alert instances a rule currently holds in the firing state. A count per rule, never a series per instance.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 9 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "sum by (rule_group, rule) (clickhouse_ruler_alerts_active{rule_group=~\"$rule_group\", state=\"firing\"})",
+          "legendFormat": "{{rule_group}} / {{rule}}"
+        }
+      ]
+    },
+    {
+      "title": "Pending now",
+      "description": "Instances inside their `for`, which will fire if the condition holds. A rule stuck pending and never firing is usually a `for` longer than the condition lasts.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 9 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "sum by (rule_group, rule) (clickhouse_ruler_alerts_active{rule_group=~\"$rule_group\", state=\"pending\"})",
+          "legendFormat": "{{rule_group}} / {{rule}}"
+        }
+      ]
+    },
+    {
+      "title": "Annotations that will not render",
+      "description": "The alert was evaluated and delivered, carrying the template error where its annotation should be. Somebody is reading that error on their page right now, and the fix is in the rule file.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 17 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "sum by (rule, annotation) (rate(clickhouse_ruler_annotation_failures_total{rule_group=~\"$rule_group\"}[$__rate_interval]))",
+          "legendFormat": "{{rule}} / {{annotation}}"
+        }
+      ]
+    }
+  ]
+}

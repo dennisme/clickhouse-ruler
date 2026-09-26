@@ -87,7 +87,7 @@ func TestRunDoesNotLeakPassword(t *testing.T) {
 		Alert:  "SlowCheckout",
 		Expr:   "SELECT 1 WHERE Timestamp >= {{.From}} AND Timestamp < {{.To}}",
 		Window: time.Minute,
-	}, time.Now())
+	}, testGroup, time.Now())
 	if err == nil {
 		t.Fatal("want an error querying a port nothing is listening on")
 	}

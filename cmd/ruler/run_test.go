@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"log/slog"
 	"path/filepath"
 	"strings"
@@ -153,6 +155,65 @@ func TestRunRejectsAToleranceWithNoHeadroom(t *testing.T) {
 		}
 		if !strings.Contains(stderr, "--resend-tolerance") {
 			t.Errorf("--resend-tolerance %s: expected the reason on stderr, got:\n%s", tolerance, stderr)
+		}
+	}
+}
+
+// A source that answers, or does not.
+type fakePinger struct{ err error }
+
+func (p fakePinger) Ping(context.Context) error { return p.err }
+
+// Readiness is deliberately not a source-by-source answer. One unreachable
+// cluster out of twelve is a finding for source/privileges and the evaluation
+// failure counters, not a reason to declare the whole ruler unfit, and a probe
+// that flaps with any cluster's availability gets disabled by whoever is on
+// call (spec 8.1).
+func TestReadinessNeedsRulesAndOneSource(t *testing.T) {
+	down := fakePinger{err: errors.New("connection refused")}
+	up := fakePinger{}
+
+	tests := []struct {
+		name    string
+		rules   int
+		sources map[string]pinger
+		wantErr string
+	}{
+		{
+			name:    "no rules loaded",
+			rules:   0,
+			sources: map[string]pinger{"a": up},
+			wantErr: "no rules",
+		},
+		{
+			name:    "rules but nothing to evaluate them against",
+			rules:   3,
+			sources: map[string]pinger{},
+			wantErr: "no source",
+		},
+		{
+			name:    "every source unreachable",
+			rules:   3,
+			sources: map[string]pinger{"a": down, "b": down},
+			wantErr: "no source",
+		},
+		{
+			name:    "one of several answering is enough",
+			rules:   3,
+			sources: map[string]pinger{"a": down, "b": up, "c": down},
+		},
+	}
+
+	for _, tc := range tests {
+		err := readiness(tc.rules, tc.sources)(context.Background())
+
+		switch {
+		case tc.wantErr == "" && err != nil:
+			t.Errorf("%s: ready reported %v, want ready", tc.name, err)
+		case tc.wantErr != "" && err == nil:
+			t.Errorf("%s: ready reported nothing, want an error naming %q", tc.name, tc.wantErr)
+		case tc.wantErr != "" && err != nil && !strings.Contains(err.Error(), tc.wantErr):
+			t.Errorf("%s: ready reported %v, want it to name %q", tc.name, err, tc.wantErr)
 		}
 	}
 }

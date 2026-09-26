@@ -22,7 +22,7 @@ type fakeQuerier struct {
 	calls   int
 }
 
-func (q *fakeQuerier) Run(context.Context, rule.Rule, time.Time) ([]alert.Sample, error) {
+func (q *fakeQuerier) Run(context.Context, rule.Rule, string, time.Time) ([]alert.Sample, error) {
 	q.calls++
 	if q.err != nil {
 		return nil, q.err
