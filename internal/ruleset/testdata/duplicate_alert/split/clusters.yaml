@@ -1,0 +1,38 @@
+# One rule per cluster, identical but for the selector. Each reaches a
+# different source, so the source label keeps their alerts apart.
+groups:
+  - name: dc1-latency
+    interval: 1m
+    rules:
+      - alert: ClusterLatency
+        sources:
+          cluster: dc1
+        expr: |
+          SELECT ServiceName, max(Duration) AS value
+          FROM otel.otel_traces
+          WHERE Timestamp >= {{ .From }} AND Timestamp < {{ .To }}
+          GROUP BY ServiceName
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ .ServiceName }} is slow"
+          runbook_url: https://runbooks.internal/slow
+
+  - name: dc2-latency
+    interval: 1m
+    rules:
+      - alert: ClusterLatency
+        sources:
+          cluster: dc2
+        expr: |
+          SELECT ServiceName, max(Duration) AS value
+          FROM otel.otel_traces
+          WHERE Timestamp >= {{ .From }} AND Timestamp < {{ .To }}
+          GROUP BY ServiceName
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ .ServiceName }} is slow"
+          runbook_url: https://runbooks.internal/slow

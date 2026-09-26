@@ -493,13 +493,20 @@ its job:
 - `rule/name`, empty or duplicate within its group. No identity. Uniqueness
   is scoped to the group and deliberately no wider. An alert's identity is
   its full label set, not its name, so the same name in another group or
-  another file is a different alert: it carries different group labels, and
-  it reaches different sources, so `team` and `source` already separate the
-  two in the fingerprint. Requiring globally unique names would push authors
-  into `PaymentsHighErrorRate` prefixes, re-encoding in the name exactly what
-  6.3.1 says belongs in labels, and two teams in a shared repository both
-  wanting `HighErrorRate` is normal rather than a mistake. Prometheus makes
-  the same call.
+  another file is normally a different alert: it carries different group
+  labels, and it reaches different sources, so `team` and `source` separate
+  the two in the fingerprint. Requiring globally unique names would push
+  authors into `PaymentsHighErrorRate` prefixes, re-encoding in the name
+  exactly what 6.3.1 says belongs in labels, and two teams in a shared
+  repository both wanting `HighErrorRate` is normal rather than a mistake.
+  Prometheus makes the same call.
+
+  **That the labels differ is checked rather than assumed.** It used to be
+  the reasoning on its own, and it is a statement about how the files happen
+  to be written: two rules can share an alert name, a `sources` selector and
+  every static label, and then they are one alert. `rule/duplicate-alert`
+  below is what tests it, in the loader, where the sources file is available
+  to say which sources a selector actually reached.
 - `rule/group-name`, empty or repeated within one file. A group's identity is
   (file, name): that is what the scheduler keys a group by and what the
   `rule_group` metric label carries, so two groups sharing a name in one file
@@ -535,6 +542,26 @@ and where they take a list of keys that list is configurable too:
   rule can run depends on which ruler is asking, so the same repository is
   legitimately unmatched on one ruler and fine on another (6.10, 10.2).
   Default `warn`.
+- `rule/duplicate-alert`, two rules whose alert name, effective labels and
+  matched sources are all equal, so they share one fingerprint: one entry in
+  the resend cadence and one alert in Alertmanager, where whichever evaluated
+  last wins and a resolve from either can end the other's page. Default
+  `warn`, and the reason is who is on the critical path rather than how much
+  the collision costs. The finding is about two rules at once, usually in two
+  files with two owners, so the author who trips it often owns neither the
+  other file nor the policy, and an error would block their change behind
+  another team's edit.
+
+  **It cannot be exact, and the inexactness points the safe way.** Result
+  columns are level 3 of 6.3.1, so a pair that collides statically may
+  distinguish itself at evaluation time on a column one of them returns. What
+  is reported is still a pair relying on that with nothing in either file
+  saying so. The opposite direction, two rules that look distinct and collide
+  on runtime labels, needs the result and is not a tier 0 question. A rule no
+  source accepts is skipped: it evaluates nowhere, so it collides with
+  nothing, and without the skip a ruler holding one data centre's sources
+  would report every unmatched pair in a shared repository against each other
+  (6.10, 10.2).
 - `rule/select-star` and `rule/nondeterministic`. Both produce rules that
   evaluate; they just evaluate badly, so both default to `warn`.
 - `rule/attribute-key`, a map key no recent row has. Default `warn`, and the

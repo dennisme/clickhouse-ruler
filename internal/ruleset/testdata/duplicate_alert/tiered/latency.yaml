@@ -1,0 +1,21 @@
+# The same name and the same sources, and a label the other two do not carry,
+# so the alerts it produces are distinguishable.
+groups:
+  - name: tiered-latency
+    interval: 1m
+    rules:
+      - alert: HighP99Latency
+        sources:
+          team: payments
+        expr: |
+          SELECT ServiceName, max(Duration) AS value
+          FROM otel.otel_traces
+          WHERE Timestamp >= {{ .From }} AND Timestamp < {{ .To }}
+          GROUP BY ServiceName
+        for: 5m
+        labels:
+          severity: warning
+          tier: "1"
+        annotations:
+          summary: "{{ .ServiceName }} is slow"
+          runbook_url: https://runbooks.internal/slow

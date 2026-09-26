@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/dennisme/clickhouse-ruler/internal/lint"
@@ -84,6 +85,7 @@ func Load(dir string, sources *source.File, root *policy.Policy) (*Set, []lint.P
 		set.Rules = append(set.Rules, loaded...)
 		problems = append(problems, found...)
 	}
+	problems = append(problems, duplicateAlerts(set.Rules, sources, root)...)
 	return set, problems
 }
 
@@ -127,17 +129,8 @@ func loadFile(path string, sources *source.File, root *policy.Policy) ([]Rule, [
 		return nil, problems
 	}
 
-	// Policy is resolved per rule because a rule's labels decide which sources
-	// it reaches, and each of those can tighten a check. A rule matching
-	// several gets the strictest any of them asks for.
-	policyFor := func(r rule.Rule) *policy.Policy {
-		scopes := []*policy.Policy{root}
-		for _, src := range sources.Match(r.Sources) {
-			scopes = append(scopes, src.Policy)
-		}
-		return policy.Merge(scopes...)
-	}
-	problems = append(problems, rule.Validate(parsed, policyFor)...)
+	policyForRule := func(r rule.Rule) *policy.Policy { return policyFor(r, sources, root) }
+	problems = append(problems, rule.Validate(parsed, policyForRule)...)
 
 	var out []Rule
 	for _, g := range parsed.Groups {
@@ -154,12 +147,119 @@ func loadFile(path string, sources *source.File, root *policy.Policy) ([]Rule, [
 				Sources: matched,
 			}
 			problems = append(problems, protectedLabels(path, r, matched)...)
-			problems = append(problems, sourceMatch(path, r, matched, policyFor(r))...)
+			problems = append(problems, sourceMatch(path, r, matched, policyForRule(r))...)
 
 			out = append(out, loaded)
 		}
 	}
 	return out, problems
+}
+
+// policyFor resolves the policy a rule is validated against.
+//
+// Resolved per rule because a rule's labels decide which sources it reaches,
+// and each of those can tighten a check. A rule matching several gets the
+// strictest any of them asks for (spec 7.7).
+func policyFor(r rule.Rule, sources *source.File, root *policy.Policy) *policy.Policy {
+	scopes := []*policy.Policy{root}
+	for _, src := range sources.Match(r.Sources) {
+		scopes = append(scopes, src.Policy)
+	}
+	return policy.Merge(scopes...)
+}
+
+// duplicateAlerts reports two rules whose alerts cannot be told apart.
+//
+// An alert's identity is its full label set (spec 6.3.1), and both
+// Alertmanager and notify.Cadence key on the fingerprint that set produces.
+// Two rules that agree on their alert name, their effective labels and the
+// sources they reach therefore write into one alert and one cadence entry:
+// whichever evaluated last decides what Alertmanager holds, and a resolve
+// from either can end the other's page while the condition behind it is
+// still true. `rule/name` does not see this, because it scopes uniqueness to
+// the group and these rules are in different groups or different files
+// (spec 7.6).
+//
+// The comparison is over the static identity only, so it is not exact.
+// Result columns contribute labels that exist only at evaluation time, so a
+// pair flagged here may distinguish itself at runtime on a column one of
+// them returns and the other does not. The direction of the inexactness is
+// what makes it worth flagging anyway: a pair whose files already agree is
+// the reachable case, it relies on the queries returning different columns
+// to stay apart, and nothing in either file says so. The reverse, two rules
+// that look distinct and collide on runtime labels, needs the result and is
+// not a tier 0 question.
+//
+// A rule no source accepts is skipped. It evaluates nowhere on this ruler,
+// so it produces no alert to collide with, and a ruler holding one data
+// centre's sources would otherwise report every unmatched pair in a shared
+// repository against each other (spec 6.10, 10.2).
+func duplicateAlerts(rules []Rule, sources *source.File, root *policy.Policy) []lint.Problem {
+	var out []lint.Problem
+
+	first := map[string]Rule{}
+	for _, r := range rules {
+		if len(r.Sources) == 0 {
+			continue
+		}
+		key := alertIdentity(r)
+		prev, seen := first[key]
+		if !seen {
+			first[key] = r
+			continue
+		}
+
+		// Both rules are on the hook, so both policies apply and the
+		// stricter of the two decides. Merging is a maximum, so which of
+		// them is reported does not change the severity (spec 7.7).
+		setting := policy.Merge(
+			policyFor(prev.Rule, sources, root),
+			policyFor(r.Rule, sources, root),
+		).For(lint.CheckRuleDuplicateAlert)
+		if setting.Severity == lint.SeverityOff {
+			continue
+		}
+
+		// Reported once, against the second rule, naming the first. One
+		// finding per rule would read as two unrelated problems and neither
+		// would say who the other is, leaving whoever has to fix it grepping
+		// the tree for a name they were not shown.
+		p := lint.NewProblem(r.File, r.LineOf("alert"), lint.CheckRuleDuplicateAlert, setting.Severity,
+			fmt.Sprintf("this rule and the one at %s:%d produce the same alert: same name, same "+
+				"labels, and the same sources, so Alertmanager and the resend cadence cannot tell "+
+				"them apart and a resolve from either ends the other. Give one of them a label the "+
+				"other does not carry, narrow one selector, or delete the rule that is redundant",
+				prev.File, prev.LineOf("alert")))
+		p.Subject = r.Alert
+		p.PolicyFile, p.PolicyLine = setting.File, setting.Line
+		out = append(out, p)
+	}
+	return out
+}
+
+// alertIdentity is everything about a rule's alert that the files decide: its
+// name, its effective labels, and the sources its selector reached. Two rules
+// agreeing on all three produce the same fingerprint.
+func alertIdentity(r Rule) string {
+	var sb strings.Builder
+	sb.WriteString(r.Alert)
+
+	keys := make([]string, 0, len(r.Labels))
+	for k := range r.Labels {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		// A separator no label name or value can contain, so a key ending
+		// where the next value begins cannot be read as a different pair
+		// that happens to concatenate the same way.
+		sb.WriteString("\x00" + k + "\x00" + r.Labels[k])
+	}
+
+	for _, src := range r.Sources {
+		sb.WriteString("\x00" + src.Name)
+	}
+	return sb.String()
 }
 
 // sourceMatch reports a rule that no source accepts.

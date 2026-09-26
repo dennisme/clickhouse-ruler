@@ -29,6 +29,7 @@ stricter, and a ceiling binds at its lowest value. See spec 7.6 and 7.7.
 | [`rule/columns`](#rule-columns) | fixed, always `error` | none | [7.3](https://github.com/dennisme/clickhouse-ruler/blob/main/spec.md) |
 | [`rule/complexity`](#rule-complexity) | `warning` by default | ceilings: `max-joins:2`, `max-subqueries:2` | [7.3](https://github.com/dennisme/clickhouse-ruler/blob/main/spec.md) |
 | [`rule/cost`](#rule-cost) | `warning` by default | ceilings: `max-rows-per-second:1000000`, `max-rows-read:100000000` | [7.3](https://github.com/dennisme/clickhouse-ruler/blob/main/spec.md) |
+| [`rule/duplicate-alert`](#rule-duplicate-alert) | `warning` by default | none | [7.6](https://github.com/dennisme/clickhouse-ruler/blob/main/spec.md) |
 | [`rule/expr`](#rule-expr) | fixed, always `error` | none | [7.6](https://github.com/dennisme/clickhouse-ruler/blob/main/spec.md) |
 | [`rule/for`](#rule-for) | `warning` by default | none | [7.6](https://github.com/dennisme/clickhouse-ruler/blob/main/spec.md) |
 | [`rule/foreign-table`](#rule-foreign-table) | `warning` by default | none | [7.3](https://github.com/dennisme/clickhouse-ruler/blob/main/spec.md) |
@@ -122,6 +123,43 @@ That is why it is a warning: the alternative refuses to load a rule that is
 correct somewhere else. An empty or missing selector matches nothing on
 purpose, because choosing a source chooses the ClickHouse user the query runs
 as.
+
+<a id="rule-duplicate-alert"></a>
+
+### rule/duplicate-alert
+
+Two rules that produce an alert with the same labels.
+
+An alert's identity is its full label set, not its name, so two rules are the
+same alert when they agree on the alert name, on the labels their group and
+their own `labels` block set, and on the sources their selectors reach.
+Alertmanager holds one alert for the pair and the resend cadence holds one
+entry, so whichever evaluated last decides what is held and a resolve from
+either ends the other's page while its condition is still true.
+
+`rule/name` does not catch this. It scopes uniqueness to the group, because
+the same name in another group or another file is normally a different alert,
+and this check is what tests that instead of assuming it.
+
+The comparison is over what the files say, so it is not exact. A result column
+can add a label at evaluation time, and a flagged pair may turn out to differ
+on one. That is still worth reporting: the pair is relying on their queries
+returning different columns to stay apart, and nothing in either file says so.
+
+A warning by default, because the two rules are usually in two files with two
+owners and the author who sees the finding may own neither. Raise it to an
+error where a repository can require that the pair is resolved before either
+rule ships.
+
+```yaml
+checks:
+  rule/duplicate-alert:
+    severity: error
+```
+
+The fix is to give one of them a label the other does not carry, narrow one
+selector so they reach different sources, or delete the rule that is
+redundant.
 
 ## Labels and annotations
 

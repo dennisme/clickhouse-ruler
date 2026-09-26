@@ -138,6 +138,10 @@ Working:
 - The ClickHouse user contract: `source/privileges` probes each source's user
   for the table functions it must not reach, `readonly = 2`, a constraint
   behind every limit, and the grant on its own table.
+- `check --summary`, a markdown table of what each rule is predicted to read
+  per evaluation and per second, written to a file or to stdout for a pull
+  request comment. Needs `--online`, because the cost of a rule is a question
+  for the cluster it runs on.
 - Per-source exemptions, with a stated reason and an expiry date that fails
   the build once it passes. Rule files cannot carry one.
 - `ruler run`: groups ticked on their own intervals and staggered, rules and
@@ -162,9 +166,6 @@ Not built yet:
   across historical windows. Spec 7.4.
 - No `ruler watch`, so rules are not reloaded without a restart.
 - No Alertmanager route tree generation.
-- No pull request summary comment. Findings annotate the diff inline today;
-  a table of what each rule will cost per evaluation is spec 7.10, and the
-  measured version of it needs the cost metrics above.
 
 Known gaps that will change:
 
