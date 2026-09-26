@@ -4,7 +4,10 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"regexp"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/dennisme/clickhouse-ruler/internal/lint"
 	"github.com/dennisme/clickhouse-ruler/internal/rule"
@@ -325,4 +328,63 @@ func TestInspectResultSaysNothingAboutAWorkingRule(t *testing.T) {
 	if got := inspectResult(readColumns(t, "describe_plain.txt"), r, checksWithResult()); len(got) != 0 {
 		t.Errorf("findings = %v, want none", got)
 	}
+}
+
+// The bounds a check renders decide what the optimiser prunes, so a window
+// nothing was written in estimates every well bounded rule at nothing. The
+// window has to be the one the rule will really read (spec 7.3).
+func TestRenderForCheckBoundsTheWindowOnNow(t *testing.T) {
+	before := time.Now()
+	sql, err := renderForCheck("SELECT 1 AS value WHERE ts >= {{ .From }} AND ts < {{ .To }}", 15*time.Minute)
+	if err != nil {
+		t.Fatalf("renderForCheck: %v", err)
+	}
+
+	from, to := boundsIn(t, sql)
+	if got := to.Sub(from); got != 15*time.Minute {
+		t.Errorf("window = %s, want 15m0s", got)
+	}
+	if to.Before(before.Add(-time.Minute)) {
+		t.Errorf("upper bound = %s, want it at about now (%s)", to, before)
+	}
+
+	// A rendered now() would be read back by the AST checks as the rule's
+	// own, and every rule would be reported as nondeterministic.
+	if strings.Contains(sql, "now()") {
+		t.Errorf("rendered SQL calls now(), which the rule did not: %s", sql)
+	}
+}
+
+// A rule whose group set no interval still has to be estimated against
+// something, and a zero length window prunes to nothing everywhere.
+func TestRenderForCheckWithNoWindow(t *testing.T) {
+	sql, err := renderForCheck("SELECT 1 AS value WHERE ts >= {{ .From }} AND ts < {{ .To }}", 0)
+	if err != nil {
+		t.Fatalf("renderForCheck: %v", err)
+	}
+
+	from, to := boundsIn(t, sql)
+	if !to.After(from) {
+		t.Errorf("window = %s to %s, want a window with a length", from, to)
+	}
+}
+
+// boundsIn reads the two timestamps back out of the rendered SQL, which is
+// the only place they exist.
+func boundsIn(t *testing.T, sql string) (from, to time.Time) {
+	t.Helper()
+
+	found := regexp.MustCompile(`toDateTime64\('([^']+)', 3\)`).FindAllStringSubmatch(sql, -1)
+	if len(found) != 2 {
+		t.Fatalf("found %d bounds in %q, want 2", len(found), sql)
+	}
+
+	parse := func(s string) time.Time {
+		ts, err := time.Parse("2006-01-02 15:04:05.000", s)
+		if err != nil {
+			t.Fatalf("parsing bound %q: %v", s, err)
+		}
+		return ts
+	}
+	return parse(found[0][1]), parse(found[1][1])
 }

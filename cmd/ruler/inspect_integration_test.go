@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -229,5 +230,77 @@ WHERE Timestamp >= {{ .From }} AND Timestamp < {{ .To }}`)
 		if !strings.Contains(out, want) {
 			t.Errorf("output should carry %q: %s", want, out)
 		}
+	}
+}
+
+// The table a pull request comment carries. One row per rule and source,
+// with the estimate the cost check already asks for (spec 7.10).
+func TestCheckWritesTheCostSummary(t *testing.T) {
+	dir := t.TempDir()
+	rules := writeRule(t, dir, workingExpr)
+	sources := writeSources(t, dir, "ruler_payments")
+	seed(t, os.Getenv("RULER_CLICKHOUSE_ADDR"), "cost-summary")
+	out := filepath.Join(dir, "summary.md")
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"check", "--sources", sources, "--online", "--summary", out, rules},
+		&stdout, &stderr)
+	if code != exitOK {
+		t.Fatalf("exit = %d, want %d: %s%s", code, exitOK, stdout.String(), stderr.String())
+	}
+
+	data, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatalf("reading the summary: %v", err)
+	}
+	got := string(data)
+
+	if !strings.Contains(got, "| File | Alert | Source | Rows | Interval |") {
+		t.Errorf("no table heading in:\n%s", got)
+	}
+	if !strings.Contains(got, "| Probe | otel_traces |") {
+		t.Errorf("no row for the rule against its source in:\n%s", got)
+	}
+	if !strings.Contains(got, "| 1m0s |") {
+		t.Errorf("the group's interval is missing from:\n%s", got)
+	}
+
+	// A number, whatever it is. How many rows the seeded span put in the
+	// window is the stack's business; that the cell is a count rather than an
+	// excuse is this test's. The seed is what makes it one: an empty table
+	// has no part to read, so the server estimates nothing at all, and
+	// without it this test would pass or fail on whether another package had
+	// already written rows.
+	if !regexp.MustCompile(`\| [0-9]+ \| 1m0s \|`).MatchString(got) {
+		t.Errorf("the rule was not estimated:\n%s", got)
+	}
+}
+
+// A rule within every ceiling still needs a number: the table reports what
+// each rule costs, not only the ones the cost check complained about.
+func TestCostSummaryReportsARuleWithNoCostCeiling(t *testing.T) {
+	dir := t.TempDir()
+	rules := writeRule(t, dir, workingExpr)
+	sources := writeSources(t, dir, "ruler_payments")
+	seed(t, os.Getenv("RULER_CLICKHOUSE_ADDR"), "cost-summary-no-ceiling")
+	config := filepath.Join(dir, "ruler.yaml")
+	if err := os.WriteFile(config, []byte("checks:\n  rule/cost:\n    severity: \"off\"\n"), 0o600); err != nil {
+		t.Fatalf("writing policy: %v", err)
+	}
+	out := filepath.Join(dir, "summary.md")
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"check", "--sources", sources, "--config", config,
+		"--online", "--summary", out, rules}, &stdout, &stderr)
+	if code != exitOK {
+		t.Fatalf("exit = %d, want %d: %s%s", code, exitOK, stdout.String(), stderr.String())
+	}
+
+	data, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatalf("reading the summary: %v", err)
+	}
+	if !regexp.MustCompile(`\| [0-9]+ \| 1m0s \|`).MatchString(string(data)) {
+		t.Errorf("the cost check being off left the row without a number:\n%s", data)
 	}
 }

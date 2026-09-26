@@ -186,3 +186,28 @@ func TestUnprunedTablesReadsATreeDrawnPlan(t *testing.T) {
 		t.Errorf("got %v, want otel.otel_traces: the key pruned nothing", got)
 	}
 }
+
+// The table on a pull request wants a number for a cheap rule too, so the
+// estimate is carried out of the inspection whether or not a ceiling was
+// exceeded (spec 7.10).
+func TestCostFrom(t *testing.T) {
+	est := readEstimate(t, "estimate_two_tables.txt")
+
+	got := costFrom(est)
+	if got.Status != CostEstimated {
+		t.Errorf("status = %v, want estimated", got.Status)
+	}
+	if want := estimatedRows(est); got.Rows != want {
+		t.Errorf("rows = %d, want %d", got.Rows, want)
+	}
+}
+
+// A server that estimated nothing predicts no part will be read: an empty
+// table, a window everything pruned out of, or a count answered from
+// metadata. Zero rows would read as a measurement of a free query rather than
+// the absence of one.
+func TestCostFromWithNoParts(t *testing.T) {
+	if got := costFrom(nil); got.Status != CostNoParts {
+		t.Errorf("status = %v, want no parts", got.Status)
+	}
+}

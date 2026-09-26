@@ -216,6 +216,16 @@ Tier 1, metadata only, reads no table data:
   cheap hourly and ruinous every fifteen seconds. A rule on a 30s interval
   reading 400GB is arithmetic.
 
+  **The window the check renders is the window it estimates.** A check
+  substitutes literal timestamps for `{{ .From }}` and `{{ .To }}`, and those
+  bounds are what the optimiser prunes on, so an arbitrary instant estimates
+  every correctly bounded rule at nothing: the parts holding that window do
+  not exist. The bounds end at now and span the rule's own window, which is
+  the same slice the rule reads every time it evaluates. They are computed by
+  the ruler rather than rendered as `now()`, because the rendered SQL is
+  parsed back as though the author wrote it and a `now()` of ours would be
+  reported as theirs by `rule/nondeterministic`.
+
   A warning rather than an error, because these are the optimiser's
   predictions and can be out by an order of magnitude on a skewed key.
   Refusing a rule over a guess is how a check gets switched off; telling a
@@ -923,23 +933,36 @@ on one source, by the person who owns that cluster, until a date they chose.
 
 ### 7.10 Reporting in a pull request
 
-Two surfaces, and only one of them exists.
+Two surfaces.
 
-**Inline annotations exist.** `ruler check --format=github` emits workflow
+**Inline annotations.** `ruler check --format=github` emits workflow
 commands, and GitHub renders each finding on the changed line, with the
 check's documentation link in the annotation body (7.8). That is the surface
 an author acts on, and it needs no API token: the workflow command is written
 to stdout and GitHub reads it.
 
-**A summary comment does not.** One comment on the pull request, a table per
-changed file, saying what each rule will cost on every evaluation:
+**A summary table.** `ruler check --online --summary <path>` writes one
+markdown table saying what each rule will cost on every evaluation, and `-`
+writes it to stdout:
 
 ```markdown
-| File | Alert | Source | Bytes read | Rows | Duration | Interval |
-| --- | --- | --- | --- | --- | --- | --- |
-| rules/payments/latency.yaml | HighP99Latency | payments_prod | 1.2 GB | 4.1 M | 820ms | 30s |
-| rules/payments/latency.yaml | HighP99Latency | payments_staging | 18 MB | 90 K | 40ms | 30s |
+| File | Alert | Source | Rows | Interval |
+| --- | --- | --- | --- | --- |
+| rules/payments/latency.yaml | HighP99Latency | payments_prod | 4127000 | 30s |
+| rules/payments/latency.yaml | HighP99Latency | payments_staging | 90000 | 30s |
 ```
+
+Posting it is the workflow's job. A job that can comment already holds the
+token to do it, and `gh pr comment --body-file` is one line, so the ruler
+writes a file rather than growing an API client and a mode where it needs
+credentials.
+
+A cell that is not a number says why it is not one, and never says zero. A
+rule nobody was allowed to estimate, a query the server predicts will read no
+part at all, and a source that could not be read are three different facts,
+and all three are different from a rule that reads nothing. The middle one is
+its own answer because an empty `EXPLAIN ESTIMATE` is what an empty table, a
+fully pruned window and a metadata-only count all return.
 
 The row key is the rule **and** the source, never the rule alone. A rule
 matches sources by label and evaluates against each one, so a rule that is
@@ -950,15 +973,17 @@ changes somebody's mind, and that arithmetic is the same one the cost check
 in 7.3 performs.
 
 **Estimated before measured.** `EXPLAIN ESTIMATE` returns predicted rows,
-parts and marks without executing anything, so the table can exist at tier 1,
-cost nothing, and read no data. `rule/cost` already asks that question per
+parts and marks without executing anything, so the table exists at tier 1,
+costs nothing, and reads no data. `rule/cost` already asks that question per
 rule and per source, so the table is that output arranged rather than a second
-thing to build. Measured numbers are better, and they need an
-evaluation to measure: rows and bytes read come from the driver's progress
-callback (8.2), which means tier 2. Ship the estimated table first. A
-predicted number that is wrong by an order of magnitude still separates a rule
-reading a terabyte from one reading a megabyte, which is the decision being
-supported.
+thing built: the estimate is carried out of the inspection that already made
+it, and the only difference is that the table wants the number for a rule
+within its ceilings too, including one whose `rule/cost` is off. Measured
+numbers are better, and they need an evaluation to measure: rows and bytes
+read come from the driver's progress callback (8.2), which means tier 2. The
+estimated table ships first. A predicted number that is wrong by an order of
+magnitude still separates a rule reading a terabyte from one reading a
+megabyte, which is the decision being supported.
 
 **Duration is the weakest column and goes last.** Wall clock moves with
 cluster load, cache state and CI concurrency, so the same rule timed twice can

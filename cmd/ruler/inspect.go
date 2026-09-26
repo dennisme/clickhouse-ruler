@@ -18,9 +18,17 @@ import (
 //
 // Per source, not once per rule: a rule spanning an estate is checked against
 // every cluster it will run on, which is also how a source that disagrees
-// with the others shows up at all (spec 6.10).
-func inspectRules(ctx context.Context, set *ruleset.Set, root *policy.Policy, sampling bool) []lint.Problem {
+// with the others shows up at all (spec 6.10). That pairing is also the row
+// key of the cost table, which is why the rows are built here rather than
+// reassembled from findings afterwards (spec 7.10).
+func inspectRules(
+	ctx context.Context,
+	set *ruleset.Set,
+	root *policy.Policy,
+	sampling, summarising bool,
+) ([]lint.Problem, []lint.SummaryRow) {
 	var problems []lint.Problem
+	var rows []lint.SummaryRow
 
 	// One instant for the whole pass, so a long run cannot expire an
 	// exemption halfway through and report the same rule two ways.
@@ -38,20 +46,24 @@ func inspectRules(ctx context.Context, set *ruleset.Set, root *policy.Policy, sa
 			merged := policy.Merge(root, src.Policy)
 
 			checks := checksFromPolicy(merged, r, src)
+			checks.ReportCost = summarising
 
 			q, err := querierFor(queriers, src)
 			if err != nil {
 				problems = append(problems, inspectionFailed(r, src.Name, err))
+				rows = appendRow(rows, summarising, r, src, nil)
 				continue
 			}
 
-			findings, err := q.Inspect(ctx, r.Rule, attribution(r), checks)
+			inspection, err := q.Inspect(ctx, r.Rule, attribution(r), checks)
 			if err != nil {
 				problems = append(problems, inspectionFailed(r, src.Name, err))
+				rows = appendRow(rows, summarising, r, src, nil)
 				continue
 			}
-			problems = append(problems,
-				inspectionProblems(r.File, r.Alert, r.Line(), src, merged, findings, now)...)
+			problems = append(problems, inspectionProblems(
+				r.File, r.Alert, r.Line(), src, merged, inspection.Findings, now)...)
+			rows = appendRow(rows, summarising, r, src, inspection.Cost)
 
 			if !sampling {
 				continue
@@ -72,7 +84,23 @@ func inspectRules(ctx context.Context, set *ruleset.Set, root *policy.Policy, sa
 				inspectionProblems(r.File, r.Alert, r.Line(), src, merged, sampled, now)...)
 		}
 	}
-	return problems
+	return problems, rows
+}
+
+// appendRow keeps a rule that could not be read in the table. A row that
+// vanishes when the source was unreachable reads as a rule nobody changed,
+// which is the opposite of what happened (spec 7.10).
+func appendRow(
+	rows []lint.SummaryRow,
+	summarising bool,
+	r ruleset.Rule,
+	src source.Source,
+	cost *query.CostEstimate,
+) []lint.SummaryRow {
+	if !summarising {
+		return rows
+	}
+	return append(rows, summaryRow(r, src, cost))
 }
 
 // samplingFromPolicy translates the resolved policy into what a sample should

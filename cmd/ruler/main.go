@@ -79,6 +79,8 @@ func check(args []string, stdout, stderr io.Writer) int {
 		"also run the checks that need a ClickHouse connection, connecting as each source's own user")
 	sample := fs.Bool("sample", false,
 		"also run the checks that read rows, which implies -online")
+	summary := fs.String("summary", "",
+		"write a markdown table of what each rule reads to this path, - for stdout, which needs -online")
 
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
@@ -91,6 +93,14 @@ func check(args []string, stdout, stderr io.Writer) int {
 
 	if err := lint.Format(io.Discard, *format, nil); err != nil {
 		printf(stderr, "%s\n", err)
+		return exitUsage
+	}
+
+	// The table's numbers come from EXPLAIN ESTIMATE, which needs a cluster
+	// to ask. Offline there is nothing to put in it, and an empty table would
+	// read as an estate where every rule is free (spec 7.10).
+	if *summary != "" && !*online && !*sample {
+		printf(stderr, "%s\n", "--summary needs --online: the cost of a rule is a question for the cluster it runs on")
 		return exitUsage
 	}
 
@@ -123,7 +133,15 @@ func check(args []string, stdout, stderr io.Writer) int {
 
 		// Rules are the other way round: only the sources they matched, since
 		// a rule is read through the cluster it will run on.
-		problems = append(problems, inspectRules(ctx, set, root, *sample)...)
+		inspected, rows := inspectRules(ctx, set, root, *sample, *summary != "")
+		problems = append(problems, inspected...)
+
+		if *summary != "" {
+			if err := writeSummary(*summary, rows, stdout); err != nil {
+				printf(stderr, "%s\n", err)
+				return exitUsage
+			}
+		}
 	}
 
 	if err := lint.Format(stdout, *format, problems); err != nil {
