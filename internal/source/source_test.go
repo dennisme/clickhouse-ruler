@@ -67,6 +67,9 @@ func TestParseValidFile(t *testing.T) {
 	if traces.MaxRows != 500 {
 		t.Errorf("max_rows = %d, want 500", traces.MaxRows)
 	}
+	if traces.MaxConcurrentQueries != 4 {
+		t.Errorf("max_concurrent_queries = %d, want 4", traces.MaxConcurrentQueries)
+	}
 }
 
 // The trailing newline `echo secret > file` leaves behind is not part of the
@@ -128,6 +131,11 @@ func TestParseAppliesDefaults(t *testing.T) {
 	if logs.MaxMemoryUsage != DefaultMaxMemoryUsage {
 		t.Errorf("max_memory_usage = %d, want %d", logs.MaxMemoryUsage, DefaultMaxMemoryUsage)
 	}
+	// The one cap with no default: a source says nothing and the ruler-wide
+	// query concurrency limit is the only thing bounding it.
+	if logs.MaxConcurrentQueries != 0 {
+		t.Errorf("max_concurrent_queries = %d, want 0 (unbounded)", logs.MaxConcurrentQueries)
+	}
 }
 
 func TestParseReportsProblems(t *testing.T) {
@@ -171,8 +179,12 @@ func TestParseReportsProblems(t *testing.T) {
 			Text: "max_rows must not be negative, got -5",
 		},
 		{
-			Line: 57, Subject: "otel_traces", Check: "source/name",
-			Text: `duplicate source name "otel_traces", first defined on line 51`,
+			Line: 51, Subject: "bad_numbers", Check: "source/max-concurrent-queries",
+			Text: "max_concurrent_queries must not be negative, got -2",
+		},
+		{
+			Line: 58, Subject: "otel_traces", Check: "source/name",
+			Text: `duplicate source name "otel_traces", first defined on line 52`,
 		},
 	}
 	for i := range want {

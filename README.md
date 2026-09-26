@@ -127,8 +127,8 @@ Working:
   default to warnings an operator raises in `ruler.yaml` or per source, and
   `--explain` names the file that set each one.
 - Offline checks: rule files parsed with a line number on every finding and
-  strict unknown-field rejection, eleven checks on rules and twelve on the
-  sources file, whose secrets come from a file or the environment.
+  strict unknown-field rejection, checks on rules and on the sources file,
+  whose secrets come from a file or the environment.
 - `--online` checks, which read no rows: the query as ClickHouse itself parsed
   it rather than as text, the result columns it will really produce, and what
   one evaluation is predicted to read against configurable ceilings.
@@ -141,8 +141,8 @@ Working:
 - Per-source exemptions, with a stated reason and an expiry date that fails
   the build once it passes. Rule files cannot carry one.
 - `ruler run`: groups ticked on their own intervals and staggered, rules and
-  sources evaluated concurrently under a shared query limit, the alert state
-  machine, annotation templating, Alertmanager delivery with a resend cadence
+  sources evaluated concurrently under a ruler-wide query limit with an
+  optional per-source limit inside it, the alert state machine, annotation templating, Alertmanager delivery with a resend cadence
   and its own expiry, resolved alerts retried, and a shutdown that does not
   cut an evaluation off.
 - Metrics on `/metrics`, `/-/healthy` for the process and a `/-/ready` that

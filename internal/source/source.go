@@ -65,6 +65,20 @@ type Source struct {
 	MaxExecutionTime time.Duration
 	MaxMemoryUsage   int
 
+	// MaxConcurrentQueries bounds how many of this ruler's queries may be in
+	// flight against this cluster at once, inside the ruler-wide limit
+	// (spec 6.11). It is what keeps one slow cluster from holding every
+	// global slot while clusters that are perfectly healthy queue behind it.
+	//
+	// Deliberately without a default. Any number picked here would be either
+	// at or above the ruler-wide limit, where it does nothing, or below it,
+	// where it silently lowers throughput for the single-source deployment
+	// that is the common case and has nothing to protect itself from. Zero
+	// means this source is bounded only by the ruler-wide limit, which is
+	// the honest answer until an operator has read
+	// clickhouse_ruler_query_queue_wait_seconds and decided otherwise.
+	MaxConcurrentQueries int
+
 	// Labels describe what this source is. They do two jobs that do not
 	// conflict: a rule's Sources selector matches against them, and they are
 	// written onto every alert the source produces (spec 6.10, 6.10.1).
@@ -202,6 +216,8 @@ func parseSource(r *lint.Reader, n *yaml.Node, env func(string) (string, bool), 
 			s.MaxExecutionTime, _ = r.Duration(e.Value, "max_execution_time")
 		case "max_memory_usage":
 			s.MaxMemoryUsage, _ = r.Int(e.Value, "max_memory_usage")
+		case "max_concurrent_queries":
+			s.MaxConcurrentQueries, _ = r.Int(e.Value, "max_concurrent_queries")
 		case "labels":
 			s.Labels = r.StringMap(e.Value, "labels", "labels", s.lines.Keys())
 		case "checks":
@@ -354,5 +370,9 @@ func (s Source) checkQueryTarget(r *lint.Reader) {
 	if s.MaxMemoryUsage < 0 {
 		r.Add(s.lines.Of("max_memory_usage"), lint.CheckSourceMaxMemory,
 			lint.SeverityError, "max_memory_usage must not be negative, got %d", s.MaxMemoryUsage)
+	}
+	if s.MaxConcurrentQueries < 0 {
+		r.Add(s.lines.Of("max_concurrent_queries"), lint.CheckSourceMaxConcurrency,
+			lint.SeverityError, "max_concurrent_queries must not be negative, got %d", s.MaxConcurrentQueries)
 	}
 }

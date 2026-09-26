@@ -48,6 +48,7 @@ sources:
     timestamp_column: Timestamp
     evaluation_delay: -1m
     max_rows: -5
+    max_concurrent_queries: -2
   - name: otel_traces
     address: clickhouse:9000
     database: otel

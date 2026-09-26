@@ -53,6 +53,13 @@ type AnnotationError struct {
 	Err        error
 }
 
+// SourceWait is how long one source's query spent queued behind that
+// source's own concurrency limit before it ran.
+type SourceWait struct {
+	Source string
+	Wait   time.Duration
+}
+
 // Result reports what one evaluation of a rule did, for the caller to fold
 // into metrics and logs.
 type Result struct {
@@ -68,6 +75,14 @@ type Result struct {
 	// template would not render, deduplicated by alert.State across however
 	// many instances the rule produced (spec 8.3).
 	AnnotationErrors []AnnotationError
+
+	// QueueWaits holds one entry per source that has a concurrency limit of
+	// its own, in source order, with the time its query spent waiting for a
+	// slot. Sources bounded only by the ruler-wide cap are absent: they never
+	// queue per source, and a zero wait for them would read as a limit doing
+	// something. This is the signal that says a limit is set too low, and
+	// without it the knob cannot be sized (spec 6.11).
+	QueueWaits []SourceWait
 
 	// SendError is set when Cadence failed to reach Alertmanager. The alert
 	// state has already been advanced regardless: a notification failure is
@@ -93,10 +108,10 @@ type RuleEval struct {
 	cadence  *notify.Cadence
 	states   map[string]*alert.State
 
-	// queries bounds how many of this rule's sources are queried at once,
-	// shared with every other rule so the limit is the ruler's, not one
-	// rule's.
-	queries semaphore
+	// limits bound how many of this rule's sources are queried at once,
+	// shared with every other rule so the ruler-wide cap is the ruler's and
+	// each source's cap is that cluster's, not one rule's.
+	limits *queryLimits
 }
 
 // NewRuleEval builds the per-source state up front, from the sources the
@@ -104,12 +119,12 @@ type RuleEval struct {
 // resolvedRetention is how long each source's state keeps a resolved instance
 // so its notification can be retried, derived from how long delivery can take
 // rather than picked (spec 6.5).
-func NewRuleEval(r ruleset.Rule, queriers map[string]Querier, cadence *notify.Cadence, queries semaphore, resolvedRetention time.Duration) *RuleEval {
+func NewRuleEval(r ruleset.Rule, queriers map[string]Querier, cadence *notify.Cadence, limits *queryLimits, resolvedRetention time.Duration) *RuleEval {
 	states := make(map[string]*alert.State, len(r.Sources))
 	for _, src := range r.Sources {
 		states[src.Name] = alert.New(r.Rule, r.Labels, src, resolvedRetention)
 	}
-	return &RuleEval{rule: r, queriers: queriers, cadence: cadence, states: states, queries: queries}
+	return &RuleEval{rule: r, queriers: queriers, cadence: cadence, states: states, limits: limits}
 }
 
 // attribution is what this rule's queries are recorded against: its group,
@@ -125,7 +140,8 @@ func (e *RuleEval) attribution() query.Attribution {
 // into alerts; its state is untouched and the next evaluation picks up where
 // the last successful one left off.
 //
-// Sources are queried concurrently, bounded by the shared semaphore. A rule
+// Sources are queried concurrently, bounded by the shared limits: the
+// ruler-wide cap, and inside it whatever cap the source itself sets. A rule
 // spanning an estate would otherwise cost the sum of every cluster's latency
 // on every tick, and a group's tick is the sum of its rules, so the slowest
 // cluster sets the pace for everything behind it.
@@ -141,6 +157,11 @@ func (e *RuleEval) Evaluate(ctx context.Context, now time.Time) Result {
 		alerts      []alert.Alert
 		err         error
 		annotations []alert.AnnotationError
+
+		// acquired says the query got its source slot, so wait is a real
+		// measurement rather than the zero value of a query that never ran.
+		acquired bool
+		wait     time.Duration
 	}
 	results := make([]sourceResult, len(e.rule.Sources))
 
@@ -156,7 +177,7 @@ func (e *RuleEval) Evaluate(ctx context.Context, now time.Time) Result {
 		go func(i int, name string, q Querier) {
 			defer wg.Done()
 
-			release, ok := e.queries.acquire(ctx)
+			release, wait, ok := e.limits.acquire(ctx, name)
 			if !ok {
 				// Shutdown arrived while this query was still queued behind
 				// the limit. Leaving state untouched is the same outcome as
@@ -164,6 +185,7 @@ func (e *RuleEval) Evaluate(ctx context.Context, now time.Time) Result {
 				results[i].err = errQueueAbandoned
 				return
 			}
+			results[i].acquired, results[i].wait = true, wait
 			samples, err := q.Run(ctx, e.rule.Rule, e.attribution(), now)
 			release()
 
@@ -191,6 +213,9 @@ func (e *RuleEval) Evaluate(ctx context.Context, now time.Time) Result {
 	var current []alert.Alert
 	for i, r := range results {
 		name := e.rule.Sources[i].Name
+		if r.acquired && e.limits.boundsSource(name) {
+			res.QueueWaits = append(res.QueueWaits, SourceWait{Source: name, Wait: r.wait})
+		}
 		for _, a := range r.annotations {
 			res.AnnotationErrors = append(res.AnnotationErrors,
 				AnnotationError{Source: name, Annotation: a.Annotation, Err: a.Err})

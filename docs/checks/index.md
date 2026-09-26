@@ -38,6 +38,7 @@ Generated from the check table in `internal/lint/checks.go`. Edit the table, the
 | [`source/database`](source.md#source-database) | fixed, always `error` | a source naming no database |
 | [`source/evaluation-delay`](source.md#source-evaluation-delay) | fixed, always `error` | a negative evaluation delay |
 | [`source/exemption`](source.md#source-exemption) | fixed, always `error` | an exemption that is malformed, names a check nobody can exempt, or has expired |
+| [`source/max-concurrent-queries`](source.md#source-max-concurrent-queries) | fixed, always `error` | a concurrent query cap that is negative |
 | [`source/max-execution-time`](source.md#source-max-execution-time) | fixed, always `error` | an execution time cap that is not positive |
 | [`source/max-memory-usage`](source.md#source-max-memory-usage) | fixed, always `error` | a memory cap that is not positive |
 | [`source/max-rows`](source.md#source-max-rows) | fixed, always `error` | a row cap that is not a positive number |

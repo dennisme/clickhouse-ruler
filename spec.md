@@ -217,14 +217,7 @@ That is the property we are copying. Everything else follows from it.
    which is a confusing way to find out. A check comparing matched sources'
    tables and column types is the obvious fix and needs tier 1 first. See
    6.10.
-7. **Query concurrency is bounded globally, not per source.** A slow cluster
-   holds slots that rules against every other cluster then queue behind, so an
-   outage on one source delays evaluation of sources that are perfectly
-   healthy. A per-source limit is the shape this probably wants, and sizing it
-   needs per-source capacity that nothing collects yet. See 6.11 for the
-   current behaviour and why it was left here.
-
-8. **Nothing checks that two rules cannot produce the same alert.** 7.6
+7. **Nothing checks that two rules cannot produce the same alert.** 7.6
     scopes `rule/name` uniqueness to the group, on the reasoning that group
     labels and `source` already separate two same-named rules in the
     fingerprint. That reasoning is an assumption about how the files happen

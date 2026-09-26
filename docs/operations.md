@@ -110,6 +110,27 @@ not the evaluation succeeded. A query ClickHouse refused outright reports a
 duration and no rows, which is the one case where the counters undercount
 what a rule is costing. `system.query_log` has the full account, below.
 
+### Queries queueing behind a source limit
+
+```promql
+histogram_quantile(0.99, sum by (source, le) (rate(clickhouse_ruler_query_queue_wait_seconds_bucket[5m])))
+```
+
+**Trouble when the wait approaches the interval of the groups reading that
+source.** A source that sets `max_concurrent_queries` holds its extra queries
+in a queue, and that wait is added to every evaluation behind it. Past the
+group interval the queue is what makes iterations missed, not the cluster.
+
+A small, steady wait means the limit is doing its job. A wait that grows means
+either the limit is set too low for the rules pointed at this source, or the
+cluster has slowed down and the limit is now containing that slowness to this
+one source, which is what it is for. The query duration above says which:
+duration flat and wait climbing is too low a limit, both climbing is the
+cluster.
+
+Only sources that set `max_concurrent_queries` appear here. A source that sets
+nothing is bounded by `--query-concurrency` alone and never queues per source.
+
 ### Rules that will never run
 
 ```promql

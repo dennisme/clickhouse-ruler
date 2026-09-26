@@ -64,6 +64,7 @@ const (
 	CheckSourceMaxRows         = "source/max-rows"
 	CheckSourceMaxExecution    = "source/max-execution-time"
 	CheckSourceMaxMemory       = "source/max-memory-usage"
+	CheckSourceMaxConcurrency  = "source/max-concurrent-queries"
 	CheckSourceExemption       = "source/exemption"
 	CheckSourcePrivileges      = "source/privileges"
 
@@ -423,6 +424,10 @@ var checks = []Check{
 	{
 		Name: CheckSourceMaxMemory, Spec: "6.7", Fixed: true,
 		Summary: "a memory cap that is not positive",
+	},
+	{
+		Name: CheckSourceMaxConcurrency, Spec: "6.11", Fixed: true,
+		Summary: "a concurrent query cap that is negative",
 	},
 
 	// Fixed because an exemption is the one thing that loosens, so a

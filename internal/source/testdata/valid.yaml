@@ -8,6 +8,7 @@ sources:
     timestamp_column: Timestamp
     evaluation_delay: 30s
     max_rows: 500
+    max_concurrent_queries: 4
   - name: otel_logs
     address: clickhouse:9000
     database: otel_logs
