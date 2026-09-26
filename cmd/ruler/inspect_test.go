@@ -319,3 +319,113 @@ func TestSamplingFromPolicyDefaults(t *testing.T) {
 		t.Error("RequireRows = true by default, which would report every rule with no data yet")
 	}
 }
+
+// The ceilings the replay reads before it runs anything: how many alerts the
+// range may hold, and what the whole replay may be predicted to read.
+func TestBackfillFromPolicyReadsTheCeilings(t *testing.T) {
+	merged := policy.Merge(&policy.Policy{Checks: map[string]policy.Setting{
+		lint.CheckRuleAlertCount: {
+			Severity: lint.SeverityWarning,
+			Keys:     []string{lint.LimitAlerts + ":25", lint.LimitRowsRead + ":500000"},
+		},
+	}})
+
+	r := ruleset.Rule{Group: rule.Group{Interval: time.Minute, Labels: map[string]string{"team": "payments"}}}
+	r.Labels = map[string]string{"team": "payments"}
+
+	got, wanted := backfillFromPolicy(merged, r, 6*time.Hour, 0)
+	if !wanted {
+		t.Fatal("the replay is not wanted, but the check is on")
+	}
+	if got.MaxAlerts != 25 {
+		t.Errorf("MaxAlerts = %d, want 25", got.MaxAlerts)
+	}
+	if got.MaxRowsRead != 500000 {
+		t.Errorf("MaxRowsRead = %d, want 500000", got.MaxRowsRead)
+	}
+	if got.Range != 6*time.Hour {
+		t.Errorf("Range = %s, want 6h", got.Range)
+	}
+	if got.GroupLabels["team"] != "payments" {
+		t.Errorf("GroupLabels = %v, want the rule's effective labels", got.GroupLabels)
+	}
+}
+
+// A replay reads rows, so an operator who turned the check off is not asked to
+// pay for one.
+func TestBackfillFromPolicyRefusesWhenTheCheckIsOff(t *testing.T) {
+	merged := policy.Merge(&policy.Policy{Checks: map[string]policy.Setting{
+		lint.CheckRuleAlertCount: {Severity: lint.SeverityOff},
+	}})
+
+	if _, wanted := backfillFromPolicy(merged, ruleset.Rule{}, 24*time.Hour, 0); wanted {
+		t.Error("the replay is wanted, but the check is off")
+	}
+}
+
+// The step is how often the rule would have been evaluated, so it comes from
+// the group. The flag overrides it, and a rule whose group set no interval
+// falls back to the span the rule itself reads.
+func TestBackfillStep(t *testing.T) {
+	cases := []struct {
+		name string
+		r    ruleset.Rule
+		flag time.Duration
+		want time.Duration
+	}{
+		{
+			name: "the group's interval",
+			r:    withGroupInterval(time.Minute, 10*time.Minute),
+			want: time.Minute,
+		},
+		{
+			name: "the flag wins over the group",
+			r:    withGroupInterval(time.Minute, 10*time.Minute),
+			flag: 30 * time.Minute,
+			want: 30 * time.Minute,
+		},
+		{
+			name: "the rule's window when the group set no interval",
+			r:    withGroupInterval(0, 10*time.Minute),
+			want: 10 * time.Minute,
+		},
+		{
+			name: "the fallback when neither said",
+			r:    withGroupInterval(0, 0),
+			want: backfillStepFallback,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, wanted := backfillFromPolicy(policy.Merge(), tc.r, 24*time.Hour, tc.flag)
+			if !wanted {
+				t.Fatal("the replay is not wanted, but the check ships on")
+			}
+			if got.Step != tc.want {
+				t.Errorf("Step = %s, want %s", got.Step, tc.want)
+			}
+		})
+	}
+}
+
+func withGroupInterval(interval, window time.Duration) ruleset.Rule {
+	r := ruleset.Rule{Group: rule.Group{Interval: interval}}
+	r.Window = window
+	return r
+}
+
+// The shipped ceilings apply when nobody configures one, or a replay would read
+// without limit on its first run.
+func TestBackfillFromPolicyDefaults(t *testing.T) {
+	got, wanted := backfillFromPolicy(policy.Merge(), ruleset.Rule{}, 24*time.Hour, time.Minute)
+	if !wanted {
+		t.Fatal("the replay is not wanted by default, but the check ships on")
+	}
+	if got.MaxAlerts <= 0 {
+		t.Errorf("MaxAlerts = %d, want the shipped ceiling", got.MaxAlerts)
+	}
+	if got.MaxRowsRead == 0 {
+		t.Errorf("MaxRowsRead = %d, want the shipped ceiling", got.MaxRowsRead)
+	}
+}

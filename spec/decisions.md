@@ -57,6 +57,21 @@ and are what the code comments cite.
   ruler is asking, so a shared repository is legitimately unmatched on a ruler
   holding another datacenter's sources, and a rollout may land rules before
   the source for a new cluster. See 6.10 and 10.2.
+- **Backfill replays the rule rather than rewriting it.** A replay runs the
+  rule's own SQL once per evaluation the range holds, re-rendering
+  `{{ .From }}` and `{{ .To }}` a step at a time, and collapses the results
+  through the same alert state machine production uses. The rejected
+  alternative is the bucketed rewrite 7.4 used to describe: one
+  `GROUP BY toStartOfInterval(...)` over the whole range, which scans the data
+  once instead of once per window. It cannot be built from what a rule is. The
+  rewrite needs the predicate, the value expression and the label columns as
+  separate fields, and `expr` is free-form SQL with nothing to extract them
+  from, which is the same reason 7.2 refuses to parse SQL ourselves. It is also
+  the only option that reads the data once, so it is the one a second strategy
+  would be, and that is why the seam exists at all: a named type in Go with one
+  implementation, and no `strategy:` key in any file until there is a second
+  one to name. See 7.4.
+
 - **What this project is for.** Keeping ClickHouse alerts in git is a solved
   problem, by operators and Terraform providers. The two gaps left are running
   one service instead of a platform, and checking the query itself. See 1, 3

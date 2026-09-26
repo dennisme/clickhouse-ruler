@@ -332,16 +332,23 @@ const checkWindow = 5 * time.Minute
 // is parsed back as though the author wrote it, so a `now()` of ours would be
 // read as theirs and reported as nondeterministic (spec 6.7.1).
 func renderForCheck(expr string, window time.Duration) (string, error) {
-	t, err := template.New("expr").Option("missingkey=error").Parse(expr)
-	if err != nil {
-		return "", fmt.Errorf("parsing expr template: %w", err)
-	}
-
 	if window <= 0 {
 		window = checkWindow
 	}
 	to := time.Now()
-	from := to.Add(-window)
+
+	return renderBounds(expr, to.Add(-window), to)
+}
+
+// renderBounds is the same substitution over a window the caller chose, for the
+// one check that asks about a window other than the latest: a replay predicts
+// what it will read over a window it is going to read, which is in the past
+// (spec 7.4).
+func renderBounds(expr string, from, to time.Time) (string, error) {
+	t, err := template.New("expr").Option("missingkey=error").Parse(expr)
+	if err != nil {
+		return "", fmt.Errorf("parsing expr template: %w", err)
+	}
 
 	bounds := struct{ From, To string }{
 		From: timestampLiteral(from),

@@ -14,6 +14,7 @@ import (
 
 	"github.com/dennisme/clickhouse-ruler/internal/lint"
 	"github.com/dennisme/clickhouse-ruler/internal/policy"
+	"github.com/dennisme/clickhouse-ruler/internal/query"
 	"github.com/dennisme/clickhouse-ruler/internal/ruleset"
 	"github.com/dennisme/clickhouse-ruler/internal/source"
 )
@@ -79,6 +80,13 @@ func check(args []string, stdout, stderr io.Writer) int {
 		"also run the checks that need a ClickHouse connection, connecting as each source's own user")
 	sample := fs.Bool("sample", false,
 		"also run the checks that read rows, which implies -online")
+	backfill := fs.Bool("backfill", false,
+		"also replay each rule over a past range and report how many alerts it would have produced, "+
+			"which reads rows once per window and implies -online")
+	backfillRange := fs.Duration("backfill-range", query.DefaultBackfillRange,
+		"how far back -backfill reaches")
+	backfillStep := fs.Duration("backfill-step", 0,
+		"the gap between the evaluations -backfill replays, defaulting to the rule's group interval")
 	summary := fs.String("summary", "",
 		"write a markdown table of what each rule reads to this path, - for stdout, which needs -online")
 
@@ -99,7 +107,7 @@ func check(args []string, stdout, stderr io.Writer) int {
 	// The table's numbers come from EXPLAIN ESTIMATE, which needs a cluster
 	// to ask. Offline there is nothing to put in it, and an empty table would
 	// read as an estate where every rule is free (spec 7.10).
-	if *summary != "" && !*online && !*sample {
+	if *summary != "" && !*online && !*sample && !*backfill {
 		printf(stderr, "%s\n", "--summary needs --online: the cost of a rule is a question for the cluster it runs on")
 		return exitUsage
 	}
@@ -120,10 +128,12 @@ func check(args []string, stdout, stderr io.Writer) int {
 	set, ruleProblems := ruleset.Load(dir, sources, root)
 	problems = append(problems, ruleProblems...)
 
-	// Sampling implies a connection: the checks that read rows need the columns
-	// and types the metadata checks resolve, so asking for one without the other
-	// would leave nothing to sample against (spec 7.3).
-	if *online || *sample {
+	// Reading rows implies a connection, whether once or once per window: the
+	// checks that read them need the columns and types the metadata checks
+	// resolve, so asking for one without the other would leave nothing to read
+	// against (spec 7.3). Neither implies the other, because a replay is a
+	// larger read than a sample and is consented to on its own.
+	if *online || *sample || *backfill {
 		ctx := context.Background()
 
 		// Every source in the file, not only the ones a rule matched. The
@@ -133,7 +143,13 @@ func check(args []string, stdout, stderr io.Writer) int {
 
 		// Rules are the other way round: only the sources they matched, since
 		// a rule is read through the cluster it will run on.
-		inspected, rows := inspectRules(ctx, set, *sample, *summary != "")
+		inspected, rows := inspectRules(ctx, set, inspectOptions{
+			sampling:      *sample,
+			backfilling:   *backfill,
+			summarising:   *summary != "",
+			backfillRange: *backfillRange,
+			backfillStep:  *backfillStep,
+		})
 		problems = append(problems, inspected...)
 
 		if *summary != "" {

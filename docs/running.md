@@ -22,6 +22,31 @@ query is costs a parse, while sampling runs statements against the source's
 data. The sample is bounded by `max-sample-rows` and reads as the source's own
 user, so row policies apply to it.
 
+## Replaying a rule over the past
+
+`--backfill` replays every rule over a past range and reports how many alerts
+it would have produced, which is
+[`rule/alert-count`](checks/rule.md#rule-alert-count). It implies `--online`
+and is its own flag rather than part of `--sample`: a sample is one read per
+rule and a replay is one per window, so it is consented to separately.
+
+```bash
+ruler check --backfill --sources rules/sources.yaml rules/
+ruler check --backfill --backfill-range 168h --backfill-step 5m \
+  --sources rules/sources.yaml rules/
+```
+
+`--backfill-range` is how far back the replay reaches, 24h by default.
+`--backfill-step` is the gap between the evaluations it replays, defaulting to
+each rule's own group interval, which is the cadence its `for` timer is
+measured in.
+
+Both are durations on the command line rather than keys in `ruler.yaml`,
+because a policy ceiling is a whole number and these are spans. What does
+belong in the policy file is the two ceilings: `max-alerts`, which the count is
+measured against, and `max-rows-read`, which the whole replay's predicted total
+is measured against before any of it runs.
+
 ## The cost table
 
 `--summary` writes a markdown table of what every rule is predicted to read,

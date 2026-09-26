@@ -565,8 +565,8 @@ changed on disk, which needs re-validation on a timer rather than on a signal.
 `ruler watch` does not exist, so loaded rules are not re-validated on a timer
 and `clickhouse_ruler_problem` is not exported.
 
-Next: watch mode, which brings that timer and the last metric in 8.2, then tier
-3 backfill (7.4).
+Next: watch mode, which brings that timer and the last metric in 8.2. Tier 3
+backfill is in, behind `ruler check --backfill` (7.4).
 
 The validation package is already re-runnable against loaded rules, so watch
 mode is a caller rather than a rewrite.

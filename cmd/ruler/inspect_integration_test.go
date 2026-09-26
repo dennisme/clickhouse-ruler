@@ -304,3 +304,34 @@ func TestCostSummaryReportsARuleWithNoCostCeiling(t *testing.T) {
 		t.Errorf("the cost check being off left the row without a number:\n%s", data)
 	}
 }
+
+// The replay is behind its own flag, and a rule within every ceiling reports
+// nothing: a finding on every rule would read as a report rather than a finding
+// (spec 7.4).
+func TestCheckBackfillIsQuietForARuleWithinTheCeilings(t *testing.T) {
+	code, out := checkRule(t, workingExpr, "--backfill", "--backfill-range", "10m", "--backfill-step", "1m")
+
+	if code != exitOK {
+		t.Errorf("exit = %d, want %d: %s", code, exitOK, out)
+	}
+	for _, check := range []string{"rule/alert-count", "rule/inspect"} {
+		if strings.Contains(out, check) {
+			t.Errorf("output reports %s for a rule inside every ceiling: %s", check, out)
+		}
+	}
+}
+
+// A range longer than the table's retention reads windows whose rows have been
+// deleted, so the count under reports and the finding says so. The flags are
+// what carry the range and the step to the check.
+func TestCheckBackfillWarnsPastTheTTL(t *testing.T) {
+	// The schema in deploy/clickhouse/init TTLs at three days.
+	code, out := checkRule(t, workingExpr, "--backfill", "--backfill-range", "96h", "--backfill-step", "48h")
+
+	if code != exitOK {
+		t.Errorf("exit = %d, want %d: %s", code, exitOK, out)
+	}
+	if !strings.Contains(out, "rule/alert-count") || !strings.Contains(out, "TTL") {
+		t.Errorf("output does not report the range against the table's TTL: %s", out)
+	}
+}
