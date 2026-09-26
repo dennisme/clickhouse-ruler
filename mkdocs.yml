@@ -43,6 +43,9 @@ markdown_extensions:
 
 nav:
   - Home: index.md
+  - Running it:
+      - Operations: operations.md
+      - Deployment topologies: deployment.md
   - Checks:
       - Every check: checks/index.md
       - Rule checks: checks/rule.md

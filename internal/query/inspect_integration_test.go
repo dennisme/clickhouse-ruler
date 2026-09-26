@@ -28,7 +28,7 @@ func inspect(t *testing.T, expr string, c Checks) []Finding {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	got, err := q.Inspect(ctx, rule.Rule{Alert: "Probe", Expr: expr}, c)
+	got, err := q.Inspect(ctx, rule.Rule{Alert: "Probe", Expr: expr}, testGroup, c)
 	if err != nil {
 		t.Fatalf("Inspect: %v", err)
 	}
@@ -396,7 +396,7 @@ func TestInspectReportsAnAnnotationReadingNothing(t *testing.T) {
 		},
 	}
 
-	got, err := q.Inspect(ctx, r, describeChecks())
+	got, err := q.Inspect(ctx, r, testGroup, describeChecks())
 	if err != nil {
 		t.Fatalf("Inspect: %v", err)
 	}
@@ -448,7 +448,7 @@ func TestInspectSaysNothingAboutAWorkingRuleWithAnnotations(t *testing.T) {
 		Annotations: map[string]string{"summary": "{{ .ServiceName }} at {{ .value }} on {{ .source }}"},
 	}
 
-	got, err := q.Inspect(ctx, r, describeChecks())
+	got, err := q.Inspect(ctx, r, testGroup, describeChecks())
 	if err != nil {
 		t.Fatalf("Inspect: %v", err)
 	}

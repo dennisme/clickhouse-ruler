@@ -95,9 +95,15 @@ type Complexity struct {
 // Nothing here executes the rule: `EXPLAIN AST` parses it and returns the
 // tree without reading a row, and refuses a second statement itself. An error
 // means the ruler could not ask, and is never a finding about the rule.
-func (q *Querier) Inspect(ctx context.Context, r rule.Rule, c Checks) ([]Finding, error) {
+func (q *Querier) Inspect(ctx context.Context, r rule.Rule, group string, c Checks) ([]Finding, error) {
 	ctx, cancel := context.WithTimeout(ctx, inspectTimeout)
 	defer cancel()
+
+	// Every statement below inherits the comment, so a check that cost the
+	// cluster something is findable as the rule that asked for it: reading
+	// more than expected at check time is the same question as reading more
+	// than expected at evaluation time (spec 8.5).
+	ctx = clickhouse.Context(ctx, clickhouse.WithSettings(withLogComment(nil, group, r.Alert)))
 
 	sql, err := renderForCheck(r.Expr)
 	if err != nil {

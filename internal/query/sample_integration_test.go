@@ -36,7 +36,7 @@ func TestSampleFindsAPresentKey(t *testing.T) {
 	seed(t, q, []span{{at: anchor.Add(-time.Minute), service: "checkout", duration: 1}})
 
 	got, err := q.Sample(context.Background(),
-		sampleRule(selectWithKey("ResourceAttributes", presentKey)), SampleChecks{}, anchor)
+		sampleRule(selectWithKey("ResourceAttributes", presentKey)), testGroup, SampleChecks{}, anchor)
 	if err != nil {
 		t.Fatalf("Sample: %v", err)
 	}
@@ -52,7 +52,7 @@ func TestSampleReportsAnAbsentKey(t *testing.T) {
 	seed(t, q, []span{{at: anchor.Add(-time.Minute), service: "checkout", duration: 1}})
 
 	got, err := q.Sample(context.Background(),
-		sampleRule(selectWithKey("ResourceAttributes", absentKey)), SampleChecks{}, anchor)
+		sampleRule(selectWithKey("ResourceAttributes", absentKey)), testGroup, SampleChecks{}, anchor)
 	if err != nil {
 		t.Fatalf("Sample: %v", err)
 	}
@@ -80,7 +80,7 @@ func TestSampleSaysNothingWhenTheWindowIsEmpty(t *testing.T) {
 	empty := anchor.Add(-30 * 24 * time.Hour)
 
 	got, err := q.Sample(context.Background(),
-		sampleRule(selectWithKey("ResourceAttributes", absentKey)), SampleChecks{}, empty)
+		sampleRule(selectWithKey("ResourceAttributes", absentKey)), testGroup, SampleChecks{}, empty)
 	if err != nil {
 		t.Fatalf("Sample: %v", err)
 	}
@@ -97,7 +97,7 @@ func TestSampleReportsAnEmptyWindowWhenRowsAreRequired(t *testing.T) {
 
 	got, err := q.Sample(context.Background(),
 		sampleRule(selectWithKey("ResourceAttributes", presentKey)),
-		SampleChecks{RequireRows: true}, empty)
+		testGroup, SampleChecks{RequireRows: true}, empty)
 	if err != nil {
 		t.Fatalf("Sample: %v", err)
 	}
@@ -121,7 +121,7 @@ func TestSampleResolvesAKeyThroughATableAlias(t *testing.T) {
 		"WHERE t.Timestamp >= {{ .From }} AND t.Timestamp < {{ .To }} " +
 		"AND t.ResourceAttributes['" + absentKey + "'] != '' GROUP BY t.ServiceName"
 
-	got, err := q.Sample(context.Background(), sampleRule(expr), SampleChecks{}, anchor)
+	got, err := q.Sample(context.Background(), sampleRule(expr), testGroup, SampleChecks{}, anchor)
 	if err != nil {
 		t.Fatalf("Sample: %v", err)
 	}
@@ -148,7 +148,7 @@ func TestSampleIgnoresAnIndexIntoANestedColumn(t *testing.T) {
 		"WHERE Timestamp >= {{ .From }} AND Timestamp < {{ .To }} " +
 		"AND length(`Events.Name`) > 0 AND `Events.Name`[1] != '' GROUP BY ServiceName"
 
-	got, err := q.Sample(context.Background(), sampleRule(expr), SampleChecks{}, anchor)
+	got, err := q.Sample(context.Background(), sampleRule(expr), testGroup, SampleChecks{}, anchor)
 	if err != nil {
 		t.Fatalf("Sample: %v", err)
 	}
@@ -169,7 +169,7 @@ func TestSampleReportsAKeyItCannotCheck(t *testing.T) {
 		"WHERE Timestamp >= {{ .From }} AND Timestamp < {{ .To }} " +
 		"AND ResourceAttributes[concat('payment', '_id')] != '' GROUP BY ServiceName"
 
-	got, err := q.Sample(context.Background(), sampleRule(expr), SampleChecks{}, anchor)
+	got, err := q.Sample(context.Background(), sampleRule(expr), testGroup, SampleChecks{}, anchor)
 	if err != nil {
 		t.Fatalf("Sample: %v", err)
 	}
@@ -190,7 +190,7 @@ func TestSampleSaysNothingAboutARuleWithNoKeys(t *testing.T) {
 	expr := "SELECT ServiceName, count() AS value FROM otel.otel_traces " +
 		"WHERE Timestamp >= {{ .From }} AND Timestamp < {{ .To }} GROUP BY ServiceName"
 
-	got, err := q.Sample(context.Background(), sampleRule(expr), SampleChecks{}, anchor)
+	got, err := q.Sample(context.Background(), sampleRule(expr), testGroup, SampleChecks{}, anchor)
 	if err != nil {
 		t.Fatalf("Sample: %v", err)
 	}

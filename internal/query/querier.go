@@ -66,7 +66,10 @@ func settings(src source.Source) clickhouse.Settings {
 }
 
 // Run evaluates one rule and returns a sample per returned row.
-func (q *Querier) Run(ctx context.Context, r rule.Rule, now time.Time) ([]alert.Sample, error) {
+//
+// group is the rule's group, which only the caller knows and which the query
+// carries into system.query_log (spec 8.5).
+func (q *Querier) Run(ctx context.Context, r rule.Rule, group string, now time.Time) ([]alert.Sample, error) {
 	sql, err := render(r.Expr)
 	if err != nil {
 		return nil, fmt.Errorf("rule %q: %w", r.Alert, err)
@@ -78,7 +81,7 @@ func (q *Querier) Run(ctx context.Context, r rule.Rule, now time.Time) ([]alert.
 			"from": from.UTC().Format("2006-01-02 15:04:05.000"),
 			"to":   to.UTC().Format("2006-01-02 15:04:05.000"),
 		}),
-		clickhouse.WithSettings(settings(q.src)),
+		clickhouse.WithSettings(withLogComment(settings(q.src), group, r.Alert)),
 	)
 
 	rows, err := q.conn.Query(ctx, sql)

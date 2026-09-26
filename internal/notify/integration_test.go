@@ -156,7 +156,7 @@ func TestEndToEndFiringAlertReachesAlertmanager(t *testing.T) {
 		}
 		defer func() { _ = q.Close() }()
 
-		samples, err := q.Run(ctx, r.Rule, now)
+		samples, err := q.Run(ctx, r.Rule, r.GroupID(), now)
 		if err != nil {
 			t.Fatalf("running rule against %s: %v", src.Name, err)
 		}

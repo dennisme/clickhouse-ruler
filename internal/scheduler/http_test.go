@@ -1,6 +1,8 @@
 package scheduler
 
 import (
+	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"regexp"
@@ -15,7 +17,7 @@ func serveMetrics(t *testing.T, reg *prometheus.Registry) string {
 
 	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
 	rec := httptest.NewRecorder()
-	Handler(reg).ServeHTTP(rec, req)
+	Handler(reg, func(context.Context) error { return nil }).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("GET /metrics = %d, want 200", rec.Code)
@@ -78,20 +80,59 @@ func TestMetricsAreNamespacedToThisRuler(t *testing.T) {
 	}
 }
 
-// Spec 8.1 fixes the surface at three endpoints. Health and readiness exist so
-// a supervisor can tell a process that is up from one that is ready.
-func TestHealthEndpoints(t *testing.T) {
-	handler := Handler(prometheus.NewRegistry())
+func get(t *testing.T, handler http.Handler, path string) *httptest.ResponseRecorder {
+	t.Helper()
 
-	for _, path := range []string{"/-/healthy", "/-/ready"} {
-		rec := httptest.NewRecorder()
-		handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+	return rec
+}
 
-		if rec.Code != http.StatusOK {
-			t.Errorf("GET %s = %d, want 200", path, rec.Code)
-		}
-		if got := rec.Body.String(); got != "ok" {
-			t.Errorf("GET %s body = %q, want %q", path, got, "ok")
-		}
+// Health is about the process: it is alive and its listener is serving, which
+// is what an unconditional 200 says. A failed health check gets a process
+// restarted, and a ruler that cannot reach a cluster is not a process a
+// restart fixes (spec 8.1).
+func TestHealthIsUnconditional(t *testing.T) {
+	handler := Handler(prometheus.NewRegistry(), func(context.Context) error {
+		return errors.New("no source answering")
+	})
+
+	rec := get(t, handler, "/-/healthy")
+	if rec.Code != http.StatusOK {
+		t.Errorf("GET /-/healthy = %d, want 200 even when the ruler is not ready", rec.Code)
+	}
+	if got := rec.Body.String(); got != "ok" {
+		t.Errorf("GET /-/healthy body = %q, want %q", got, "ok")
+	}
+}
+
+// Readiness is about whether sending traffic here is useful, and it has to be
+// able to say no. A probe that cannot fail turns a rollout of a ruler that
+// reaches no cluster into a successful one (spec 8.1).
+func TestReadinessFailsWhenTheRulerCannotDoItsJob(t *testing.T) {
+	handler := Handler(prometheus.NewRegistry(), func(context.Context) error {
+		return errors.New("no source answering")
+	})
+
+	rec := get(t, handler, "/-/ready")
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("GET /-/ready = %d, want 503", rec.Code)
+	}
+	// The reason, because a probe that says only "not ready" sends whoever
+	// is rolling out to the logs to find out what the ruler already knows.
+	if got := rec.Body.String(); !strings.Contains(got, "no source answering") {
+		t.Errorf("GET /-/ready body = %q, want the reason in it", got)
+	}
+}
+
+func TestReadinessPassesWhenTheRulerCanEvaluate(t *testing.T) {
+	handler := Handler(prometheus.NewRegistry(), func(context.Context) error { return nil })
+
+	rec := get(t, handler, "/-/ready")
+	if rec.Code != http.StatusOK {
+		t.Errorf("GET /-/ready = %d, want 200", rec.Code)
+	}
+	if got := rec.Body.String(); got != "ok" {
+		t.Errorf("GET /-/ready body = %q, want %q", got, "ok")
 	}
 }

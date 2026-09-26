@@ -142,7 +142,7 @@ func run(t *testing.T, q *Querier, r rule.Rule, now time.Time) []alertSample {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	got, err := q.Run(ctx, r, now)
+	got, err := q.Run(ctx, r, testGroup, now)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -256,7 +256,7 @@ func TestRunRequiresValueColumn(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	if _, err := q.Run(ctx, r, anchor); err == nil {
+	if _, err := q.Run(ctx, r, testGroup, anchor); err == nil {
 		t.Fatal("expected an error when the query returns no value column")
 	} else if !strings.Contains(err.Error(), "value") {
 		t.Errorf("error should mention the value column, got: %v", err)
@@ -286,7 +286,7 @@ func TestRunEnforcesMaxRows(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	if _, err := q.Run(ctx, r, anchor); err == nil {
+	if _, err := q.Run(ctx, r, testGroup, anchor); err == nil {
 		t.Fatal("expected an error when the row cap is exceeded")
 	}
 }
@@ -308,7 +308,7 @@ func TestRunRejectsMapColumnAsLabel(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	if _, err := q.Run(ctx, r, anchor); err == nil {
+	if _, err := q.Run(ctx, r, testGroup, anchor); err == nil {
 		t.Fatal("expected an error for a map column used as a label")
 	}
 }
@@ -340,7 +340,7 @@ func TestRunGroupsByResourceAttribute(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	got, err := q.Run(ctx, r, anchor)
+	got, err := q.Run(ctx, r, testGroup, anchor)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}

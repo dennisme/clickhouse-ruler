@@ -19,7 +19,7 @@ import (
 // Querier runs one rule and returns a sample per matched row. query.Querier
 // satisfies this; the interface exists so a test can stand in for ClickHouse.
 type Querier interface {
-	Run(ctx context.Context, r rule.Rule, now time.Time) ([]alert.Sample, error)
+	Run(ctx context.Context, r rule.Rule, group string, now time.Time) ([]alert.Sample, error)
 }
 
 // Reasons a source produced no samples that are not the query's own error.
@@ -156,7 +156,7 @@ func (e *RuleEval) Evaluate(ctx context.Context, now time.Time) Result {
 				results[i].err = errQueueAbandoned
 				return
 			}
-			samples, err := q.Run(ctx, e.rule.Rule, now)
+			samples, err := q.Run(ctx, e.rule.Rule, e.rule.GroupID(), now)
 			release()
 
 			if err != nil {

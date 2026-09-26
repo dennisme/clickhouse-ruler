@@ -45,7 +45,7 @@ func inspectRules(ctx context.Context, set *ruleset.Set, root *policy.Policy, sa
 				continue
 			}
 
-			findings, err := q.Inspect(ctx, r.Rule, checks)
+			findings, err := q.Inspect(ctx, r.Rule, r.GroupID(), checks)
 			if err != nil {
 				problems = append(problems, inspectionFailed(r, src.Name, err))
 				continue
@@ -63,7 +63,7 @@ func inspectRules(ctx context.Context, set *ruleset.Set, root *policy.Policy, sa
 
 			// The only checks that read rows, so they run when they were asked
 			// for and never merely because a connection exists (spec 7.3).
-			sampled, err := q.Sample(ctx, r.Rule, sampleChecks, now)
+			sampled, err := q.Sample(ctx, r.Rule, r.GroupID(), sampleChecks, now)
 			if err != nil {
 				problems = append(problems, inspectionFailed(r, src.Name, err))
 				continue

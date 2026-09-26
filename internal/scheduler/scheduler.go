@@ -76,7 +76,7 @@ func New(set *ruleset.Set, queriers map[string]Querier, cadence *notify.Cadence,
 	specs := make([]GroupSpec, 0, len(order))
 
 	for _, k := range order {
-		groupName := k.file + ":" + k.name
+		groupName := ruleset.GroupID(k.file, k.name)
 		interval := intervalByGroup[k]
 
 		var evals []namedEval

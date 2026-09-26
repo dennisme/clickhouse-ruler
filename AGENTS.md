@@ -84,7 +84,7 @@ Three things that bite:
 
 | Path | What lives there |
 | --- | --- |
-| `cmd/ruler` | CLI: `check`, `run`, `inspect`, `privileges` subcommands and flag parsing |
+| `cmd/ruler` | CLI: the `check` and `run` subcommands, flag parsing, and the online inspection and user-contract passes behind `check --online` |
 | `internal/rule` | Rule file parsing and the offline rule checks |
 | `internal/source` | Sources file parsing, secret loading, label matching, the ClickHouse user contract in `privileges` |
 | `internal/ruleset` | Loading a rules directory and binding each rule to the sources its selector matches |
@@ -93,8 +93,9 @@ Three things that bite:
 | `internal/query` | Query execution, SQL AST checks, driver-error redaction |
 | `internal/alert` | Alert state machine: pending, firing, resolved, `for`, identity, fingerprints |
 | `internal/scheduler` | Group ticking, concurrency limits, metrics, HTTP surface, shutdown |
+| `internal/dashboards` | Reads the shipped Grafana dashboards, so a panel cannot query a metric nothing registers |
 | `internal/notify` | Alertmanager payloads, resend cadence, the HTTP client |
-| `deploy/` | ClickHouse init SQL (including the reference ruler user) and Alertmanager config |
+| `deploy/` | ClickHouse init SQL (including the reference ruler user), Alertmanager config, and the Grafana dashboards |
 | `spec/` | Design, validation, operations, research, decisions |
 | `docs/` | The published site: a page per check family, linked from every finding |
 

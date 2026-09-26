@@ -20,7 +20,7 @@ type countingQuerier struct {
 	calls atomic.Int64
 }
 
-func (q *countingQuerier) Run(context.Context, rule.Rule, time.Time) ([]alert.Sample, error) {
+func (q *countingQuerier) Run(context.Context, rule.Rule, string, time.Time) ([]alert.Sample, error) {
 	q.calls.Add(1)
 	return oneSample(), nil
 }
