@@ -12,10 +12,10 @@ import (
 // one metric series per rule, or the ruler becomes the cardinality problem
 // it exists to fix (spec 8.3).
 //
-// clickhouse_ruler_problem is not here: it re-validates loaded rules on a
-// timer, which belongs to `ruler watch` and does not exist yet. The config
-// reload pair below does, because SIGHUP reloads the files this ruler is
-// running (spec 8.2).
+// clickhouse_ruler_problem is not here: it reports rules that broke while the
+// ruler was running, which does not exist yet. The config reload pair below
+// does, because SIGHUP reloads the files this ruler is running (spec 8.2,
+// 10.4).
 type Metrics struct {
 	EvaluationsTotal        *prometheus.CounterVec
 	EvaluationFailuresTotal *prometheus.CounterVec

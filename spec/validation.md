@@ -502,11 +502,16 @@ with a caveat is one answer with a reservation and not two problems:
   which is the setup where catching the drift before the rules reach the
   evaluating cluster is worth the grant.
 
-### 7.5 Reuse in watch mode
+### 7.5 Reuse against deployed rules
 
 Running the same backfill weekly against already deployed rules produces an
 alert hygiene report for free: "these 5 rules fired 800 times and none were
 acknowledged". Same code path, no extra work.
+
+This is a report somebody asks for, not a loop the ruler runs. Tier 3 is
+expensive by definition (7.3), and the re-check timer in 10.4 is deliberately
+one bounded query per rule, so folding a backfill into it would make the
+cheapest thing in the ruler the most expensive.
 
 ### 7.6 Check configuration
 

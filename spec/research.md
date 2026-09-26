@@ -54,9 +54,10 @@ SigNoz does run Alertmanager, and gives more of it as code than a quick look
 suggests. It maintains a fork, bundled into the SigNoz binary since v0.76.0,
 and the operator exposes `RoutePolicy` ("A notification route policy") and
 `PlannedMaintenance` ("A downtime schedule") custom resources. Routing and
-maintenance windows are therefore manifests rather than UI state, which is the
-same idea as 6.5 generating a route tree from the rules repository, shipped
-already.
+maintenance windows are therefore manifests rather than UI state. That is
+further than this project goes: 6.5 leaves the route tree to whoever owns the
+Alertmanager, so routing as code here is whatever they already do with that
+file.
 
 The gap is ownership, not absence. It is their Alertmanager, embedded, and
 the documented configuration covers its own external URL and SMTP rather than

@@ -49,8 +49,9 @@ SigNoz does use Alertmanager, and gives more of it as code than we first
 credited. It maintains a fork, bundled into the SigNoz binary since v0.76.0,
 and the operator exposes `RoutePolicy` and `PlannedMaintenance` custom
 resources, so routing and maintenance windows are manifests rather than UI
-state. That is the same idea as generating a route tree from the rules repo,
-and they ship it today.
+state. That is further than this project goes: your route tree stays yours to
+write, because it is already under whatever review and change policy you run
+that Alertmanager with.
 
 The gap is whose Alertmanager. It is theirs, embedded, with no documented way
 to point it at a standalone instance. If you already run one, with your

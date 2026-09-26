@@ -172,8 +172,10 @@ That is the property we are copying. Everything else follows from it.
 - No UI for creating or editing rules. Ever. This is the whole point.
 - No notification routing, grouping, silencing, or inhibition. Alertmanager
   already does all of it, and it is your Alertmanager rather than one this
-  project ships. Generating a route tree from the rules repository (6.5) is
-  writing Alertmanager's configuration, not doing its job.
+  project ships. That includes its configuration: we do not generate a route
+  tree from the rules repository (6.5). The file is yours, it is already under
+  whatever review and change policy you run it with, and writing into it
+  collides with that policy for a tree a person can write by hand.
 - No recording rules in v1. Add later only if materialized views are not
   enough.
 - No replacement for SigNoz or ClickStack dashboards. This tool alerts, it does
@@ -200,12 +202,6 @@ That is the property we are copying. Everything else follows from it.
    it carries no security meaning, so a wrong answer is a wrong finding rather
    than a tenancy hole. It is still a correctness question for the checks that
    read it.
-4. **Generating the route tree with free-form labels.** 6.5 says the tree is
-   generated from the repository, keyed on `team`. With teams inventing rule
-   labels and operators inventing source `labels` (6.10.1), what the generator
-   should do with a combination no route covers is unsettled: emit a catch-all
-   branch, refuse to generate, or report it and continue. Not urgent, because
-   nothing generates a route tree yet.
 
 ---
 

@@ -258,13 +258,14 @@ it.
 **Result columns may never set `team`, `alertname` or `source`.** This is not
 about the
 override above, which is deliberately allowed. It is about where the value
-comes from. The Alertmanager route tree is generated from this repository
-(6.5), so every `team` value that can ever be produced has to be readable from
-the files. A `team` that arrives from a result column is runtime data: the
-generator cannot enumerate it, no route matches it, and the alert lands in the
-receiver on the root route, which is whatever the operator left there. That
-failure shows up during an incident, which is the
-worst time to discover a routing gap. `alertname` is protected for the same
+comes from. `team` is what routing keys on, so every value that can ever be
+produced has to be readable from the files, by whoever writes the route tree by
+hand (6.5). A `team` that arrives from a result column is runtime data: nobody
+can enumerate it, so no route matches it, and the alert lands in the receiver on
+the root route, which is whatever the operator left there. That failure shows up
+during an incident, which is the worst time to discover a routing gap. A hand
+written tree makes this worse rather than better: there is no regeneration step
+that would ever notice the new value. `alertname` is protected for the same
 reason it always was: an identity that query data can set is a routing hazard.
 `source` is protected because it is what keeps two clusters' alerts apart
 (6.10.1), and a query that could set it could merge them.
@@ -273,9 +274,85 @@ reason it always was: an identity that query data can set is a routing hazard.
 would prevent no abuse, because the rule author already sets `severity`
 freely through the labels block, so a query doing it grants no new power.
 Against that, `if(value > 1000, 'critical', 'warning') AS severity` is a
-genuinely useful pattern and banning it costs something real. If the route
-tree ever keys on `severity` the way it keys on `team`, revisit this: the
+genuinely useful pattern and banning it costs something real. A tree that keys
+on `severity` the way it keys on `team` is a reason to revisit this: the
 enumerability argument above would then apply to it too.
+
+### 6.3.2 Drift detected from the evaluation itself
+
+A rule that was correct when it merged can stop being correct without anybody
+touching the file. A column is dropped, renamed or retyped, a grant is revoked,
+a table moves. CI cannot catch it, because CI ran months ago and passed.
+`SIGHUP` cannot catch it, because nothing changed on disk to reload. So the
+rule keeps running against a cluster that no longer matches it, and the first
+thing that notices is either the next rollout or the outage.
+
+Two things decide the shape of the answer. The signal has to arrive near the
+change rather than near the next reload, and it has to reach whoever owns the
+rule rather than whoever operates the ruler. Those are often the same team and
+it does not matter: a finding that only appears on the ruler's own dashboard
+puts the work on the party that cannot fix the query.
+
+The evaluation already knows almost enough to produce it. Every evaluation
+reads `rows.Columns()` and `rows.ColumnTypes()` from the driver, gets rows,
+bytes and peak memory from the progress callbacks (8.2), and either errors or
+does not. So comparing each evaluation against the last one costs no extra
+query, and the worst case latency is one group interval.
+
+**Compare the shape, per rule. Not the rows, per alert.**
+
+Row counts cannot carry this signal, and the reason is not a tuning problem.
+Zero rows is the healthy state of most alert rules, and a rule that matched
+five rows and now matches none is the ordinary resolve path. A comparison on
+row counts therefore fires on every resolve, which is the loudest possible
+false positive. Waiting does not fix it either: a rule watching for a rare
+condition legitimately matches nothing for months, so a threshold on
+consecutive empty evaluations moves the false positive rather than removing it.
+From the ruler's side a quiet rule and a dead rule are the same observation.
+
+The result's shape is different. There is exactly one correct answer for it at
+any moment, a change to it is never a healthy transition, and the rule's author
+wrote the columns down. So what is compared is the column names and types, and
+what is not compared is how many rows came back.
+
+What that catches, all of it free:
+
+- A column dropped, renamed or retyped under the query. Tier 1's `rule/columns`
+  answers this at check time by asking `DESCRIBE`; the evaluation answers the
+  same question every tick without asking anything.
+- Two sources that stopped agreeing. A rule evaluates against every source its
+  selector matched on every tick (6.10.1), so `rule/source-schema` is
+  observable from the evaluations already happening, mid-migration included.
+- An error that has just started, attributed. `clickhouse_ruler_rule_evaluation_failures_total`
+  already counts these, but a counter labelled by rule says "this broke" where
+  the owner needs the check, the file and the team.
+- Cost crossing the ceilings in 6.7, which the driver callbacks already
+  measure per evaluation and which `rule/cost` otherwise only predicts.
+
+**What it does not catch is the case that motivated all of it.** An OTel map
+key rename, `attributes['http.status_code']` becoming
+`http.response.status_code`. The query still parses. It returns one column
+called `value`, the same type it always did. Every evaluation succeeds. It
+matches nothing, forever, and both the shape and the row count are
+indistinguishable from a healthy rule on a quiet day. The only thing that
+answers it is asking the data whether the key still appears in recent rows,
+which is `rule/attribute-key` (7.3) and a query the evaluation does not make.
+That one check is the whole reason a timer exists at all (10.4).
+
+**The baseline is memory, and losing it costs one interval.** Two evaluations
+establish it, so a restart delays the comparison by a tick rather than
+disabling it. Nothing is persisted: a baseline that outlived the process would
+have to be reconciled against a rule that changed while it was down, which is
+work for an answer that re-derives itself for free. That places it inside the
+restart caveat in 12.2 rather than adding a new one.
+
+**Drift reports, it never refuses.** A rule whose shape changed keeps
+evaluating and its findings go to `clickhouse_ruler_problem` (8.2). Refusing is
+reload's job and only reload's (7.6), because a ruler that unloaded a rule on
+drift would resolve that rule's alerts and stop paging for the condition on the
+strength of a schema change nobody reviewed. The failure mode of reporting is a
+raised gauge somebody has to read. The failure mode of refusing is an outage
+nobody is paged for.
 
 ### 6.4 Time window injection
 
@@ -406,23 +483,31 @@ either way, and that is 12.2's problem rather than this one's.
 Alertmanager owns grouping, silences, inhibition, and routing. The ruler does
 not.
 
-Generate the Alertmanager route tree from the same repository, keyed on the
-`team` label, so eval and routing share one source of truth.
+**The route tree is written by hand, not generated from the repository.**
+Generating it, keyed on `team`, so that eval and routing share one source of
+truth, was the plan and is now a no. Alertmanager's configuration belongs to
+whoever runs that Alertmanager, and it already sits under their own review and
+change policy. A generator writes into that file, so adopting it means
+adopting our opinion about how that file is produced, on top of theirs. What
+it buys against that is a tree keyed on one label, which a person can write in
+an afternoon and then never touch. If somebody eventually wants it, it arrives
+behind a flag, opt in, and nothing above changes.
+
+The rest of this section is therefore advice about a file we do not write.
 
 Keep `source` and `cluster` out of `group_by` unless per-cluster paging is
 wanted. A rule spanning an estate produces one alert per cluster (6.10.1), and
 grouping is where that becomes one notification instead of N.
 
-**The route tree needs a deliberate catch-all.** Teams are free to invent
-labels on their rules and operators are free to invent them on sources
-(6.10.1), so a label combination nobody wrote a route for is a matter of time
-rather than a mistake. Alertmanager will still deliver it: the root route has
-a receiver and everything unmatched falls through to it. The question is
-whether that receiver is one somebody reads. A low-priority channel that
-collects unrouted alerts turns a silent misroute into a visible backlog;
-leaving the root pointing at a real on-call rotation turns it into pages for
-the wrong people, and leaving it pointing at a receiver nobody watches turns
-it into nothing at all.
+**The tree needs a deliberate catch-all.** Teams are free to invent labels on
+their rules and operators are free to invent them on sources (6.10.1), so a
+label combination nobody wrote a route for is a matter of time rather than a
+mistake. Alertmanager will still deliver it: the root route has a receiver and
+everything unmatched falls through to it. The question is whether that receiver
+is one somebody reads. A low-priority channel that collects unrouted alerts
+turns a silent misroute into a visible backlog; leaving the root pointing at a
+real on-call rotation turns it into pages for the wrong people, and leaving it
+pointing at a receiver nobody watches turns it into nothing at all.
 
 Skip high availability and deduplication in v1. Alertmanager already dedupes
 identical alerts, so running two ruler replicas is mostly safe already.
