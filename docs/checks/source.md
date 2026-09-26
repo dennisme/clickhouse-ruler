@@ -22,6 +22,7 @@ alone. See spec 6.6 and 7.7.
 | [`source/database`](#source-database) | fixed, always `error` | none | [6.6](https://github.com/dennisme/clickhouse-ruler/blob/main/spec.md) |
 | [`source/evaluation-delay`](#source-evaluation-delay) | fixed, always `error` | none | [6.8](https://github.com/dennisme/clickhouse-ruler/blob/main/spec.md) |
 | [`source/exemption`](#source-exemption) | fixed, always `error` | none | [7.7](https://github.com/dennisme/clickhouse-ruler/blob/main/spec.md) |
+| [`source/max-concurrent-queries`](#source-max-concurrent-queries) | fixed, always `error` | none | [6.11](https://github.com/dennisme/clickhouse-ruler/blob/main/spec.md) |
 | [`source/max-execution-time`](#source-max-execution-time) | fixed, always `error` | none | [6.7](https://github.com/dennisme/clickhouse-ruler/blob/main/spec.md) |
 | [`source/max-memory-usage`](#source-max-memory-usage) | fixed, always `error` | none | [6.7](https://github.com/dennisme/clickhouse-ruler/blob/main/spec.md) |
 | [`source/max-rows`](#source-max-rows) | fixed, always `error` | none | [6.7](https://github.com/dennisme/clickhouse-ruler/blob/main/spec.md) |
@@ -167,6 +168,22 @@ A memory cap that is not positive.
 Sent with every query for the same reason as the execution time cap: a rule
 that trips it fails on its own rather than degrading everything else sharing
 the cluster.
+
+<a id="source-max-concurrent-queries"></a>
+
+### source/max-concurrent-queries
+
+A concurrent query cap that is negative.
+
+This cap is enforced by the ruler, not the cluster. It bounds how many of the
+ruler's queries may be in flight against this source at once, inside the
+ruler-wide `--query-concurrency` limit, so a cluster that has gone slow cannot
+hold every global slot while clusters that are perfectly healthy queue behind
+it.
+
+It has no default. Leaving it unset means the source is bounded only by the
+ruler-wide limit, which is the right answer until
+`clickhouse_ruler_query_queue_wait_seconds` shows this source waiting.
 
 ## Cluster state
 

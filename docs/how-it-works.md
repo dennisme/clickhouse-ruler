@@ -21,12 +21,19 @@ sources:
     max_rows: 1000
     max_execution_time: 30s
     max_memory_usage: 1073741824
+    max_concurrent_queries: 4
 ```
 
-Everything from `evaluation_delay` down has a default and can be left out.
-`max_rows` caps how many alert instances one evaluation may produce; the other
-two are sent to ClickHouse as query settings, so the cluster enforces the cost
-cap rather than the ruler.
+Everything from `evaluation_delay` down can be left out. `max_rows` caps how
+many alert instances one evaluation may produce; `max_execution_time` and
+`max_memory_usage` are sent to ClickHouse as query settings, so the cluster
+enforces the cost cap rather than the ruler. Those three have defaults.
+
+`max_concurrent_queries` has none: it bounds how many of the ruler's queries
+may be in flight against this cluster at once, inside the ruler-wide
+`--query-concurrency` limit, so a cluster that has gone slow cannot hold every
+slot while rules against healthy clusters queue behind it. Left out, the
+source is bounded by the ruler-wide limit alone.
 
 `labels` describe what this source is. Rules select on them, and they are
 added to every alert the source produces, so an alert always says which

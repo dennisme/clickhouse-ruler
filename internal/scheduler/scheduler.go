@@ -10,6 +10,7 @@ import (
 
 	"github.com/dennisme/clickhouse-ruler/internal/notify"
 	"github.com/dennisme/clickhouse-ruler/internal/ruleset"
+	"github.com/dennisme/clickhouse-ruler/internal/source"
 )
 
 // Scheduler runs every rule group in a loaded ruleset, one goroutine per
@@ -41,6 +42,9 @@ type namedEval struct {
 // shape of the configuration. Sequential evaluation made a group's tick cost
 // the sum of every query inside it, so a group grew slower simply by having
 // more rules added to it, until it began missing iterations.
+// queryConcurrency is the ruler-wide ceiling; inside it a source may set a
+// limit of its own, so one cluster going slow cannot hold every slot while
+// rules against healthy clusters queue behind it (spec 6.11).
 // A nil log discards every line, so a caller that does not care about output
 // does not have to build a handler.
 func New(set *ruleset.Set, queriers map[string]Querier, cadence *notify.Cadence, metrics *Metrics, clock Clock, queryConcurrency int, log *slog.Logger, resend Resend) *Scheduler {
@@ -50,7 +54,7 @@ func New(set *ruleset.Set, queriers map[string]Querier, cadence *notify.Cadence,
 		log = slog.New(slog.DiscardHandler)
 	}
 
-	queries := newSemaphore(queryConcurrency)
+	limits := newQueryLimits(queryConcurrency, matchedSources(set))
 
 	var order []groupKey
 	rulesByGroup := map[groupKey][]ruleset.Rule{}
@@ -86,7 +90,7 @@ func New(set *ruleset.Set, queriers map[string]Querier, cadence *notify.Cadence,
 				unmatched++
 				continue
 			}
-			evals = append(evals, namedEval{rule: r.Alert, eval: NewRuleEval(r, queriers, cadence, queries, resend.retention(interval))})
+			evals = append(evals, namedEval{rule: r.Alert, eval: NewRuleEval(r, queriers, cadence, limits, resend.retention(interval))})
 		}
 		metrics.RulesUnmatched.WithLabelValues(groupName).Set(float64(unmatched))
 
@@ -100,6 +104,24 @@ func New(set *ruleset.Set, queriers map[string]Querier, cadence *notify.Cadence,
 	}
 
 	return &Scheduler{clock: clock, groups: specs, metrics: metrics, log: log}
+}
+
+// matchedSources is every source at least one rule reaches, deduplicated by
+// name. A source nothing matched needs no semaphore, because nothing will
+// ever queue against it.
+func matchedSources(set *ruleset.Set) []source.Source {
+	var sources []source.Source
+	seen := map[string]bool{}
+	for _, r := range set.Rules {
+		for _, s := range r.Sources {
+			if seen[s.Name] {
+				continue
+			}
+			seen[s.Name] = true
+			sources = append(sources, s)
+		}
+	}
+	return sources
 }
 
 // staggerOffset spreads a group's first tick across its own interval,
@@ -125,9 +147,9 @@ func staggerOffset(key string, interval time.Duration) time.Duration {
 // reason the metrics carry no instance label (spec 8.3).
 //
 // Rules run concurrently. The goroutine per rule is not what bounds load:
-// the semaphore inside each RuleEval does, around the query itself, so a
-// group with many rules queues against the limit instead of opening a
-// connection per rule. Prometheus collectors are safe for concurrent use, so
+// the limits inside each RuleEval do, around the query itself, so a group
+// with many rules queues against them instead of opening a connection per
+// rule. Prometheus collectors are safe for concurrent use, so
 // the metric writes below need no coordination.
 func evalGroup(groupName string, evals []namedEval, m *Metrics, log *slog.Logger) func(context.Context, time.Time) {
 	return func(ctx context.Context, tickAt time.Time) {
@@ -162,6 +184,9 @@ func evalGroup(groupName string, evals []namedEval, m *Metrics, log *slog.Logger
 					log.Error("sending alerts to alertmanager failed",
 						"rule_group", groupName, "rule", ne.rule,
 						"error", res.SendError.Error())
+				}
+				for _, qw := range res.QueueWaits {
+					m.QueryQueueWait.WithLabelValues(qw.Source).Observe(qw.Wait.Seconds())
 				}
 				m.AlertsActive.WithLabelValues(groupName, ne.rule, "pending").Set(float64(res.Pending))
 				m.AlertsActive.WithLabelValues(groupName, ne.rule, "firing").Set(float64(res.Firing))

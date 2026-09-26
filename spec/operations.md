@@ -121,6 +121,7 @@ what make the guard rails in 6.7 observable rather than theoretical:
 | `clickhouse_ruler_query_read_bytes_total` | counter | `rule`, `team` |
 | `clickhouse_ruler_query_memory_usage_bytes` | histogram | `rule` |
 | `clickhouse_ruler_query_duration_seconds` | histogram | `rule` |
+| `clickhouse_ruler_query_queue_wait_seconds` | histogram | `source` |
 
 Source these from the ClickHouse Go driver's progress callbacks rather than
 from `system.query_log`. The driver reports rows and bytes read during the
@@ -129,6 +130,14 @@ retention.
 
 These enable two things worth having: alerting on expensive alert rules, and
 per team chargeback.
+
+`clickhouse_ruler_query_queue_wait_seconds` is the exception to the `rule` and
+`team` labelling above, because it measures the per-source concurrency limit
+in 6.11 rather than what a rule cost. Queueing is a property of the cluster
+the limit protects: every rule against a saturated source waits, and which
+rule happened to wait says nothing about what to change. Only sources that set
+`max_concurrent_queries` reach it, so a series here means a limit exists and
+is being hit.
 
 Validation and config, used by watch mode:
 

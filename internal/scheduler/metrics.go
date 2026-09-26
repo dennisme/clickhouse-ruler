@@ -38,6 +38,7 @@ type Metrics struct {
 	QueryReadBytesTotal *prometheus.CounterVec
 	QueryMemoryUsage    *prometheus.HistogramVec
 	QueryDuration       *prometheus.HistogramVec
+	QueryQueueWait      *prometheus.HistogramVec
 }
 
 // NewMetrics registers every scheduler metric against reg. A nil reg uses
@@ -165,5 +166,20 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 			Help:    "Time one evaluation's query took, measured by the ruler from sending it to the last row arriving.",
 			Buckets: prometheus.DefBuckets,
 		}, []string{"rule"}),
+
+		// How long queries wait for a slot against the source's own
+		// concurrency limit (spec 6.11), which is what says a limit is set
+		// too low: without it the knob cannot be sized and an operator is
+		// guessing. Labelled by source rather than by rule or team like the
+		// cost metrics above, because queueing is a property of the cluster
+		// the limit protects: every rule against a saturated source waits,
+		// and which rule happened to wait says nothing about what to change.
+		// Sources with no limit of their own never reach this, so a series
+		// here means a limit exists and is being hit (spec 8.3).
+		QueryQueueWait: f.NewHistogramVec(prometheus.HistogramOpts{
+			Name:    "clickhouse_ruler_query_queue_wait_seconds",
+			Help:    "Time a query waited for a slot against its source's concurrent query limit.",
+			Buckets: prometheus.DefBuckets,
+		}, []string{"source"}),
 	}
 }

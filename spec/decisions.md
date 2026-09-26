@@ -182,3 +182,14 @@ and are what the code comments cite.
   taking" is a real question, but `clickhouse_ruler_notification_latency_seconds` already
   has an observation count per send, so a second counter would be a third way
   to ask something nothing is asking yet. See 8.2.
+- **Query concurrency is bounded per source as well as ruler-wide.** The
+  ruler-wide cap stays as the ceiling; inside it a source may set
+  `max_concurrent_queries`, so a cluster that has gone slow holds only its own
+  slots and rules against healthy clusters keep running. This was deferred
+  while nothing showed what a source cost, and the query cost metrics in 8.2
+  answered that. No default: a number picked here would be either at or above
+  the ruler-wide cap, where it does nothing, or below it, where it silently
+  lowers throughput for a single-source deployment that has nothing to protect
+  itself from. `clickhouse_ruler_query_queue_wait_seconds` is what an operator
+  sizes the limit from, labelled by source because queueing is a property of
+  the cluster rather than of whichever rule happened to wait. See 6.11.

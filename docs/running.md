@@ -73,7 +73,7 @@ than something to work around.
 | `--sources` | `sources.yaml` | sources file |
 | `--config` | `ruler.yaml` beside `--rules` | policy file |
 | `--listen` | `:9090` | address for `/metrics`, `/-/healthy`, `/-/ready` |
-| `--query-concurrency` | `8` | rule queries allowed against ClickHouse at once, across every group; `0` is unbounded |
+| `--query-concurrency` | `8` | rule queries allowed against ClickHouse at once, across every group; `0` is unbounded. A source can set `max_concurrent_queries` to bound itself further inside this |
 | `--resend-interval` | `100s` | how often a still-firing alert is re-posted |
 | `--resend-tolerance` | `4` | how many resend periods a firing alert stays valid for, so how many consecutive failed evaluations or sends it survives, and how long a resolved alert is retried for. `4` is Prometheus' own number. Minimum `2` |
 | `--shutdown-timeout` | `30s` | how long an in-flight evaluation gets to finish once shutdown starts |
@@ -105,6 +105,7 @@ series per rule.
 | `clickhouse_ruler_query_read_bytes_total` | counter | `rule`, `team` |
 | `clickhouse_ruler_query_memory_usage_bytes` | histogram | `rule` |
 | `clickhouse_ruler_query_duration_seconds` | histogram | `rule` |
+| `clickhouse_ruler_query_queue_wait_seconds` | histogram | `source` |
 
 The four query cost metrics come from the ClickHouse driver's own callbacks
 as the query runs, so they cost no extra query and do not depend on how long
@@ -112,6 +113,11 @@ as the query runs, so they cost no extra query and do not depend on how long
 succeeded, because a rule that trips a cap is the one worth finding. `team`
 is read from the rule's labels and is empty when the author set none, which
 is a rule nobody has claimed rather than one owned by nobody in particular.
+
+`clickhouse_ruler_query_queue_wait_seconds` is how long a query waited for a
+slot against its source's `max_concurrent_queries` limit. Only sources that
+set that limit appear, so a series here means the limit exists and is being
+hit; a p99 climbing toward the group interval means it is set too low.
 
 `clickhouse_ruler_annotation_failures_total` is separate from the evaluation failures on
 purpose: an annotation that will not render still pages, carrying the template

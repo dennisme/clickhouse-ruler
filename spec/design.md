@@ -111,6 +111,7 @@ sources:
 | `max_rows` | int | `1000` | Alert instances one evaluation may produce. |
 | `max_execution_time` | duration | `30s` | ClickHouse query setting (6.7). |
 | `max_memory_usage` | bytes | `1GiB` | ClickHouse query setting (6.7). |
+| `max_concurrent_queries` | int | none | Queries the ruler may have in flight against this source at once, inside the ruler-wide cap (6.11). |
 | `checks` | map | none | Tightens check severity for rules using this source (7.7). |
 
 So the shortest usable source is `name`, `address`, `database`, `username`,
@@ -136,6 +137,13 @@ the client side half of 6.7. They are per source rather than global because a
 trace source and a log source do not cost the same, and they sit in the
 operator's file rather than the author's for the reason the rest of this
 section exists.
+
+`max_concurrent_queries` is the one cap the ruler enforces on itself rather
+than on a query: how many of its queries may be in flight against this
+cluster at once, inside the ruler-wide limit (6.11). It has no default,
+because a number picked here would be either at or above the ruler-wide cap,
+where it does nothing, or below it, where it silently lowers throughput for a
+single-source deployment that has nothing to protect itself from.
 
 **Only the password comes from outside the file.** Everything else, the
 username included, is written down and reviewable.
@@ -946,14 +954,29 @@ flight at once, rather than by the shape of the configuration. The goroutines
 are not what bounds load; the limit sits around the query itself, so a large
 group queues against it instead of opening a connection per rule.
 
-**The cap is global, and that is a known compromise.** The thing that actually
-needs protecting is each ClickHouse cluster, and one global number is a loose
-proxy: a slow cluster holds slots that rules against every other cluster then
-queue behind, so an outage on one source delays evaluation of sources that are
-perfectly healthy. A per-source limit, sized from what that cluster can take,
-is the shape this probably wants. It is deferred because sizing it needs a
-view of per-source capacity that nothing collects yet, and the query cost
-metrics in 8.2 are what would inform it. See 12.7.
+**The limit has two levels: ruler-wide, and per source inside it.** The thing
+that actually needs protecting is each ClickHouse cluster, and one global
+number is a loose proxy for that: a slow cluster holds slots that rules
+against every other cluster then queue behind, so an outage on one source
+would delay evaluation of sources that are perfectly healthy. A source may
+therefore set `max_concurrent_queries`, sized from what that cluster can take.
+A query takes the ruler-wide slot first and then its source's, and gives both
+back when it returns. Taking them in that order keeps the ruler-wide number
+the ceiling: were the source slot taken first, the sources' limits could add
+up past it.
+
+The per-source limit has no default. Any number picked would be either at or
+above the ruler-wide cap, where it does nothing, or below it, where it
+silently lowers throughput for the single-source deployment that is the common
+case and has nothing to protect itself from. A source that sets nothing is
+bounded only by the ruler-wide cap.
+
+Both gates abandon a query that is still queued when shutdown cancels the
+context, rather than running it after the ruler has stopped. Time spent
+waiting for a source's slot is recorded in
+`clickhouse_ruler_query_queue_wait_seconds` (8.2), which is what says a limit
+is set too low: without it the knob cannot be sized and an operator is
+guessing.
 
 Notification state is shared across every group, so it is guarded. An
 unsynchronised map there is not a subtle race but a fatal "concurrent map
