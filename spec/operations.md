@@ -265,6 +265,22 @@ papered over with an expression that returns nothing. And they are portable: a
 datasource variable rather than a hardcoded UID, since the UID is local to
 whoever imports it.
 
+**What that test does not catch is the label.** It asserts that every metric a
+panel names is registered, and a metric name is only half of an expression. A
+panel grouping by `rule` on a metric labelled `rule_group` alone passes it and
+renders exactly the empty graph the test was written to prevent, as does a
+matcher on a label whose values are not what the author assumed. Names are
+checked without a running system; labels need series. The stack in 9.8 is
+where that half is answered, and until it exists this gate is the weaker of
+the two claims this section makes.
+
+One further omission worth stating rather than discovering. Duration is shown
+against nothing, because the group's interval is configuration and 8.2 exposes
+no metric carrying it. A panel cannot draw the line an operator is meant to
+read the duration against, so it says so in its description instead. Exposing
+the interval as a gauge is the obvious fix and is not free: it is another
+series per group, and it is a metric whose only consumer is a dashboard.
+
 ### 8.7 The operations page
 
 Everything in 8.1 through 8.6 is a mechanism. What an operator needs at three in
@@ -325,6 +341,18 @@ arrive with the scheduler.
    directly, which is why Alertmanager routes to `host.docker.internal` on a
    fixed port. Moving it into the stack only becomes worthwhile once the ruler
    itself is a container and no test process is left to host it.
+7. **Prometheus**, scraping the ruler. Not for the ruler's benefit: it is
+   what the dashboards query, and without it 8.6's panels have nothing behind
+   them at all. See 9.8.
+8. **Grafana**, provisioned from `deploy/grafana`: a datasource pointing at
+   item 7, and a dashboard provider pointing at the files 8.6 ships. Nothing
+   is configured through its UI, for the reason rules are files: a dashboard
+   that exists only in somebody's browser cannot be reviewed.
+
+Items 5, 7 and 8 arrive together, because each is useless without the one
+before it. A Prometheus with nothing to scrape holds no series, and a Grafana
+with no Prometheus renders the same empty panels the whole exercise is meant
+to catch.
 
 ### 9.2 Two generators, not one
 
@@ -392,6 +420,87 @@ own prints it.
 silently does nothing if the previous volume survives.
 
 CI runs the compose stack directly in GitHub Actions.
+
+### 9.7 Which ClickHouse versions are tested
+
+7.2 explains why the readers in `internal/query` are coupled to a server
+version, and 9.1 pins one. This section is about the rest of them, and about
+what may be said in public.
+
+**The axis is long term support releases, not the last N releases.**
+ClickHouse ships monthly, so a promise about "the current version and the
+three before it" expires every month and describes a set nobody runs. The
+releases operators actually stand up are the long term support ones, two a
+year, supported for a year after that. Three legs:
+
+| Leg | Server | Required |
+| --- | --- | --- |
+| pinned | the current long term support release, the version in `compose.yaml` | yes |
+| previous | the long term support release before it | yes |
+| newest | `latest-alpine`, whatever released most recently | no |
+
+The newest leg stays advisory for the reason 7.2 already gives: a server
+changing its output is worth knowing about and is not the problem of whoever
+opened the next pull request. The previous long term support leg is required,
+because a version somebody is running is not a weather report.
+
+**Tested is reported, never promised.** The table this produces says which
+servers the suite passed against and when, and that is the whole claim. It is
+not a support matrix, there is no deprecation policy behind it, and a red leg
+on an older server is a fact rather than a commitment to fix it. The project
+has no external users (10.2 is topologies people could run, not topologies
+anyone runs), and promising compatibility to nobody costs the one thing we
+have, which is the freedom to change a reader when a server changes its
+output.
+
+**The table is generated from the matrix.** A hand written compatibility
+table is a screenshot of a build that has already moved, which is the same
+failure as a check page stating a default the tool does not have (7.8) and a
+panel querying a metric nobody exposes (8.6). It gets the same answer: the
+matrix is the source, the published table is output, and a leg that is not in
+continuous integration is not in the table.
+
+**The floor is unknown and the slice that builds this finds it.** Every check
+that reads server output has some oldest version it still parses:
+`EXPLAIN AST`, `EXPLAIN ESTIMATE`, `EXPLAIN PLAN indexes=1`,
+`DESCRIBE (SELECT ...)`, the privileges probes in 6.7.2, and the
+`system.query_log` columns 8.5 is read back through. Nothing has ever asked
+where that floor is. Finding it is a one-off walk backwards through releases,
+and the answer belongs in the table as the oldest version tested rather than
+as the oldest version supported, which is a different sentence and one this
+project is not in a position to write.
+
+None of this exists yet. Today the matrix is the two legs 7.2 describes and
+there is no published table.
+
+### 9.8 Dashboards that render
+
+The gate in 8.6 proves a panel names a metric something registers. It cannot
+prove the panel draws a line, because a name with the wrong grouping label or
+an impossible matcher is still a name. Answering the other half needs series,
+which needs a ruler that is running, a Prometheus that scraped it, and rules
+that produced something worth plotting.
+
+The stack already has the hard parts: real ClickHouse, real rules, real
+evaluations, real alerts. Items 7 and 8 in 9.1 add the two that are missing,
+and the assertion is then cheap: run each dashboard's expressions against
+Prometheus through its own query API and require a series back.
+
+**Assert against Prometheus, not against Grafana.** Grafana renders; it does
+not decide whether an expression matches anything. Driving its API, or worse
+its browser, would be a large amount of machinery to learn something the
+datasource already knows, and it would fail for reasons that have nothing to
+do with the dashboards. Grafana is in the stack so a person can open the
+dashboards and see them working, which is worth having on its own and is not
+what the test reads.
+
+Two things this cannot promise, and they should not be attempted. A panel
+whose expression returns a series is not a panel whose axis, unit or legend is
+right, and no test is going to tell us a graph is legible. And a test that
+demands every panel be non-empty will fail on the panels that are empty when
+the system is healthy, which is most of the alert rules dashboard: a rule that
+is firing during the run is a rule the test has to make fire. The assertion is
+that the query is answerable, not that the answer is interesting.
 
 ---
 

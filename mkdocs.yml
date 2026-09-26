@@ -43,7 +43,9 @@ markdown_extensions:
 
 nav:
   - Home: index.md
+  - How it works: how-it-works.md
   - Running it:
+      - The binary: running.md
       - Operations: operations.md
       - Deployment topologies: deployment.md
   - Checks:
@@ -51,6 +53,7 @@ nav:
       - Rule checks: checks/rule.md
       - Source checks: checks/source.md
       - File and policy checks: checks/policy.md
+  - How it compares: comparison.md
 
 # Fail the build on a link to a page that does not exist. The check pages
 # carry generated links beside hand-written ones, and a broken cross-reference

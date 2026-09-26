@@ -10,10 +10,11 @@ already run. Rules and sources are YAML files in git. The distinguishing
 feature is that the SQL itself is checked before it runs, not stored as an
 opaque string.
 
-Read [README.md](README.md) for the user-facing picture and
-[spec.md](spec.md) (which indexes `spec/`) for the design. The spec is the
-source of truth for intended behaviour. If code and spec disagree, say so
-rather than picking one silently.
+Read [README.md](README.md) for the front door, `docs/` for the user-facing
+manual, and [spec.md](spec.md) (which indexes `spec/`) for the design. The
+spec is the source of truth for intended behaviour. If code and spec
+disagree, say so rather than picking one silently. Which of the three a given
+fact belongs in is spec 14.
 
 ## Commands
 
@@ -97,7 +98,7 @@ Three things that bite:
 | `internal/notify` | Alertmanager payloads, resend cadence, the HTTP client |
 | `deploy/` | ClickHouse init SQL (including the reference ruler user), Alertmanager config, and the Grafana dashboards |
 | `spec/` | Design, validation, operations, research, decisions |
-| `docs/` | The published site: a page per check family, linked from every finding |
+| `docs/` | The published site: how it works, running it, operations, deployment, a page per check family linked from every finding, and the comparison |
 
 ## Conventions
 

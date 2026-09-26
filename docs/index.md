@@ -9,16 +9,36 @@ design. One service, not a platform.
 
 !!! warning "Status: early"
 
-    It takes a rule from a file to a delivered notification today, and nothing
+    It takes a rule from a file to a delivered notification today, and the
+    checks that read the query through a live database are in, but nothing
     has operated it for real. See the
     [status section](https://github.com/dennisme/clickhouse-ruler#status)
     before you depend on it.
 
 ## What is here
 
-This site documents the checks. Every finding the ruler reports names a check,
-and every check has a section explaining what it rejects, what breaks when it
-fires, and how to fix a rule that trips it.
+This site is the manual. The
+[README](https://github.com/dennisme/clickhouse-ruler#readme) is the front
+door and carries the status; everything longer than a screen lives here.
+
+- **[How it works](how-it-works.md)** — the two kinds of file, who owns
+  which, how a rule reaches a cluster, and which half of the guarantee is the
+  database's job rather than a check's.
+- **[Running it](running.md)** — every flag, and the metrics and logs it
+  exposes.
+- **[Operations](operations.md)** — what to watch with the number that means
+  trouble, what each log line means, what refuses to start, and the
+  `system.query_log` queries that say what a rule cost.
+- **[Deployment topologies](deployment.md)** — five ways to run it, including
+  what running more than one ruler actually costs.
+- **[How it compares](comparison.md)** — SigNoz, ClickStack, Grafana,
+  `sql_exporter`, and when to use one of them instead.
+
+## The checks
+
+Every finding the ruler reports names a check, and every check has a section
+explaining what it rejects, what breaks when it fires, and how to fix a rule
+that trips it.
 
 - **[Every check](checks/index.md)** — the whole catalogue, what each one
   ships as, and whether an operator can change it.
@@ -32,10 +52,9 @@ fires, and how to fix a rule that trips it.
 What a check ships as is generated from the same table the resolver reads, so
 a page here cannot state a default the tool does not have.
 
-## Everything else
+## The reasoning
 
-The [README](https://github.com/dennisme/clickhouse-ruler#readme) covers
-installing and running it. The
-[spec](https://github.com/dennisme/clickhouse-ruler/blob/main/spec.md) is the
-design: what is checked and why, where the line between these checks and the
-database's own enforcement falls, and how severity is configured.
+The [spec](https://github.com/dennisme/clickhouse-ruler/blob/main/spec.md) is
+why each of these is the way it is: what is checked and why, where the line
+between these checks and the database's own enforcement falls, and how
+severity is configured.
