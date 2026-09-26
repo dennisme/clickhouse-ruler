@@ -15,7 +15,7 @@ func TestCostCell(t *testing.T) {
 		want string
 	}{
 		{"estimated", &query.CostEstimate{Rows: 4100000, Status: query.CostEstimated}, "4100000"},
-		{"untracked", &query.CostEstimate{Status: query.CostUntracked}, "not estimated: the query reads no table the server accounts for"},
+		{"no parts", &query.CostEstimate{Status: query.CostNoParts}, "not estimated: the server predicts no part will be read"},
 		{"refused", &query.CostEstimate{Status: query.CostRefused}, "not estimated: this source's user cannot read what the rule asks for"},
 		{"unreachable", nil, "not estimated: the source could not be read"},
 	}

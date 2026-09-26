@@ -239,6 +239,7 @@ func TestCheckWritesTheCostSummary(t *testing.T) {
 	dir := t.TempDir()
 	rules := writeRule(t, dir, workingExpr)
 	sources := writeSources(t, dir, "ruler_payments")
+	seed(t, os.Getenv("RULER_CLICKHOUSE_ADDR"), "cost-summary")
 	out := filepath.Join(dir, "summary.md")
 
 	var stdout, stderr bytes.Buffer
@@ -264,9 +265,12 @@ func TestCheckWritesTheCostSummary(t *testing.T) {
 		t.Errorf("the group's interval is missing from:\n%s", got)
 	}
 
-	// A number, whatever it is. How much the fixture holds in the window is
-	// the stack's business; that the cell is a count rather than an excuse is
-	// this test's.
+	// A number, whatever it is. How many rows the seeded span put in the
+	// window is the stack's business; that the cell is a count rather than an
+	// excuse is this test's. The seed is what makes it one: an empty table
+	// has no part to read, so the server estimates nothing at all, and
+	// without it this test would pass or fail on whether another package had
+	// already written rows.
 	if !regexp.MustCompile(`\| [0-9]+ \| 1m0s \|`).MatchString(got) {
 		t.Errorf("the rule was not estimated:\n%s", got)
 	}
@@ -278,6 +282,7 @@ func TestCostSummaryReportsARuleWithNoCostCeiling(t *testing.T) {
 	dir := t.TempDir()
 	rules := writeRule(t, dir, workingExpr)
 	sources := writeSources(t, dir, "ruler_payments")
+	seed(t, os.Getenv("RULER_CLICKHOUSE_ADDR"), "cost-summary-no-ceiling")
 	config := filepath.Join(dir, "ruler.yaml")
 	if err := os.WriteFile(config, []byte("checks:\n  rule/cost:\n    severity: \"off\"\n"), 0o600); err != nil {
 		t.Fatalf("writing policy: %v", err)

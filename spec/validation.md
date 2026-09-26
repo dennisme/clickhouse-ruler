@@ -958,9 +958,11 @@ writes a file rather than growing an API client and a mode where it needs
 credentials.
 
 A cell that is not a number says why it is not one, and never says zero. A
-rule nobody was allowed to estimate, a query the server accounts for no table
-for, and a source that could not be read are three different facts, and all
-three are different from a rule that reads nothing.
+rule nobody was allowed to estimate, a query the server predicts will read no
+part at all, and a source that could not be read are three different facts,
+and all three are different from a rule that reads nothing. The middle one is
+its own answer because an empty `EXPLAIN ESTIMATE` is what an empty table, a
+fully pruned window and a metadata-only count all return.
 
 The row key is the rule **and** the source, never the rule alone. A rule
 matches sources by label and evaluates against each one, so a rule that is

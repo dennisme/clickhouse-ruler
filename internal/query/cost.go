@@ -37,10 +37,10 @@ const (
 	// CostEstimated is a prediction the server made.
 	CostEstimated CostStatus = iota
 
-	// CostUntracked is a query the server estimated nothing for, which reads
-	// no table it accounts for this way: a constant, or a count it answers
-	// from metadata.
-	CostUntracked
+	// CostNoParts is a query the server predicts will read no part at all:
+	// an empty table, a window every part was pruned out of, or a count it
+	// answers from metadata without opening one.
+	CostNoParts
 
 	// CostRefused is the source's own user not being allowed to look, which
 	// is a fact about the grant rather than about the rule (spec 6.7.2).
@@ -59,7 +59,7 @@ type CostEstimate struct {
 // costFrom turns what the server estimated into what the caller reports.
 func costFrom(est []Estimate) CostEstimate {
 	if len(est) == 0 {
-		return CostEstimate{Status: CostUntracked}
+		return CostEstimate{Status: CostNoParts}
 	}
 	return CostEstimate{Rows: estimatedRows(est), Status: CostEstimated}
 }

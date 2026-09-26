@@ -202,11 +202,12 @@ func TestCostFrom(t *testing.T) {
 	}
 }
 
-// A query the server estimated nothing for reads no table it tracks this
-// way: a constant, or a count answered from metadata. Zero rows would read as
-// a measurement of a free query rather than the absence of one.
-func TestCostFromWithNoTables(t *testing.T) {
-	if got := costFrom(nil); got.Status != CostUntracked {
-		t.Errorf("status = %v, want untracked", got.Status)
+// A server that estimated nothing predicts no part will be read: an empty
+// table, a window everything pruned out of, or a count answered from
+// metadata. Zero rows would read as a measurement of a free query rather than
+// the absence of one.
+func TestCostFromWithNoParts(t *testing.T) {
+	if got := costFrom(nil); got.Status != CostNoParts {
+		t.Errorf("status = %v, want no parts", got.Status)
 	}
 }
