@@ -2,6 +2,7 @@ package alert
 
 import (
 	"fmt"
+	"maps"
 	"sort"
 	"text/template"
 	"time"
@@ -125,13 +126,7 @@ type State struct {
 // left. The caller derives it from how long delivery can take (spec 6.5); a
 // zero or negative value keeps the old behaviour of returning a resolve once.
 func New(r rule.Rule, groupLabels map[string]string, src source.Source, resolvedRetention time.Duration) *State {
-	base := make(map[string]string, len(groupLabels)+len(r.Labels)+1)
-	for k, v := range groupLabels {
-		base[k] = v
-	}
-	for k, v := range r.Labels {
-		base[k] = v
-	}
+	base := baseLabels(r, groupLabels)
 
 	parsed, parseErrs := parseAnnotations(r.Annotations)
 
@@ -145,6 +140,64 @@ func New(r rule.Rule, groupLabels map[string]string, src source.Source, resolved
 		hash:        fingerprint,
 		retention:   resolvedRetention,
 	}
+}
+
+// baseLabels is the rule's file-level label set: group labels overlaid with
+// the rule's own, which is levels 1 and 2 of spec 6.3.1.
+func baseLabels(r rule.Rule, groupLabels map[string]string) map[string]string {
+	base := make(map[string]string, len(groupLabels)+len(r.Labels)+1)
+	for k, v := range groupLabels {
+		base[k] = v
+	}
+	for k, v := range r.Labels {
+		base[k] = v
+	}
+	return base
+}
+
+// Adopt re-points this state at a reloaded definition of the same rule,
+// keeping every instance it tracks, and reports whether it could. A false
+// return means the definition is a different alert and the caller has to build
+// a fresh state for it.
+//
+// What "the same rule" means here is exactly what an alert's identity is made
+// of (spec 6.3): the label set. That is the rule's effective labels, its name,
+// and the source it evaluated against, because labelsFor assembles a
+// fingerprint from all three. Change any one of them and every instance held
+// here has a fingerprint no future evaluation will produce: it would never be
+// seen again, so it would resolve on the next evaluation and then be re-created
+// under its new identity with its `for` timer starting from zero. Refusing is
+// the same outcome arrived at in one step instead of two, and without a resolve
+// notification for an alert that did not recover.
+//
+// Everything else about a rule is free to change. A new threshold, a new
+// window, a different `for`, an edited annotation: none of them alter which
+// alert this is, and all of them are edits an author makes to a rule that is
+// already pending. Keeping the instance is the entire point of reloading rather
+// than restarting, and the edited definition takes effect from this evaluation
+// on: a shortened `for` is measured against the ActiveAt the instance already
+// had, and an annotation is re-rendered on every evaluation anyway.
+func (s *State) Adopt(r rule.Rule, groupLabels map[string]string, src source.Source, resolvedRetention time.Duration) bool {
+	base := baseLabels(r, groupLabels)
+	if r.Alert != s.rule.Alert || !maps.Equal(base, s.base) {
+		return false
+	}
+	if src.Name != s.src.Name || !maps.Equal(src.Labels, s.src.Labels) {
+		return false
+	}
+
+	parsed, parseErrs := parseAnnotations(r.Annotations)
+
+	s.rule = r
+	s.base = base
+	// The source carries more than its labels: an address, a timestamp column,
+	// the caps a query is sent with. Those belong to the reloaded file too,
+	// even though they are not part of what the alert is.
+	s.src = src
+	s.annotations = parsed
+	s.parseErrs = parseErrs
+	s.retention = resolvedRetention
+	return true
 }
 
 // Eval advances every instance by one evaluation and returns every instance it

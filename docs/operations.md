@@ -1,7 +1,7 @@
 # Operating the ruler
 
-What to watch, what the logs mean, what refuses to start, and how to find the
-ruler's queries on the cluster.
+What to watch, what the logs mean, what refuses to start, what a reload
+refuses, and how to find the ruler's queries on the cluster.
 
 The metrics below are the ones the ruler exposes on `/metrics`. Two Grafana
 dashboards built from them ship in
@@ -145,6 +145,33 @@ rollout finishes. Staying raised means somebody wrote a rule against a
 cluster that does not exist here, and nobody read the warning `ruler check`
 already gave them.
 
+### A reload the ruler refused
+
+```promql
+clickhouse_ruler_config_last_reload_successful == 0
+```
+
+**Trouble immediately.** The ruler re-read its files, found something it will
+not run, and kept the version it was already running. Everything looks healthy
+from the outside: the rules that are loaded evaluate, they fire, they deliver.
+What is wrong is that they are not the rules in your repository, and nothing
+else says so.
+
+The reason is on stderr, with the file and line of every finding. Fix the file
+and send another `SIGHUP`; the gauge returns to 1 on the first load that
+succeeds.
+
+Its pair dates the configuration actually running:
+
+```promql
+time() - clickhouse_ruler_config_last_reload_timestamp_seconds
+```
+
+This one is only stamped by a load that succeeded, so it answers "how old are
+the rules this ruler is evaluating" rather than "when did somebody last try".
+On a ruler nobody reloads it climbs from the moment it started, which is
+correct and not worth alerting on by itself.
+
 ## What the logs mean
 
 Everything the daemon says once it is running is a structured line on stdout.
@@ -162,6 +189,8 @@ about what they typed.
 | error | `metrics listener stopped` | The HTTP surface is gone, so metrics and probes are unanswered while the evaluation loop carries on. Usually the `listen` address is already taken. Restart it. |
 | warn | `shutdown timeout expired with evaluations still running` | A query or a send was cut off part way through. This is the only signal that says so. If it happens on every restart, raise `--shutdown-timeout` above your slowest evaluation. |
 | warn | `refusing a source that failed the user contract` | Deliberate, see below. |
+| info | `reloading` / `reloaded` | Nothing. A `SIGHUP` arrived and the files were re-read. `reloaded` carries the `rules` and `sources` count now running, which is the pair to compare against the `ruler running` line. |
+| error | `refusing the reload, the previous configuration keeps running` | Read `reason`, then the findings on stderr. The ruler is still evaluating the rules it had before the signal. Nothing is degraded and nothing was applied. |
 
 One line per failed source and one per failed send, never one per alert
 instance: a rule returning ten thousand rows that cannot be delivered writes
@@ -199,6 +228,59 @@ them exit 2 and say so on stderr, rather than starting with a value that
 would quietly misbehave. A source the ruler cannot connect to at all exits 3,
 which is a distinct code so a supervisor can tell "the flags were wrong" from
 "the cluster is unreachable".
+
+## What a reload refuses
+
+`SIGHUP` re-reads the rules directory, the sources file and the policy file,
+and replaces what is running with them. Nothing watches the filesystem: you say
+when the files are complete, because a watcher would read a rules tree half way
+through being written.
+
+```bash
+kill -HUP $(pidof ruler)
+```
+
+A reload is all or nothing. Every way it can fail leaves the ruler evaluating
+exactly what it was evaluating before the signal, and raises the refused-reload
+gauge above.
+
+**An error-severity finding refuses the whole reading.** Including the files in
+it that are fine: a rules tree is loaded as a tree, and half of one is not a
+configuration anybody wrote down. This is the same bar `ruler check` and startup
+apply, so a rule that would fail CI cannot be reloaded into a running ruler
+either. A warning is reported and the reload proceeds.
+
+**A file that cannot be read refuses it too.** A missing sources file, a policy
+file that will not parse, a rules directory that has gone: the running
+configuration is kept, because a reload is not an opportunity to leave the ruler
+evaluating nothing.
+
+**A source failing the user contract is still refused on its own**, exactly as
+at startup, and the rest of the reload proceeds. A reload is where a revoked
+grant is noticed: the contract is checked at `ruler check`, at startup and here,
+and never per evaluation, so between reloads the report is as old as the last
+one.
+
+What survives a reload is as important as what it refuses:
+
+- **A pending alert keeps its place.** A rule whose name, labels and source are
+  unchanged keeps the instances it is tracking, so an alert part way through its
+  `for` does not start again from zero. Change any of those three and it is a
+  different alert, which starts fresh. A process restart keeps nothing, which is
+  the reason to reload rather than restart.
+- **A firing alert keeps its resend cadence.** It is not re-posted to
+  Alertmanager because of the reload.
+- **A connection is reused.** A source whose definition did not change keeps the
+  connection it had; one nothing matches any more is closed once the evaluations
+  holding it have finished; one the reload brought in is opened before anything
+  evaluates against it.
+- **A group's tick schedule restarts.** Groups are re-staggered from the moment
+  the reload finishes rather than resuming their old phase, so one evaluation can
+  land up to an interval away from where you would have predicted it.
+
+Series for a group or rule the reload dropped are deleted from `/metrics`. A
+counter left at its last value reads as a rule that still runs and has gone
+quiet, which is the one thing a deleted rule must not look like.
 
 ## Finding the ruler's queries in ClickHouse
 

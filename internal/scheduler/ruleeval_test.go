@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -20,11 +21,14 @@ import (
 type fakeQuerier struct {
 	samples []alert.Sample
 	err     error
-	calls   int
+
+	// calls is atomic because rules in a group are evaluated concurrently and
+	// several can share one source's querier.
+	calls atomic.Int64
 }
 
 func (q *fakeQuerier) Run(context.Context, rule.Rule, query.Attribution, time.Time) ([]alert.Sample, error) {
-	q.calls++
+	q.calls.Add(1)
 	if q.err != nil {
 		return nil, q.err
 	}
