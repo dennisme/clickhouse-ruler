@@ -127,16 +127,16 @@ func runRun(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		refuseSources(set, refused)
 	}
 
-	queriers, err := openQueriers(set)
+	reg := prometheus.NewRegistry()
+	metrics := scheduler.NewMetrics(reg)
+	clock := scheduler.NewRealClock()
+
+	queriers, err := openQueriers(set, queryCost{metrics})
 	if err != nil {
 		printf(stderr, "%s\n", err)
 		return exitRun
 	}
 	defer closeQueriers(queriers)
-
-	reg := prometheus.NewRegistry()
-	metrics := scheduler.NewMetrics(reg)
-	clock := scheduler.NewRealClock()
 
 	// Both the cadence and each rule's resolved-alert retention are sized from
 	// these two, so they are passed as the pair they are (spec 6.5).
@@ -170,6 +170,27 @@ func runRun(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	_ = httpSrv.Shutdown(shutdownCtx)
 
 	return exitOK
+}
+
+// queryCost reports what an evaluation's query cost into the metrics
+// registry (spec 8.2).
+//
+// The adapter exists so internal/query never learns what a Prometheus
+// collector is and internal/scheduler never learns what a driver callback
+// is. It is the wiring, so it lives where the wiring is.
+type queryCost struct{ metrics *scheduler.Metrics }
+
+func (c queryCost) QueryCost(rule, team string, u query.Usage) {
+	c.metrics.QueryReadRowsTotal.WithLabelValues(rule, team).Add(float64(u.ReadRows))
+	c.metrics.QueryReadBytesTotal.WithLabelValues(rule, team).Add(float64(u.ReadBytes))
+	c.metrics.QueryDuration.WithLabelValues(rule).Observe(u.Duration.Seconds())
+
+	// A query the server reported no memory for is one that never ran, such
+	// as a connection that failed. Observing a zero would pull the histogram
+	// down with a measurement nobody made.
+	if u.PeakMemory > 0 {
+		c.metrics.QueryMemoryUsage.WithLabelValues(rule).Observe(float64(u.PeakMemory))
+	}
 }
 
 // pinger is all readiness asks of a source: whether it answers.
@@ -210,14 +231,14 @@ func toPingers(queriers map[string]*query.Querier) map[string]pinger {
 // openQueriers connects to every source any loaded rule matched, once each,
 // so a rule that matches several sources shares a connection with any other
 // rule matching the same one.
-func openQueriers(set *ruleset.Set) (map[string]*query.Querier, error) {
+func openQueriers(set *ruleset.Set, rec query.Recorder) (map[string]*query.Querier, error) {
 	out := map[string]*query.Querier{}
 	for _, r := range set.Rules {
 		for _, src := range r.Sources {
 			if _, ok := out[src.Name]; ok {
 				continue
 			}
-			q, err := query.Open(src)
+			q, err := query.Open(src, rec)
 			if err != nil {
 				closeQueriers(out)
 				return nil, fmt.Errorf("opening source %q: %w", src.Name, err)

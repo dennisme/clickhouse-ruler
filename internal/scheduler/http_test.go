@@ -50,6 +50,10 @@ func TestMetricsAreNamespacedToThisRuler(t *testing.T) {
 	m.AlertsSendFailures.WithLabelValues("am").Inc()
 	m.NotificationLatency.Observe(1)
 	m.RulesUnmatched.WithLabelValues("f.yaml:g1").Set(0)
+	m.QueryReadRowsTotal.WithLabelValues("R", "payments").Add(1)
+	m.QueryReadBytesTotal.WithLabelValues("R", "payments").Add(1)
+	m.QueryMemoryUsage.WithLabelValues("R").Observe(1)
+	m.QueryDuration.WithLabelValues("R").Observe(1)
 
 	body := serveMetrics(t, reg)
 
@@ -67,6 +71,10 @@ func TestMetricsAreNamespacedToThisRuler(t *testing.T) {
 		"clickhouse_ruler_alerts_send_failures_total",
 		"clickhouse_ruler_notification_latency_seconds",
 		"clickhouse_ruler_rules_unmatched",
+		"clickhouse_ruler_query_read_rows_total",
+		"clickhouse_ruler_query_read_bytes_total",
+		"clickhouse_ruler_query_memory_usage_bytes",
+		"clickhouse_ruler_query_duration_seconds",
 	} {
 		if !strings.Contains(body, name+"{") && !strings.Contains(body, name+" ") {
 			t.Errorf("%s is not exposed on /metrics", name)

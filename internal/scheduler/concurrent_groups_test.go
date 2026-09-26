@@ -10,6 +10,7 @@ import (
 
 	"github.com/dennisme/clickhouse-ruler/internal/alert"
 	"github.com/dennisme/clickhouse-ruler/internal/notify"
+	"github.com/dennisme/clickhouse-ruler/internal/query"
 	"github.com/dennisme/clickhouse-ruler/internal/rule"
 	"github.com/dennisme/clickhouse-ruler/internal/ruleset"
 	"github.com/dennisme/clickhouse-ruler/internal/source"
@@ -20,7 +21,7 @@ type countingQuerier struct {
 	calls atomic.Int64
 }
 
-func (q *countingQuerier) Run(context.Context, rule.Rule, string, time.Time) ([]alert.Sample, error) {
+func (q *countingQuerier) Run(context.Context, rule.Rule, query.Attribution, time.Time) ([]alert.Sample, error) {
 	q.calls.Add(1)
 	return oneSample(), nil
 }

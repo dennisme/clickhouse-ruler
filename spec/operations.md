@@ -148,8 +148,22 @@ ignored: the check warns at authoring time, this catches the case where nobody
 read the warning.
 
 Of these four, only `clickhouse_ruler_rules_unmatched` exists. The other three belong to
-`ruler watch`, and so does the query cost table above, which needs a driver
-progress callback inside `internal/query`.
+`ruler watch`.
+
+The query cost table above is read from the driver's callbacks as the query
+runs. Progress packets carry what each block read rather than a running
+total, so they are added; memory arrives as a per-thread gauge, so the
+query's cost is the highest any thread reached. `team` comes from the rule's
+effective labels and is empty when the author set none, which is left
+visible: chargeback that hides what is unattributed is chargeback nobody can
+reconcile.
+
+Cost is recorded whether or not the evaluation succeeded, because a rule that
+trips a cap is the one an operator is looking for. What it records is
+whatever the server reported before the failure, which is nothing when the
+query was refused outright: a result overflow throws before the first
+progress packet, so that evaluation reports a duration and no rows. Timeouts
+and memory caps, which are the expensive rules, report what they read.
 
 ### 8.3 Cardinality rule
 
@@ -515,13 +529,17 @@ Borrowed from `pint`:
   `clickhouse_ruler_problem` gauge. Catches rules that *became* broken after a schema
   change, which CI cannot. Alert on your alerts.
 
-Built so far: rule and source parsing with tier 0 checks, the alert state
-machine, the querier, annotation templating and the Alertmanager client, and
-`ruler check` with configurable policy. `ruler` and `ruler watch` do not
-exist: nothing calls the querier on an interval yet.
+Built so far: `ruler check` with configurable policy, tiers 0 through 2 of
+section 7 including the checks that read the query through the database and
+the one that reads rows, and `ruler run`, which ticks groups on their
+intervals, evaluates against every matched source, and delivers to
+Alertmanager. The observability in section 8 is complete apart from the watch
+mode metrics.
 
-Next: the eval loop and hot reload, then tier 1 checks at load time, then tier
-2, then tier 3 backfill, then watch mode.
+`ruler watch` does not exist, so rules are not reloaded without a restart.
+
+Next: watch mode, which brings hot reload and the three remaining metrics in
+8.2, then tier 3 backfill (7.4).
 
 The validation package is already re-runnable against loaded rules, so watch
 mode is a caller rather than a rewrite.

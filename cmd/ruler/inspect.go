@@ -45,7 +45,7 @@ func inspectRules(ctx context.Context, set *ruleset.Set, root *policy.Policy, sa
 				continue
 			}
 
-			findings, err := q.Inspect(ctx, r.Rule, r.GroupID(), checks)
+			findings, err := q.Inspect(ctx, r.Rule, attribution(r), checks)
 			if err != nil {
 				problems = append(problems, inspectionFailed(r, src.Name, err))
 				continue
@@ -63,7 +63,7 @@ func inspectRules(ctx context.Context, set *ruleset.Set, root *policy.Policy, sa
 
 			// The only checks that read rows, so they run when they were asked
 			// for and never merely because a connection exists (spec 7.3).
-			sampled, err := q.Sample(ctx, r.Rule, r.GroupID(), sampleChecks, now)
+			sampled, err := q.Sample(ctx, r.Rule, attribution(r), sampleChecks, now)
 			if err != nil {
 				problems = append(problems, inspectionFailed(r, src.Name, err))
 				continue
@@ -98,12 +98,19 @@ func samplingFromPolicy(p *policy.Policy) (query.SampleChecks, bool) {
 
 // querierFor opens one connection per source and reuses it for every rule
 // that matched, rather than reconnecting per rule.
+// attribution is what a rule's queries are recorded against: its group, and
+// the team from its effective labels, which is empty when nobody claimed the
+// rule (spec 8.2).
+func attribution(r ruleset.Rule) query.Attribution {
+	return query.Attribution{Group: r.GroupID(), Team: r.Team()}
+}
+
 func querierFor(open map[string]*query.Querier, src source.Source) (*query.Querier, error) {
 	if q, ok := open[src.Name]; ok {
 		return q, nil
 	}
 
-	q, err := query.Open(src)
+	q, err := query.Open(src, nil)
 	if err != nil {
 		return nil, err
 	}

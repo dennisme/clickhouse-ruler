@@ -27,7 +27,7 @@ func TestOpenDoesNotLeakPassword(t *testing.T) {
 			Database: "otel",
 			Username: "ruler",
 			Password: password,
-		})
+		}, nil)
 		if err != nil && strings.Contains(err.Error(), password) {
 			t.Errorf("address %q: password leaked into error: %v", addr, err)
 		}
@@ -77,7 +77,7 @@ func TestRunDoesNotLeakPassword(t *testing.T) {
 		Database: "otel",
 		Username: "ruler",
 		Password: password,
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}

@@ -12,6 +12,9 @@ import (
 
 // The group every query in this test names. Distinct from testGroup so the
 // rows this test reads back are its own.
+var commentAttribution = Attribution{Group: "rules/payments.yaml:latency", Team: "payments"}
+
+// The group those queries name, for reading back out of the log.
 const commentGroup = "rules/payments.yaml:latency"
 
 // queryLogCount asks how many finished queries the cluster recorded for one
@@ -67,15 +70,15 @@ func TestEveryPathCarriesTheLogCommentIntoTheQueryLog(t *testing.T) {
 	expr := selectWithKey("ResourceAttributes", presentKey)
 
 	if _, err := q.Run(ctx, rule.Rule{Alert: "EvaluatedRule", Expr: expr, Window: time.Hour},
-		commentGroup, anchor); err != nil {
+		commentAttribution, anchor); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	if _, err := q.Inspect(ctx, rule.Rule{Alert: "InspectedRule", Expr: expr},
-		commentGroup, Checks{Database: src.Database}); err != nil {
+		commentAttribution, Checks{Database: src.Database}); err != nil {
 		t.Fatalf("Inspect: %v", err)
 	}
 	if _, err := q.Sample(ctx, rule.Rule{Alert: "SampledRule", Expr: expr, Window: time.Hour},
-		commentGroup, SampleChecks{}, anchor); err != nil {
+		commentAttribution, SampleChecks{}, anchor); err != nil {
 		t.Fatalf("Sample: %v", err)
 	}
 
@@ -106,7 +109,7 @@ func TestTheLogCommentCarriesNeitherSQLNorData(t *testing.T) {
 		Alert:  "PlainCommentRule",
 		Expr:   selectWithKey("ResourceAttributes", presentKey),
 		Window: time.Hour,
-	}, commentGroup, anchor); err != nil {
+	}, commentAttribution, anchor); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 

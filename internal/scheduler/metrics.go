@@ -12,11 +12,9 @@ import (
 // one metric series per rule, or the ruler becomes the cardinality problem
 // it exists to fix (spec 8.3).
 //
-// ClickHouse query cost (clickhouse_ruler_query_read_rows_total and friends) and the
-// watch mode metrics (clickhouse_ruler_problem, clickhouse_ruler_config_last_reload_*) are not
-// here: the former needs a driver progress callback inside internal/query,
-// and the latter belongs to `ruler watch`, which does not exist yet. Both
-// are out of scope for this slice.
+// The watch mode metrics (clickhouse_ruler_problem,
+// clickhouse_ruler_config_last_reload_*) are not here: they belong to
+// `ruler watch`, which does not exist yet.
 type Metrics struct {
 	EvaluationsTotal        *prometheus.CounterVec
 	EvaluationFailuresTotal *prometheus.CounterVec
@@ -35,6 +33,11 @@ type Metrics struct {
 	NotificationLatency prometheus.Histogram
 
 	RulesUnmatched *prometheus.GaugeVec
+
+	QueryReadRowsTotal  *prometheus.CounterVec
+	QueryReadBytesTotal *prometheus.CounterVec
+	QueryMemoryUsage    *prometheus.HistogramVec
+	QueryDuration       *prometheus.HistogramVec
 }
 
 // NewMetrics registers every scheduler metric against reg. A nil reg uses
@@ -126,5 +129,41 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 			Name: "clickhouse_ruler_rules_unmatched",
 			Help: "Number of loaded rules that matched no source, so this ruler will never evaluate them.",
 		}, []string{"rule_group"}),
+
+		// What a rule costs the cluster, read from the driver's callbacks
+		// during the query rather than from system.query_log afterwards
+		// (spec 8.2). These are what make the caps in 6.7 observable rather
+		// than theoretical, and what a team's share of a cluster is billed
+		// from.
+		//
+		// `team` comes from the rule's effective labels and is empty when
+		// the author set none, which is a rule nobody has claimed rather
+		// than a rule owned by the empty string. Left visible rather than
+		// defaulted: the chargeback these exist for needs to show what is
+		// unattributed.
+		QueryReadRowsTotal: f.NewCounterVec(prometheus.CounterOpts{
+			Name: "clickhouse_ruler_query_read_rows_total",
+			Help: "Total rows ClickHouse read evaluating a rule. Empty team means the rule carries no team label.",
+		}, []string{"rule", "team"}),
+
+		QueryReadBytesTotal: f.NewCounterVec(prometheus.CounterOpts{
+			Name: "clickhouse_ruler_query_read_bytes_total",
+			Help: "Total bytes ClickHouse read evaluating a rule. Empty team means the rule carries no team label.",
+		}, []string{"rule", "team"}),
+
+		// Bucketed in powers of eight from a megabyte, because the cap this
+		// is read against is measured in gigabytes and a linear scale over
+		// that range says nothing about the rules below it.
+		QueryMemoryUsage: f.NewHistogramVec(prometheus.HistogramOpts{
+			Name:    "clickhouse_ruler_query_memory_usage_bytes",
+			Help:    "Peak memory one evaluation's query reached on the server.",
+			Buckets: prometheus.ExponentialBuckets(1<<20, 8, 6),
+		}, []string{"rule"}),
+
+		QueryDuration: f.NewHistogramVec(prometheus.HistogramOpts{
+			Name:    "clickhouse_ruler_query_duration_seconds",
+			Help:    "Time one evaluation's query took, measured by the ruler from sending it to the last row arriving.",
+			Buckets: prometheus.DefBuckets,
+		}, []string{"rule"}),
 	}
 }

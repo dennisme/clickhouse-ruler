@@ -67,7 +67,7 @@ type sampleResult struct {
 //
 // An error means the sample could not be taken and is never a finding about the
 // rule, the same line classifyExplain draws.
-func (q *Querier) Sample(ctx context.Context, r rule.Rule, group string, c SampleChecks, now time.Time) ([]Finding, error) {
+func (q *Querier) Sample(ctx context.Context, r rule.Rule, who Attribution, c SampleChecks, now time.Time) ([]Finding, error) {
 	ctx, cancel := context.WithTimeout(ctx, sampleTimeout)
 	defer cancel()
 
@@ -75,7 +75,7 @@ func (q *Querier) Sample(ctx context.Context, r rule.Rule, group string, c Sampl
 	// sample does. They are cheap, but they are still this rule's queries,
 	// and an operator picking its work out of system.query_log wants all of
 	// it (spec 8.5).
-	ctx = clickhouse.Context(ctx, clickhouse.WithSettings(withLogComment(nil, group, r.Alert)))
+	ctx = clickhouse.Context(ctx, clickhouse.WithSettings(withLogComment(nil, who.Group, r.Alert)))
 
 	sql, err := renderForCheck(r.Expr)
 	if err != nil {
@@ -108,7 +108,7 @@ func (q *Querier) Sample(ctx context.Context, r rule.Rule, group string, c Sampl
 
 	from, to := sampleWindow(q.src, r, now)
 
-	res, err := q.sample(ctx, keys, from, to, c, group, r.Alert)
+	res, err := q.sample(ctx, keys, from, to, c, who.Group, r.Alert)
 	if err != nil {
 		return nil, err
 	}
