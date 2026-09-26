@@ -37,6 +37,7 @@ const (
 	CheckAnnotationsTemplate = "annotations/template"
 
 	CheckRuleSourceMatch    = "rule/source-match"
+	CheckRuleSourceSchema   = "rule/source-schema"
 	CheckRuleProtectedLabel = "rule/protected-label"
 	CheckRuleDuplicateAlert = "rule/duplicate-alert"
 	CheckRulesetDirectory   = "ruleset/directory"
@@ -387,6 +388,28 @@ var checks = []Check{
 		Limits:  []string{LimitSampleRows},
 		Flags:   []string{FlagRequireRows},
 		Summary: "a map key the query reads that no recent row actually has",
+	},
+
+	// A warning, and the argument is the same one rule/duplicate-alert makes
+	// about who is on the critical path. What the finding says is serious: a
+	// rule whose matched sources return different columns cannot be correct
+	// everywhere it runs, because the result columns are the alert's labels,
+	// so the same rule produces alerts of one shape on one cluster and another
+	// shape on the next, and a threshold compared against a value of a
+	// different type is a rule that means something else there.
+	//
+	// It is still not the rule author's to fix. Which sources a selector
+	// reaches is decided by the labels an operator put on them, and whether
+	// two clusters carry the same table is a migration somebody else owns
+	// (spec 6.10). An error would block a rule change behind a schema change
+	// in another team's cluster, which is the shape of check that gets
+	// switched off rather than fixed. The operator who owns both clusters is
+	// the one who raises it, and by then the finding is about a file they can
+	// act on.
+	{
+		Name: CheckRuleSourceSchema, Spec: "6.10", Default: SeverityWarning,
+		Summary: "matched sources that return different columns for one rule, so it means something " +
+			"different on each",
 	},
 
 	// Configurable, and warn by default, because the answer differs per

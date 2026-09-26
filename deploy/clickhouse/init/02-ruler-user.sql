@@ -52,3 +52,14 @@ GRANT READ ON URL TO ruler_wide;
 GRANT READ ON FILE TO ruler_wide;
 GRANT READ ON S3 TO ruler_wide;
 GRANT REMOTE ON *.* TO ruler_wide;
+
+-- The second source's user, under the same contract and reading the other
+-- database. Two sources are what the checks comparing sources with each other
+-- need, and a source is a cluster, a user and a table, so the second one gets
+-- its own user rather than widening the first's role (spec 6.10).
+CREATE ROLE IF NOT EXISTS ruler_dc2_reader;
+GRANT SELECT ON otel_dc2.otel_traces TO ruler_dc2_reader;
+
+CREATE USER IF NOT EXISTS ruler_dc2 IDENTIFIED WITH no_password SETTINGS PROFILE ruler;
+GRANT ruler_dc2_reader TO ruler_dc2;
+ALTER USER ruler_dc2 DEFAULT ROLE ALL;

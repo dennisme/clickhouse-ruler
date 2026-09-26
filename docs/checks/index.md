@@ -30,6 +30,7 @@ Generated from the check table in `internal/lint/checks.go`. Edit the table, the
 | [`rule/select-star`](rule.md#rule-select-star) | `warning` by default | a query selecting *, so a schema change rewrites every alert's identity |
 | [`rule/settings`](rule.md#rule-settings) | fixed, always `error` | a query setting its own SETTINGS, overriding the limits the ruler sends |
 | [`rule/source-match`](rule.md#rule-source-match) | `warning` by default | a rule whose selector matches no source, so this ruler will never evaluate it |
+| [`rule/source-schema`](rule.md#rule-source-schema) | `warning` by default | matched sources that return different columns for one rule, so it means something different on each |
 | [`rule/syntax`](rule.md#rule-syntax) | fixed, always `error` | SQL ClickHouse cannot parse, or a second statement nobody reviewed |
 | [`rule/table-access`](rule.md#rule-table-access) | `warning` by default | a source's user cannot read what the rule asks for, so nothing could be checked |
 | [`rule/table-function`](rule.md#rule-table-function) | `error` by default | a query reading through a table function the allowlist does not permit |
