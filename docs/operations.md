@@ -90,7 +90,7 @@ clickhouse_ruler_rules_unmatched > 0
 
 **Trouble when it stays raised for an hour.** These are rules this ruler
 loaded whose source selector matched none of the sources it holds, so it will
-never evaluate them. Non-zero is normal on a per-data-centre ruler reading a
+never evaluate them. Non-zero is normal on a per-datacenter ruler reading a
 shared rules repository, and it is expected to return to zero once a cluster
 rollout finishes. Staying raised means somebody wrote a rule against a
 cluster that does not exist here, and nobody read the warning `ruler check`

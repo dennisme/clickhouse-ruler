@@ -907,7 +907,7 @@ this is worth doing with labels rather than an allowlist of rule paths.
 
 **Matching nothing is a warning, not an error.** A rule that matches no source
 cannot run here, and the instinct is to fail. That instinct is wrong for two
-reasons. Deployments are distributed (10.2), so a ruler in one data centre
+reasons. Deployments are distributed (10.2), so a ruler in one datacenter
 legitimately holds sources for its own clusters and nothing else; most rules
 in a shared repository will match nothing on most rulers, and that is normal
 rather than broken. And rollout has an order: when a cluster is added, rules

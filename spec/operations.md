@@ -141,7 +141,7 @@ Validation and config, used by watch mode:
 
 `clickhouse_ruler_problem` is the `pint` analog. `clickhouse_ruler_rules_unmatched` counts rules this
 ruler loaded that match no source it holds, so it will never evaluate them
-(6.10). Expected to be non-zero on a per-data-centre ruler reading a shared
+(6.10). Expected to be non-zero on a per-datacenter ruler reading a shared
 repository, and expected to return to zero after a cluster rollout finishes.
 Alerting on it staying raised is how the soft failure in 6.10 stops being
 ignored: the check warns at authoring time, this catches the case where nobody
@@ -556,7 +556,7 @@ The label mapping in 6.10 exists so that these are all the same binary with a
 different sources file, rather than four products.
 
 - **One ruler, one cluster.** Sources need no labels at all.
-- **Ruler per data centre.** Each holds sources for its own clusters, so data
+- **Ruler per datacenter.** Each holds sources for its own clusters, so data
   is queried locally rather than across a link. A shared rules repository is
   read by all of them, and each evaluates the subset matching its sources.
   This is the topology that makes an unmatched rule normal rather than broken.

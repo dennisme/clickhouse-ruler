@@ -55,7 +55,7 @@ and are what the code comments cite.
   which needs no directory convention.
 - **Matching nothing is a warning.** Whether a rule can run depends on which
   ruler is asking, so a shared repository is legitimately unmatched on a ruler
-  holding another data centre's sources, and a rollout may land rules before
+  holding another datacenter's sources, and a rollout may land rules before
   the source for a new cluster. See 6.10 and 10.2.
 - **What this project is for.** Keeping ClickHouse alerts in git is a solved
   problem, by operators and Terraform providers. The two gaps left are running

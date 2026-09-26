@@ -27,7 +27,7 @@ func loadSourcesFrom(t *testing.T, name string) *source.File {
 }
 
 // A rule whose labels no source accepts is a warning, not an error. On a
-// ruler holding one data centre's sources, most rules in a shared repository
+// ruler holding one datacenter's sources, most rules in a shared repository
 // match nothing, and failing hard would make a shared repository unusable
 // (spec 6.10).
 func TestLoadWarnsWhenNoSourceMatches(t *testing.T) {

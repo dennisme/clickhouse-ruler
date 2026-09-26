@@ -10,9 +10,9 @@ because there is nothing to select between.
 
 Start here. Everything below is this plus a reason.
 
-## Ruler per data centre
+## Ruler per datacenter
 
-One ruler in each data centre, each holding the sources for its own clusters,
+One ruler in each datacenter, each holding the sources for its own clusters,
 so a query reads data locally rather than across a link. Every ruler reads the
 same rules repository and evaluates the subset whose selector matches the
 sources it holds.
