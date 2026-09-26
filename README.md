@@ -158,6 +158,9 @@ Working:
 - What each rule costs the cluster, per rule and per team: rows and bytes
   read, peak memory and query duration, taken from the driver as the query
   runs rather than from a follow-up query.
+- `SIGHUP` re-reads the rules, sources and policy files and replaces what is
+  running, keeping the `for` timer of every alert already pending and refusing
+  a version that fails a correctness check.
 - A ClickHouse and Alertmanager compose stack, with an end to end test taking
   a rule from a file all the way to a delivered notification.
 
@@ -166,7 +169,9 @@ Not built yet:
 - No backfill. `--sample` reads rows to confirm a rule's attribute keys exist,
   but how often a rule would have fired over the last week needs the query run
   across historical windows. Spec 7.4.
-- No `ruler watch`, so rules are not reloaded without a restart.
+- No `ruler watch`. Rules reload on `SIGHUP`, but nothing re-validates the
+  rules already loaded on a timer, so a rule that became broken after a schema
+  change is not reported until something reloads or re-runs `ruler check`.
 - No Alertmanager route tree generation.
 
 Known gaps that will change:

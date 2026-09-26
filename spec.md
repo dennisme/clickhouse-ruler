@@ -186,9 +186,14 @@ That is the property we are copying. Everything else follows from it.
 
 1. **Metrics tables.** The `pint` `promql/rate` and `promql/counter` checks have
    a loose analog for counter columns in OTel metrics tables. Worth it, or skip?
-2. **Restart loses pending state.** `ActiveAt` is held in memory only, so a
-   ruler restart delays every pending alert by its full `for`. Prometheus
-   solves this by restoring from an `ALERTS_FOR_STATE` series. Deferred.
+2. **Restart loses pending state, a reload does not.** `ActiveAt` is held in
+   memory only, so a ruler restart still delays every pending alert by its full
+   `for`. A `SIGHUP` reload no longer does: a rule whose name, effective labels
+   and source are unchanged keeps the instances it was tracking, which is what
+   makes editing a rule file cheap and is most of the reason to reload rather
+   than restart. What is left open is the restart, and the replica added to an
+   existing set, which is the same problem read from the other end. Prometheus
+   solves both by restoring from an `ALERTS_FOR_STATE` series. Deferred.
 3. **Ownership at scale.** Deferred, not solved. Operating a ruler that
    thousands of engineers page off means high availability, missed evaluation
    handling, clock skew, ClickHouse restarts mid window, and backfill after an
