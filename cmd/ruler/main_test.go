@@ -337,3 +337,25 @@ func TestExplainListsExemptions(t *testing.T) {
 		}
 	}
 }
+
+// The numbers in the table come from the cluster, so asking for one offline
+// would produce a table saying every rule is free (spec 7.10).
+func TestCheckSummaryNeedsOnline(t *testing.T) {
+	dir := fixture(t, bareRule, "")
+	out := filepath.Join(dir, "summary.md")
+
+	code, _, stderr := runCheck(t, "check",
+		"--sources", filepath.Join(dir, "sources.yaml"),
+		"--summary", out,
+		filepath.Join(dir, "rules"))
+
+	if code == 0 {
+		t.Error("exit = 0, want non-zero for --summary without --online")
+	}
+	if !strings.Contains(stderr, "--online") {
+		t.Errorf("error should say what is missing, got: %s", stderr)
+	}
+	if _, err := os.Stat(out); err == nil {
+		t.Error("a summary file was written for a run that never connected")
+	}
+}

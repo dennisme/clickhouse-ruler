@@ -22,6 +22,50 @@ query is costs a parse, while sampling runs statements against the source's
 data. The sample is bounded by `max-sample-rows` and reads as the source's own
 user, so row policies apply to it.
 
+## The cost table
+
+`--summary` writes a markdown table of what every rule is predicted to read,
+one row per rule and source. `-` writes it to stdout.
+
+```bash
+ruler check --online --sources rules/sources.yaml --summary cost.md rules/
+```
+
+```markdown
+| File | Alert | Source | Rows | Interval |
+| --- | --- | --- | --- | --- |
+| rules/payments/latency.yaml | HighP99Latency | payments_prod | 4127000 | 30s |
+| rules/payments/latency.yaml | HighP99Latency | payments_staging | 90000 | 30s |
+```
+
+It needs `--online`, because the numbers come from `EXPLAIN ESTIMATE` and only
+the cluster can answer. Nothing is executed and no rows are read. Write it to
+a path rather than to stdout when `--format=github` is in use: there stdout
+carries the workflow commands GitHub reads, and a table in the middle of them
+is parsed as annotations.
+
+A rule that matches two sources is two rows, never one averaged: the same SQL
+is cheap on staging and ruinous on production, and that gap is the row worth
+looking at. The interval sits beside the count because the pair is the
+sentence that matters, "4.1 million rows every 30 seconds". The numbers are
+predictions, with the accuracy [`rule/cost`](checks/rule.md#rule-cost)
+describes, and a cell that is not a count says why rather than saying zero.
+
+Posting it is the workflow's job. The ruler writes a file; a job that can
+comment on a pull request already holds the token for it:
+
+```yaml
+- run: ruler check --online --sources rules/sources.yaml --summary cost.md rules/
+- run: gh pr comment "$PR" --body-file cost.md
+  env:
+    GH_TOKEN: ${{ github.token }}
+    PR: ${{ github.event.pull_request.number }}
+```
+
+A workflow triggered from a fork gets a read-only token and no secrets, so it
+cannot reach the cluster and cannot post. That is the right behaviour rather
+than something to work around.
+
 | Flag | Default | What it does |
 | --- | --- | --- |
 | `--rules` | required | rules directory |

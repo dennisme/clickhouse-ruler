@@ -36,6 +36,18 @@ type Finding struct {
 	Detail string
 }
 
+// Inspection is what reading one rule through one source produced: what to
+// report about the rule, and what that rule will cost every time it runs.
+type Inspection struct {
+	Findings []Finding
+
+	// Cost is what this source predicts the rule reads, nil when nobody asked
+	// for a prediction. It is carried out of the inspection rather than
+	// folded into a finding because the summary table wants the number for a
+	// rule that is within every ceiling too (spec 7.10).
+	Cost *CostEstimate
+}
+
 // Checks is what an inspection should look for, resolved from policy by the
 // caller.
 type Checks struct {
@@ -69,6 +81,11 @@ type Checks struct {
 	// ceiling is configured.
 	Cost *Cost
 
+	// ReportCost asks for the estimate even when no ceiling is configured.
+	// The check only needs a number it can exceed; the summary table needs
+	// one for every rule, including the cheap ones (spec 7.10).
+	ReportCost bool
+
 	// Interval is how often the rule's group evaluates, which is what turns a
 	// row count into a rate. Zero when the group set none, and the rate
 	// ceiling then does not apply (spec 7.3).
@@ -95,7 +112,7 @@ type Complexity struct {
 // Nothing here executes the rule: `EXPLAIN AST` parses it and returns the
 // tree without reading a row, and refuses a second statement itself. An error
 // means the ruler could not ask, and is never a finding about the rule.
-func (q *Querier) Inspect(ctx context.Context, r rule.Rule, who Attribution, c Checks) ([]Finding, error) {
+func (q *Querier) Inspect(ctx context.Context, r rule.Rule, who Attribution, c Checks) (Inspection, error) {
 	ctx, cancel := context.WithTimeout(ctx, inspectTimeout)
 	defer cancel()
 
@@ -105,9 +122,9 @@ func (q *Querier) Inspect(ctx context.Context, r rule.Rule, who Attribution, c C
 	// than expected at evaluation time (spec 8.5).
 	ctx = clickhouse.Context(ctx, clickhouse.WithSettings(withLogComment(nil, who.Group, r.Alert)))
 
-	sql, err := renderForCheck(r.Expr)
+	sql, err := renderForCheck(r.Expr, r.Window)
 	if err != nil {
-		return nil, err
+		return Inspection{}, err
 	}
 
 	root, err := q.explainAST(ctx, sql)
@@ -117,10 +134,10 @@ func (q *Querier) Inspect(ctx context.Context, r rule.Rule, who Attribution, c C
 	// could not read the tree anyway.
 	finding, err := classifyExplain(err)
 	if err != nil {
-		return nil, err
+		return Inspection{}, err
 	}
 	if finding != nil {
-		return []Finding{*finding}, nil
+		return Inspection{Findings: []Finding{*finding}}, nil
 	}
 	out := inspectTree(root, c)
 
@@ -133,20 +150,20 @@ func (q *Querier) Inspect(ctx context.Context, r rule.Rule, who Attribution, c C
 
 	finding, err = classifyDescribe(err)
 	if err != nil {
-		return nil, err
+		return Inspection{}, err
 	}
 	if finding != nil {
 		// Nothing resolved, so every check that reads the result would be
 		// reporting on columns nobody has. The tree checks above still stand.
-		return append(out, *finding), nil
+		return Inspection{Findings: append(out, *finding)}, nil
 	}
 	out = append(out, inspectResult(cols, r, c)...)
 
-	cost, err := q.inspectCost(ctx, sql, c)
+	cost, costFindings, err := q.inspectCost(ctx, sql, c)
 	if err != nil {
-		return nil, err
+		return Inspection{}, err
 	}
-	return append(out, cost...), nil
+	return Inspection{Findings: append(out, costFindings...), Cost: cost}, nil
 }
 
 // inspectCost asks what the rule will read every time it runs.
@@ -155,24 +172,25 @@ func (q *Querier) Inspect(ctx context.Context, r rule.Rule, who Attribution, c C
 // Neither executes the query: EXPLAIN ESTIMATE answers from the primary index
 // and the part metadata, and EXPLAIN indexes=1 from the plan, so both cost a
 // parse and a network hop like the two before them (spec 7.3).
-func (q *Querier) inspectCost(ctx context.Context, sql string, c Checks) ([]Finding, error) {
-	if c.Cost == nil {
-		return nil, nil
+func (q *Querier) inspectCost(ctx context.Context, sql string, c Checks) (*CostEstimate, []Finding, error) {
+	if c.Cost == nil && !c.ReportCost {
+		return nil, nil, nil
 	}
 
 	est, err := q.explainEstimate(ctx, sql)
 	if finding, err := classifyEstimate(err); err != nil {
-		return nil, err
+		return nil, nil, err
 	} else if finding != nil {
-		return []Finding{*finding}, nil
+		return &CostEstimate{Status: CostRefused}, []Finding{*finding}, nil
 	}
+	cost := costFrom(est)
 
 	// A query the server estimated nothing for reads no table it tracks this
 	// way: a constant, or a count it can answer from metadata. Nothing to
 	// report, and nothing that would make a ceiling meaningful.
 	detail := overCost(est, c.Cost, c.Interval)
 	if detail == "" {
-		return nil, nil
+		return &cost, nil, nil
 	}
 
 	// Why it is expensive, asked only now. A failure here loses the
@@ -182,7 +200,7 @@ func (q *Querier) inspectCost(ctx context.Context, sql string, c Checks) ([]Find
 	if plan, err := q.explainIndexes(ctx, sql); err == nil {
 		detail = withPruning(detail, unprunedTables(plan))
 	}
-	return []Finding{{Check: lint.CheckRuleCost, Detail: detail}}, nil
+	return &cost, []Finding{{Check: lint.CheckRuleCost, Detail: detail}}, nil
 }
 
 // inspectResult runs every check that reads the rule's output columns.
@@ -284,6 +302,12 @@ func (q *Querier) explainAST(ctx context.Context, sql string) (*Node, error) {
 	return parseAST(strings.Join(lines, "\n"))
 }
 
+// checkWindow is the span a rule is checked over when its group set no
+// interval and the rule set no window. Nothing in the file says how much time
+// the rule reads, and a zero length window prunes every part away, which
+// would estimate every rule at nothing.
+const checkWindow = 5 * time.Minute
+
 // renderForCheck substitutes the time bounds with literal timestamps rather
 // than the parameter placeholders an evaluation uses.
 //
@@ -291,17 +315,30 @@ func (q *Querier) explainAST(ctx context.Context, sql string) (*Node, error) {
 // one is left alone: the server substitutes parameters in the query it is
 // given, not in the values it is passed. Literals make the checked statement
 // the same shape as the evaluated one without needing that to be true.
-func renderForCheck(expr string) (string, error) {
+//
+// The window ends now and is as long as the rule's own, because the bounds
+// are what the optimiser prunes on: a window nobody wrote data in estimates
+// every correctly bounded rule at nothing, which is the rule the cost check
+// and the cost table most need a number for (spec 7.3).
+//
+// Timestamps computed here rather than rendered as `now()`. The rendered SQL
+// is parsed back as though the author wrote it, so a `now()` of ours would be
+// read as theirs and reported as nondeterministic (spec 6.7.1).
+func renderForCheck(expr string, window time.Duration) (string, error) {
 	t, err := template.New("expr").Option("missingkey=error").Parse(expr)
 	if err != nil {
 		return "", fmt.Errorf("parsing expr template: %w", err)
 	}
 
-	// Any instant does. Nothing here reads a row, so the window only has to
-	// parse and to be the type the column comparison expects.
+	if window <= 0 {
+		window = checkWindow
+	}
+	to := time.Now()
+	from := to.Add(-window)
+
 	bounds := struct{ From, To string }{
-		From: "toDateTime64('2026-01-01 00:00:00.000', 3)",
-		To:   "toDateTime64('2026-01-01 00:05:00.000', 3)",
+		From: timestampLiteral(from),
+		To:   timestampLiteral(to),
 	}
 
 	var out strings.Builder
@@ -309,6 +346,14 @@ func renderForCheck(expr string) (string, error) {
 		return "", fmt.Errorf("rendering expr: %w", err)
 	}
 	return out.String(), nil
+}
+
+// timestampLiteral writes an instant the way a rule's own bound is written:
+// millisecond precision, and in UTC. A bare literal is read in the column's
+// own timezone, so rendering the ruler's local time would shift the window
+// by the offset between the two machines and prune the wrong parts.
+func timestampLiteral(t time.Time) string {
+	return fmt.Sprintf("toDateTime64('%s', 3)", t.UTC().Format("2006-01-02 15:04:05.000"))
 }
 
 // inspectTree runs every check that reads the parsed query.

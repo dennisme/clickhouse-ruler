@@ -451,6 +451,13 @@ checks:
     keys: [max-rows-read:50000000, max-rows-per-second:500000]
 ```
 
+**The estimate covers the window the rule reads.** A check renders the time
+bounds as literal timestamps ending at now and spanning the rule's own
+window, because those bounds are what the optimiser prunes on. An estimate
+taken over a window nothing was written in reports every correctly bounded
+rule as free, which would leave the check reporting only the rules that read
+the whole table.
+
 **The numbers are predictions, not measurements.** ClickHouse is estimating
 what it would read before reading it, and on a skewed key that estimate can be
 out by an order of magnitude. That is why this warns rather than blocks: a

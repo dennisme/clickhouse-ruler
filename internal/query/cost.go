@@ -27,6 +27,43 @@ type Estimate struct {
 	Marks    uint64
 }
 
+// CostStatus says whether a rule has a predicted cost, and when it has none,
+// why. Three answers rather than a number and a zero: a rule nobody was
+// allowed to estimate and a rule that reads no tracked table are different
+// facts, and both are different from a rule that reads nothing.
+type CostStatus int
+
+const (
+	// CostEstimated is a prediction the server made.
+	CostEstimated CostStatus = iota
+
+	// CostUntracked is a query the server estimated nothing for, which reads
+	// no table it accounts for this way: a constant, or a count it answers
+	// from metadata.
+	CostUntracked
+
+	// CostRefused is the source's own user not being allowed to look, which
+	// is a fact about the grant rather than about the rule (spec 6.7.2).
+	CostRefused
+)
+
+// CostEstimate is what one source predicts a rule reads on every evaluation.
+//
+// Predicted, never measured. Rows is meaningful only when Status is
+// CostEstimated.
+type CostEstimate struct {
+	Rows   uint64
+	Status CostStatus
+}
+
+// costFrom turns what the server estimated into what the caller reports.
+func costFrom(est []Estimate) CostEstimate {
+	if len(est) == 0 {
+		return CostEstimate{Status: CostUntracked}
+	}
+	return CostEstimate{Rows: estimatedRows(est), Status: CostEstimated}
+}
+
 // Cost is how much a rule may read, resolved from policy by the caller.
 type Cost struct {
 	// MaxRows is what one evaluation may read.

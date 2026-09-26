@@ -77,7 +77,7 @@ func (q *Querier) Sample(ctx context.Context, r rule.Rule, who Attribution, c Sa
 	// it (spec 8.5).
 	ctx = clickhouse.Context(ctx, clickhouse.WithSettings(withLogComment(nil, who.Group, r.Alert)))
 
-	sql, err := renderForCheck(r.Expr)
+	sql, err := renderForCheck(r.Expr, r.Window)
 	if err != nil {
 		return nil, err
 	}

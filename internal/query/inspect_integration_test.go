@@ -32,7 +32,7 @@ func inspect(t *testing.T, expr string, c Checks) []Finding {
 	if err != nil {
 		t.Fatalf("Inspect: %v", err)
 	}
-	return got
+	return got.Findings
 }
 
 func checkNames(findings []Finding) []string {
@@ -396,10 +396,11 @@ func TestInspectReportsAnAnnotationReadingNothing(t *testing.T) {
 		},
 	}
 
-	got, err := q.Inspect(ctx, r, testGroup, describeChecks())
+	inspection, err := q.Inspect(ctx, r, testGroup, describeChecks())
 	if err != nil {
 		t.Fatalf("Inspect: %v", err)
 	}
+	got := inspection.Findings
 	if len(got) != 1 || got[0].Check != lint.CheckAnnotationsTemplate {
 		t.Fatalf("findings = %v, want only %s", checkNames(got), lint.CheckAnnotationsTemplate)
 	}
@@ -452,8 +453,8 @@ func TestInspectSaysNothingAboutAWorkingRuleWithAnnotations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Inspect: %v", err)
 	}
-	if len(got) != 0 {
-		t.Errorf("findings = %v, want none", checkNames(got))
+	if len(got.Findings) != 0 {
+		t.Errorf("findings = %v, want none", checkNames(got.Findings))
 	}
 }
 
@@ -583,5 +584,52 @@ SELECT
 FROM numbers(200000)`, anchor)
 	if err != nil {
 		t.Fatalf("seeding rows: %v", err)
+	}
+}
+
+// The estimate leaves the inspection whether or not a ceiling was exceeded,
+// because the summary table reports the cheap rules too (spec 7.10).
+func TestInspectCarriesTheEstimateWithoutACeiling(t *testing.T) {
+	q := openQuerier(t, testSource(t))
+	seedManySpans(t, q)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	c := describeChecks()
+	c.ReportCost = true
+
+	// A window wide enough to cover what the fixture seeded, because the
+	// estimate is of the window the rule really reads.
+	r := rule.Rule{Alert: "Probe", Expr: goodExpr, Window: 24 * time.Hour}
+
+	got, err := q.Inspect(ctx, r, testGroup, c)
+	if err != nil {
+		t.Fatalf("Inspect: %v", err)
+	}
+	if len(got.Findings) != 0 {
+		t.Errorf("findings = %v, want none: no ceiling was configured", checkNames(got.Findings))
+	}
+	if got.Cost == nil {
+		t.Fatal("cost = nil, want the estimate the table reports")
+	}
+	if got.Cost.Status != CostEstimated || got.Cost.Rows == 0 {
+		t.Errorf("cost = %+v, want an estimated row count", *got.Cost)
+	}
+}
+
+// Nobody asked, so nobody pays for the round trip.
+func TestInspectSkipsTheEstimateWhenNothingAsked(t *testing.T) {
+	q := openQuerier(t, testSource(t))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	got, err := q.Inspect(ctx, rule.Rule{Alert: "Probe", Expr: goodExpr}, testGroup, describeChecks())
+	if err != nil {
+		t.Fatalf("Inspect: %v", err)
+	}
+	if got.Cost != nil {
+		t.Errorf("cost = %+v, want nil when no ceiling and no table asked for one", *got.Cost)
 	}
 }
