@@ -38,6 +38,7 @@ const (
 
 	CheckRuleSourceMatch    = "rule/source-match"
 	CheckRuleProtectedLabel = "rule/protected-label"
+	CheckRuleDuplicateAlert = "rule/duplicate-alert"
 	CheckRulesetDirectory   = "ruleset/directory"
 
 	CheckRuleSyntax           = "rule/syntax"
@@ -253,6 +254,22 @@ var checks = []Check{
 	{
 		Name: CheckRuleProtectedLabel, Spec: "6.3.1", Fixed: true,
 		Summary: "a rule setting a label the ruler owns, which breaks routing",
+	},
+
+	// A warning rather than a fixed error, and the reason is who is on the
+	// critical path. The finding is about two rules at once, so the author
+	// who trips it is often the one who wrote the second of them and owns
+	// neither the first file nor the policy: an error would block their pull
+	// request behind another team's edit, which is the shape of check that
+	// gets switched off rather than fixed (spec 7.6). What the collision
+	// costs is real, so it is not `off` either: the two rules share one
+	// fingerprint, so they share one entry in the resend cadence and one
+	// alert in Alertmanager, and a resolve from either can end the other's
+	// page. An operator who would rather that never reach production raises
+	// it to an error.
+	{
+		Name: CheckRuleDuplicateAlert, Spec: "7.6", Default: SeverityWarning,
+		Summary: "two rules whose alerts carry the same labels, so neither can be told from the other",
 	},
 	{
 		Name: CheckRulesetDirectory, Spec: "7.1", Fixed: true,

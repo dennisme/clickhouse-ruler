@@ -1,0 +1,21 @@
+# The same alert name, the same selector and the same labels as
+# payments/latency.yaml. Both reach both sources, so both produce an alert
+# with an identical label set and neither can be told from the other.
+groups:
+  - name: platform-latency
+    interval: 1m
+    rules:
+      - alert: HighP99Latency
+        sources:
+          team: payments
+        expr: |
+          SELECT ServiceName, quantile(0.99)(Duration) AS value
+          FROM otel.otel_traces
+          WHERE Timestamp >= {{ .From }} AND Timestamp < {{ .To }}
+          GROUP BY ServiceName
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ .ServiceName }} is slow"
+          runbook_url: https://runbooks.internal/slow

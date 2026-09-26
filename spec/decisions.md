@@ -193,3 +193,22 @@ and are what the code comments cite.
   itself from. `clickhouse_ruler_query_queue_wait_seconds` is what an operator
   sizes the limit from, labelled by source because queueing is a property of
   the cluster rather than of whichever rule happened to wait. See 6.11.
+- **Two rules that produce the same alert are a check of their own,
+  `rule/duplicate-alert`, at `warn`.** `rule/name` scopes uniqueness to the
+  group on the reasoning that group labels and `source` separate two
+  same-named rules in the fingerprint, and that reasoning is a statement
+  about how the files happen to be written. Rules agreeing on their alert
+  name, their effective labels and the sources their selector reached share
+  one fingerprint, so they share one entry in the resend cadence and one
+  alert in Alertmanager: whichever evaluated last wins and a resolve from
+  either can end the other's page. Tier 0, and in the loader rather than the
+  rule parser, because deciding it needs the sources file as well as the
+  rule. `warn` rather than `error` because the finding is about two rules at
+  once, usually in two files with two owners, and the author who trips it
+  often owns neither the other file nor the policy. It is not exact: result
+  columns are level 3 of 6.3.1 and exist only at evaluation time, so a
+  flagged pair may distinguish itself at runtime on a column one of them
+  returns. Reporting it anyway is the safe direction,
+  because such a pair is relying on that with nothing in either file saying
+  so, while the reverse case needs the result and is not a tier 0 question.
+  See 7.6.

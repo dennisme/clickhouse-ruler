@@ -1,0 +1,16 @@
+sources:
+  - name: traces_dc1
+    labels: {team: payments, cluster: dc1}
+    address: localhost:9000
+    database: otel
+    username: ruler
+    table: otel_traces
+    timestamp_column: Timestamp
+
+  - name: traces_dc2
+    labels: {team: payments, cluster: dc2}
+    address: localhost:9000
+    database: otel
+    username: ruler
+    table: otel_traces
+    timestamp_column: Timestamp

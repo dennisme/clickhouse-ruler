@@ -217,24 +217,6 @@ That is the property we are copying. Everything else follows from it.
    which is a confusing way to find out. A check comparing matched sources'
    tables and column types is the obvious fix and needs tier 1 first. See
    6.10.
-7. **Nothing checks that two rules cannot produce the same alert.** 7.6
-    scopes `rule/name` uniqueness to the group, on the reasoning that group
-    labels and `source` already separate two same-named rules in the
-    fingerprint. That reasoning is an assumption about how the files happen
-    to be written, not something enforced. Two rules with the same `alert`
-    name, the same `sources` selector and no distinguishing group or rule
-    labels produce the same final label set, and are therefore the same
-    alert to Alertmanager and to `notify.Cadence`, which keys `lastSent` on
-    the fingerprint alone. Each rule then overwrites the other's cadence and
-    whichever evaluated last decides what Alertmanager holds.
-
-    This is a tier 0 check: alert name, static labels and selector are all
-    in the files. It needs the sources file as well as the rule, so it
-    belongs in the loader next to `rule/source-match` rather than in the
-    rule parser. It cannot be exact, because result columns contribute
-    labels that are only known at evaluation time, so it can only flag rules
-    whose *static* identity already collides. That is the reachable case and
-    it is worth flagging.
 
 ---
 

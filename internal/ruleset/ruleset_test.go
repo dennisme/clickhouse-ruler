@@ -3,6 +3,7 @@ package ruleset
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/dennisme/clickhouse-ruler/internal/lint"
@@ -166,5 +167,43 @@ func TestLoadRejectsQueryClaimingSourceIdentity(t *testing.T) {
 	}
 	if len(aliased) != 2 {
 		t.Fatalf("expected source and cluster both rejected, got %d: %v", len(aliased), problems)
+	}
+}
+
+// Two rules whose static identity is the same produce one alert between them.
+// Alertmanager and notify.Cadence both key on the fingerprint, so the second
+// evaluation overwrites the first's state and a resolve can be lost. The
+// finding names both files, because whoever sees it may own neither
+// (spec 7.6).
+func TestLoadReportsRulesThatProduceTheSameAlert(t *testing.T) {
+	_, problems := Load(filepath.Join("testdata", "duplicate_alert"),
+		loadSourcesFrom(t, "duplicate_alert_sources.yaml"), nil)
+
+	var got []lint.Problem
+	for _, p := range problems {
+		if p.Check == "rule/duplicate-alert" {
+			got = append(got, p)
+		}
+	}
+	// The pair in payments/ and platform/ collides. The rule in tiered/
+	// carries a label neither of them does, and the two in split/ reach
+	// different sources, so neither is a collision.
+	if len(got) != 1 {
+		t.Fatalf("expected one collision reported once, got %d: %v", len(got), got)
+	}
+
+	p := got[0]
+	if p.Severity != lint.SeverityWarning {
+		t.Errorf("severity = %v, want warning", p.Severity)
+	}
+	if p.Subject != "HighP99Latency" {
+		t.Errorf("subject = %q, want the alert name", p.Subject)
+	}
+	other := filepath.Join("testdata", "duplicate_alert", "payments", "latency.yaml")
+	if p.File != filepath.Join("testdata", "duplicate_alert", "platform", "latency.yaml") {
+		t.Errorf("file = %q, want the later of the two rules", p.File)
+	}
+	if !strings.Contains(p.Text, other) {
+		t.Errorf("text does not name the other rule's file: %s", p.Text)
 	}
 }
