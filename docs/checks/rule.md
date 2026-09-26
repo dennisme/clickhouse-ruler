@@ -117,7 +117,7 @@ A rule whose `sources` selector matches no source this ruler holds.
 
 Unlike the rest of this page it is not a matter of taste. Whether a rule can
 run depends on which ruler is asking, so the same repository is legitimately
-unmatched on a ruler holding one data centre's sources and fine on another.
+unmatched on a ruler holding one datacenter's sources and fine on another.
 That is why it is a warning: the alternative refuses to load a rule that is
 correct somewhere else. An empty or missing selector matches nothing on
 purpose, because choosing a source chooses the ClickHouse user the query runs

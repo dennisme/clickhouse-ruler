@@ -50,7 +50,7 @@
     },
     {
       "title": "Rules matching no source",
-      "description": "Loaded rules this ruler will never evaluate, because their selector matched none of the sources it holds. Normal on a per-data-centre ruler reading a shared repository, and expected back to zero after a cluster rollout finishes. Staying raised means nobody read the check that warned at authoring time.",
+      "description": "Loaded rules this ruler will never evaluate, because their selector matched none of the sources it holds. Normal on a per-datacenter ruler reading a shared repository, and expected back to zero after a cluster rollout finishes. Staying raised means nobody read the check that warned at authoring time.",
       "type": "timeseries",
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "gridPos": { "h": 9, "w": 12, "x": 12, "y": 0 },

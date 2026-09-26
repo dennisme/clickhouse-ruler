@@ -36,7 +36,7 @@ type Rule struct {
 
 	// Sources is every source the rule's labels matched, sorted by name. A
 	// rule evaluates once per source, and may match none: on a ruler holding
-	// one data centre's sources, most rules in a shared repository will
+	// one datacenter's sources, most rules in a shared repository will
 	// (spec 6.10, 10.2).
 	Sources []source.Source
 }
@@ -160,7 +160,7 @@ func loadFile(path string, sources *source.File, root *policy.Policy) ([]Rule, [
 //
 // This is a warning rather than an error, and it is the one check where "the
 // rule cannot run" is not automatically wrong. Deployments are distributed, so
-// a ruler in one data centre legitimately holds its own sources and nothing
+// a ruler in one datacenter legitimately holds its own sources and nothing
 // else, and most rules in a shared repository will match nothing on it. A
 // rollout has an order too: rules can land before the source for a new cluster
 // does, and failing hard would block every unrelated change until someone
