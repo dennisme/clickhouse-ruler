@@ -86,8 +86,8 @@ arrived at from the other direction.
 The same answer names the limit we live with: `EXPLAIN AST` "prints the tree
 in some format. However, it's impossible to convert it back to the query."
 Fine here, because the checks ask questions of the tree and never rebuild SQL
-from it. It is also why 7.4's replay builds its own statement rather than
-editing the author's.
+from it. It is also why 7.4's replay re-renders the author's own statement
+over a different window rather than editing the statement.
 
 **The alternative is a second implementation of the dialect, and it is a
 replacement rather than a complement.** `AfterShip/clickhouse-sql-parser` is
@@ -426,24 +426,27 @@ nobody adopts.
 ### 7.4 The "would have fired N times" check
 
 The `pint` `alerts/count` equivalent, and the reason the online checks are
-worth the trouble.
+worth the trouble. `rule/alert-count` is the check, `ruler check --backfill` is
+the flag, and a replay is one query per evaluation the range holds.
 
-`pint` has to issue range queries against Prometheus and rebuild eval windows
-on the client. In ClickHouse the eval window is just a `GROUP BY`, so the whole
-replay is one query:
+**Replay is the rule re-run, not the rule rewritten.** `rule/expr` refuses a
+query that does not bind `{{ .From }}` and `{{ .To }}`, so every rule that
+validates can be asked about a window other than the latest one by rendering
+its own bounds there. `renderForCheck` already does that for one window, and a
+replay is that in a loop: the bounds move back a step at a time, each window
+runs through the same path an evaluation does, and the results are collapsed
+through `internal/alert` rather than through a second implementation of `for`.
+A gap between two firing windows is closed by `keep_firing_for` or it is a
+resolve, which is what those two already mean, so there is no gap tolerance to
+configure.
 
-```sql
-SELECT
-  toStartOfInterval(ts, INTERVAL {{ .EvalInterval }}) AS eval_window,
-  {{ .LabelCols }},
-  {{ .ValueExpr }} AS value
-FROM {{ .Table }}
-WHERE ts >= now() - INTERVAL {{ .BackfillWindow }}
-GROUP BY eval_window, {{ .LabelCols }}
-HAVING {{ .Predicate }}
-```
-
-Then collapse consecutive windows through `for` and the resolve logic.
+**The strategy seam is internal.** A bucketed rewrite, one `GROUP BY` over the
+whole range, scans the data once rather than once per window, and it cannot be
+built from a rule whose `expr` is free-form SQL: it needs the predicate, the
+value expression and the label columns as separate fields. Until a rule is
+structured that way there is nothing to choose between, so the seam is a named
+type in Go with one implementation and no `strategy:` key in any file. See the
+decision in 11.
 
 **Report two numbers.** Eval hits and real alert instances differ wildly. 4,100
 hits with `for: 5m` on one bad host is about 3 pages. Reporting only the large
@@ -452,26 +455,52 @@ number trains people to ignore the check.
 Target output on a pull request:
 
 ```text
-would fire: 3 alert instances (4,127 eval hits) over 24h
-longest firing streak: 6h12m (never resolved)
-top label sets:
-  ServiceName=checkout     3,901 hits
-  ServiceName=cart           198 hits
+would fire 3 alert instances (4127 evaluation hits) over 24h replayed in 1440
+windows of 1m, against a ceiling of 2; longest firing streak 6h12m, still
+firing at the end of the range; top label sets: ServiceName=checkout 3901
+hits, ServiceName=cart 198 hits
 ```
 
 Top offenders matter as much as the count. "Fires 4,100 times" does not tell
-anyone what to fix. "3,900 of them are one service" does.
+anyone what to fix. "3,900 of them are one service" does. They are the query's
+own result columns, which is where an alert's labels come from at run time.
 
-Known limits, to be surfaced in the output rather than hidden:
+**It reports against a ceiling rather than on every rule.** `max-alerts` is
+what the count is measured against. A finding on every rule would read as a
+report instead of a finding, and it would mean an operator who raised this
+check to an error blocked every pull request including the ones whose rules are
+fine (7.6).
 
-- Replay in one query only works for bucketable rules. Window functions, self
-  joins, and `argMax` over the eval window do not rewrite generically. Fall
-  back to sequential evaluation, sampled and capped, for example 24 windows out
-  of 24h rather than 2,880. Mark the result as sampled.
+**Nothing runs until the whole replay fits `max-rows-read`.** Spelled the same
+as the ceiling of `rule/cost` and meaning something else: there it is what one
+evaluation may read, here it is one window's `EXPLAIN ESTIMATE` multiplied by
+every window the range holds, compared before the first query. Over it, the
+step is raised until the count of windows fits, the result is marked sampled,
+and the finding says so. A 24 hour range at a one minute step must never
+quietly become 1,440 queries.
+
+The step gives rather than the range. A coarser replay over the range asked for
+answers the question with less confidence; a shorter range answers a different
+question. A single window already over the ceiling runs as one window, because
+the cost of the replay is then the cost of evaluating the rule, which is what
+`rule/cost` is for.
+
+Known limits, surfaced in the output rather than hidden. Both are
+qualifications on the count rather than findings of their own, because a count
+with a caveat is one answer with a reservation and not two problems:
+
 - TTL. If the table TTLs at 3 days, a 7 day backfill quietly under reports.
-  Read TTL from `system.tables` and warn when the window exceeds it.
-- Schema drift inside the window. A column added 6 hours ago makes a 24 hour
-  backfill return nulls or error. Detect and say so rather than reporting zero.
+  The TTL is read from `system.tables`, which the user contract in 6.7.2 leaves
+  readable, and a range longer than it is reported.
+- Schema drift inside the range. A column added 6 hours ago makes a 24 hour
+  backfill read that column's default for the older windows and report a rule
+  that never fired. A column added by `ALTER TABLE ADD COLUMN` is absent from
+  every part written before the alter, so `system.parts_columns` says when each
+  column started existing. Reading it needs a grant the contract deliberately
+  withholds, so under that contract the caveat answers nothing and the replay
+  reports the rest; it answers on a validation user with wider grants (10.3),
+  which is the setup where catching the drift before the rules reach the
+  evaluating cluster is worth the grant.
 
 ### 7.5 Reuse in watch mode
 

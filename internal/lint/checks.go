@@ -54,6 +54,7 @@ const (
 	CheckRuleTableAccess      = "rule/table-access"
 	CheckRuleCost             = "rule/cost"
 	CheckRuleAttributeKey     = "rule/attribute-key"
+	CheckRuleAlertCount       = "rule/alert-count"
 
 	CheckSourceName            = "source/name"
 	CheckSourceAddress         = "source/address"
@@ -110,6 +111,12 @@ const (
 	LimitSampleRows = "max-sample-rows"
 	FlagRequireRows = "require-rows"
 )
+
+// What rule/alert-count takes. The row ceiling is spelled the same as
+// rule/cost's and means something else: there it is what one evaluation may
+// read, here it is the predicted total for a whole replay, which is one
+// evaluation multiplied by every window the range holds (spec 7.4).
+const LimitAlerts = "max-alerts"
 
 // ListKind is what a check's key list means, which decides how scopes combine
 // it. A required list gets stricter as it grows, so scopes union it; an
@@ -388,6 +395,24 @@ var checks = []Check{
 		Limits:  []string{LimitSampleRows},
 		Flags:   []string{FlagRequireRows},
 		Summary: "a map key the query reads that no recent row actually has",
+	},
+
+	// The other check that reads rows, and the only one that reads them over
+	// and over: a replay runs the rule once per window across a past range
+	// (spec 7.4). A warning, because the count is evidence about the rule
+	// rather than a defect in it, and because the replay reads through the
+	// source's row policies for the same reason rule/attribute-key does.
+	//
+	// It reports only when a ceiling is exceeded or when the answer carries a
+	// caveat. A finding on every rule would mean an operator who raised this
+	// to an error blocked every pull request, including the rules that are
+	// fine.
+	{
+		Name: CheckRuleAlertCount, Spec: "7.4", Default: SeverityWarning,
+		Keys:    []string{LimitAlerts + ":100", LimitRowsRead + ":1000000000"},
+		List:    ListCeiling,
+		Limits:  []string{LimitAlerts, LimitRowsRead},
+		Summary: "a rule that would have fired more often over a past range than the ceiling allows",
 	},
 
 	// A warning, and the argument is the same one rule/duplicate-alert makes

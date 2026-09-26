@@ -14,6 +14,29 @@ import (
 	"github.com/dennisme/clickhouse-ruler/internal/source"
 )
 
+// inspectOptions is which tiers of the online checks to run, and what the
+// tier that replays needs to know. One struct rather than a fourth boolean
+// argument: the tiers are already three and the replay carries two durations
+// of its own (spec 7.3).
+type inspectOptions struct {
+	// sampling runs the checks that read rows once, and backfilling the one
+	// that reads them per window. Neither implies the other: a replay is a
+	// larger read than a sample and is consented to separately.
+	sampling    bool
+	backfilling bool
+
+	// summarising asks every source for a cost prediction, including for the
+	// rules within every ceiling, because the table wants a number per rule
+	// (spec 7.10).
+	summarising bool
+
+	// backfillRange is how far back a replay reaches, and backfillStep the gap
+	// between the evaluations it replays. A zero step means the rule's own
+	// group interval, which is what a live ruler would have used.
+	backfillRange time.Duration
+	backfillStep  time.Duration
+}
+
 // inspectRules reads every rule's SQL through each source it matched.
 //
 // Per source, not once per rule: a rule spanning an estate is checked against
@@ -24,7 +47,7 @@ import (
 func inspectRules(
 	ctx context.Context,
 	set *ruleset.Set,
-	sampling, summarising bool,
+	opts inspectOptions,
 ) ([]lint.Problem, []lint.SummaryRow) {
 	var problems []lint.Problem
 	var rows []lint.SummaryRow
@@ -53,24 +76,24 @@ func inspectRules(
 			merged := policy.Merge(r.Policy, src.Policy)
 
 			checks := checksFromPolicy(merged, r, src)
-			checks.ReportCost = summarising
+			checks.ReportCost = opts.summarising
 
 			q, err := querierFor(queriers, src)
 			if err != nil {
 				problems = append(problems, inspectionFailed(r, src.Name, err))
-				rows = appendRow(rows, summarising, r, src, nil)
+				rows = appendRow(rows, opts.summarising, r, src, nil)
 				continue
 			}
 
 			inspection, err := q.Inspect(ctx, r.Rule, attribution(r), checks)
 			if err != nil {
 				problems = append(problems, inspectionFailed(r, src.Name, err))
-				rows = appendRow(rows, summarising, r, src, nil)
+				rows = appendRow(rows, opts.summarising, r, src, nil)
 				continue
 			}
 			problems = append(problems, inspectionProblems(
 				r.File, r.Alert, r.Line(), src, merged, inspection.Findings, now)...)
-			rows = appendRow(rows, summarising, r, src, inspection.Cost)
+			rows = appendRow(rows, opts.summarising, r, src, inspection.Cost)
 
 			if inspection.Columns != nil {
 				answered = append(answered, sourceColumns{
@@ -79,23 +102,41 @@ func inspectRules(
 				})
 			}
 
-			if !sampling {
+			// The checks that read rows, so they run when they were asked for
+			// and never merely because a connection exists (spec 7.3). Each
+			// tier asks for itself: sampling does not buy a replay, and a
+			// replay does not buy a sample.
+			if opts.sampling {
+				if sampleChecks, wanted := samplingFromPolicy(merged); wanted {
+					sampled, err := q.Sample(ctx, r.Rule, attribution(r), sampleChecks, now)
+					if err != nil {
+						problems = append(problems, inspectionFailed(r, src.Name, err))
+					} else {
+						problems = append(problems, inspectionProblems(
+							r.File, r.Alert, r.Line(), src, merged, sampled, now)...)
+					}
+				}
+			}
+
+			if !opts.backfilling {
 				continue
 			}
-			sampleChecks, wanted := samplingFromPolicy(merged)
+			backfillChecks, wanted := backfillFromPolicy(merged, r, opts.backfillRange, opts.backfillStep)
 			if !wanted {
 				continue
 			}
 
-			// The only checks that read rows, so they run when they were asked
-			// for and never merely because a connection exists (spec 7.3).
-			sampled, err := q.Sample(ctx, r.Rule, attribution(r), sampleChecks, now)
+			// The counts themselves are carried in the finding rather than
+			// summarised elsewhere, so the replay is discarded here. It is
+			// returned because a report is easier to assert on than the text of
+			// a finding is.
+			_, replayed, err := q.Backfill(ctx, r.Rule, attribution(r), backfillChecks, now)
 			if err != nil {
 				problems = append(problems, inspectionFailed(r, src.Name, err))
 				continue
 			}
 			problems = append(problems,
-				inspectionProblems(r.File, r.Alert, r.Line(), src, merged, sampled, now)...)
+				inspectionProblems(r.File, r.Alert, r.Line(), src, merged, replayed, now)...)
 		}
 
 		// After the loop, because the comparison needs every answer and no
@@ -140,6 +181,75 @@ func samplingFromPolicy(p *policy.Policy) (query.SampleChecks, bool) {
 		MaxRows:     maxRows,
 		RequireRows: setting.Flag(lint.FlagRequireRows),
 	}, true
+}
+
+// backfillStepFallback is the gap between replayed evaluations when nothing
+// says how much time the rule reads: its group set no interval and the rule set
+// no window. The same span renderForCheck falls back to, for the same reason,
+// which is that a replay of zero length windows would prune every part away and
+// report every rule as never having fired.
+const backfillStepFallback = 5 * time.Minute
+
+// backfillFromPolicy translates the resolved policy and the flags into what a
+// replay should do, and says whether to replay at all.
+//
+// A check at severity off is not replayed for, rather than replayed and then
+// dropped, which is the line samplingFromPolicy draws and it matters more here:
+// a replay is one read per window, so honouring off afterwards would be the
+// most expensive way to report nothing.
+func backfillFromPolicy(
+	p *policy.Policy,
+	r ruleset.Rule,
+	span, step time.Duration,
+) (query.BackfillChecks, bool) {
+	setting := p.For(lint.CheckRuleAlertCount)
+	if setting.Severity == lint.SeverityOff {
+		return query.BackfillChecks{}, false
+	}
+
+	maxAlerts, _ := setting.Limit(lint.LimitAlerts)
+
+	// A missing ceiling keeps the shipped one rather than becoming zero, which
+	// here means unlimited: a replay is one read per window, so the one setting
+	// that must not default to nothing is the one bounding how many windows run.
+	maxRows, hasRows := setting.Limit(lint.LimitRowsRead)
+	if !hasRows {
+		maxRows, _ = policy.Defaults().For(lint.CheckRuleAlertCount).Limit(lint.LimitRowsRead)
+	}
+	// Non-negative by construction: Setting.Limit refuses a ceiling that is not
+	// a whole number at or above zero. The guard is here so the conversion is
+	// provably safe to a reader and to the linter.
+	if maxRows < 0 {
+		maxRows = 0
+	}
+
+	return query.BackfillChecks{
+		Range:       span,
+		Step:        backfillStep(r, step),
+		MaxAlerts:   maxAlerts,
+		MaxRowsRead: uint64(maxRows),
+		GroupLabels: r.Labels,
+	}, true
+}
+
+// backfillStep is how often the rule would have been evaluated over the range.
+//
+// The group's interval, because that is the cadence the alert's `for` timer is
+// measured in and a replay at any other step counts a different rule. The flag
+// wins when an operator set one, and a group that set no interval falls back to
+// the span the rule itself reads, which is the closest thing the file says
+// about how much time one evaluation covers.
+func backfillStep(r ruleset.Rule, flag time.Duration) time.Duration {
+	switch {
+	case flag > 0:
+		return flag
+	case r.Group.Interval > 0:
+		return r.Group.Interval
+	case r.Window > 0:
+		return r.Window
+	default:
+		return backfillStepFallback
+	}
 }
 
 // querierFor opens one connection per source and reuses it for every rule

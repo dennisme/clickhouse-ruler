@@ -395,3 +395,25 @@ func functionsNamed(root *Node, names map[string]bool) []string {
 
 	return out
 }
+
+// identifiers returns every identifier the query names, deduplicated and
+// sorted.
+//
+// Names only, with no idea which of them are columns of any particular table:
+// an alias, a CTE and a column all arrive as an Identifier, and separating
+// them means resolving each against a table. A caller that has a column list
+// to compare against does that resolution itself.
+func identifiers(root *Node) []string {
+	seen := map[string]bool{}
+	for _, n := range find(root, func(n *Node) bool { return n.Kind == "Identifier" }) {
+		seen[n.Detail] = true
+	}
+
+	out := make([]string, 0, len(seen))
+	for name := range seen {
+		out = append(out, name)
+	}
+	sort.Strings(out)
+
+	return out
+}

@@ -26,6 +26,7 @@ stricter, and a ceiling binds at its lowest value. See spec 7.6 and 7.7.
 | [`annotations/runbook`](#annotations-runbook) | `warning` by default | none | [7.6](https://github.com/dennisme/clickhouse-ruler/blob/main/spec.md) |
 | [`annotations/template`](#annotations-template) | `warning` by default | none | [7.6](https://github.com/dennisme/clickhouse-ruler/blob/main/spec.md) |
 | [`labels/required`](#labels-required) | `warning` by default | required: `severity`, `team` | [7.6](https://github.com/dennisme/clickhouse-ruler/blob/main/spec.md) |
+| [`rule/alert-count`](#rule-alert-count) | `warning` by default | ceilings: `max-alerts:100`, `max-rows-read:1000000000` | [7.4](https://github.com/dennisme/clickhouse-ruler/blob/main/spec.md) |
 | [`rule/attribute-key`](#rule-attribute-key) | `warning` by default | ceilings: `max-sample-rows:10000000` | [7.3](https://github.com/dennisme/clickhouse-ruler/blob/main/spec.md) |
 | [`rule/columns`](#rule-columns) | fixed, always `error` | none | [7.3](https://github.com/dennisme/clickhouse-ruler/blob/main/spec.md) |
 | [`rule/complexity`](#rule-complexity) | `warning` by default | ceilings: `max-joins:2`, `max-subqueries:2` | [7.3](https://github.com/dennisme/clickhouse-ruler/blob/main/spec.md) |
@@ -680,3 +681,145 @@ Two cases are silent, because nothing in them could go missing. `arr[1]` is an
 array index rather than a key. And a key under a Nested block,
 `Events.Attributes[1]['code']`, reads the map an array index returned rather
 than a column, so there is no column to name in a finding or to sample from.
+
+<a id="rule-alert-count"></a>
+
+### rule/alert-count
+
+A rule that would have fired more often over a past range than the ceiling
+allows.
+
+Every other check asks whether a rule *can* work. This one asks what it would
+have done: it replays the rule over a past range, one query per evaluation the
+range holds, and collapses the results through the same alert state machine
+production uses. It needs `--backfill`, which reads rows once per window and is
+consented to on its own, not by `--sample`:
+
+```bash
+ruler check --backfill --sources rules/sources.yaml rules/
+ruler check --backfill --backfill-range 168h --backfill-step 5m \
+  --sources rules/sources.yaml rules/
+```
+
+`--backfill-range` defaults to 24h, a full diurnal cycle, because a rule that
+only fires at peak traffic does not show up in an hour. `--backfill-step`
+defaults to the rule's group interval, which is the cadence its `for` timer is
+measured in: replaying at any other step counts a different rule.
+
+Replay works at all because `rule/expr` already refuses a query that does not
+bind `{{ .From }}` and `{{ .To }}`. Every rule that validates can therefore be
+asked about a past window, by rendering its own bounds somewhere other than
+now.
+
+#### The two numbers
+
+```text
+would fire 3 alert instances (4127 evaluation hits) over 24h replayed in 1440
+windows of 1m, against a ceiling of 2; longest firing streak 6h12m, still
+firing at the end of the range; top label sets: ServiceName=checkout 3901
+hits, ServiceName=cart 198 hits
+```
+
+**Evaluation hits** is every window a row came back in. **Alert instances** is
+how many of those runs lasted longer than the rule's `for` and would have paged
+somebody. The two differ wildly, and that is the point: 4,100 hits with
+`for: 5m` on one bad host is about three pages. A check reporting only the large
+number teaches people to ignore it.
+
+The label sets come from the query's own result columns, the same columns that
+become an alert's labels at run time. "Fires 4,100 times" does not tell anyone
+what to fix; "3,900 of them are one service" does.
+
+`max-alerts` is what the count is measured against, and it is the only reason a
+rule within every ceiling reports nothing at all:
+
+```yaml
+checks:
+  rule/alert-count:
+    severity: warn
+    keys: [max-alerts:25, max-rows-read:500000000]
+```
+
+A finding on every rule would read as a report rather than as a finding, and it
+would mean an operator who raised this check to an error blocked every pull
+request, including the ones whose rules are fine.
+
+#### Never 1,440 queries by surprise
+
+`max-rows-read` here is not `rule/cost`'s ceiling of the same name. There it is
+what one evaluation may read; here it is the predicted total for the whole
+replay, which is one window's `EXPLAIN ESTIMATE` multiplied by every window the
+range holds.
+
+That multiplication happens before anything runs. Over the ceiling, the step is
+raised until the replay fits and the answer is marked sampled:
+
+```text
+the step was raised from 1m to 15m so the replay's predicted 2000000000 rows
+fit the 1000000000 row ceiling, so this is 96 windows of the 1440 the range
+holds and the counts are a floor
+```
+
+The step gives rather than the range. A coarser replay over the range asked for
+still answers the question with less confidence; a shorter range answers a
+different question, and an operator who asked about a day is not served by an
+hour reported as though it were one. A single window already over the ceiling
+runs as one window, because at that point the cost of the replay is the cost of
+evaluating the rule, which is what `rule/cost` is for.
+
+Each window goes through the same path an evaluation does, so it carries the
+source's own execution time, memory and row caps, and they run one at a time,
+which is inside any per-source concurrency limit however low it is set.
+
+#### Two ways a count can cover less than it claims
+
+Both are reported as qualifications on the count rather than as findings of
+their own, because a count with a caveat is one answer with a reservation, not
+two problems.
+
+**A range longer than the table's retention.** The TTL is read from
+`system.tables`, which the ClickHouse user contract leaves readable, and a
+range longer than it means the oldest windows read rows the table has already
+deleted. The count then under reports and says so.
+
+**A column added inside the range.** A column added by `ALTER TABLE ADD COLUMN`
+is absent from every part written before the alter, so the windows before it
+read the column's default and the rule quietly never fires there. Reading that
+needs `SELECT ON system.parts_columns`, which the contract in spec 6.7.2
+deliberately does not grant, so under that contract this caveat answers nothing
+and the rest of the replay is reported as usual. It answers on a validation
+user with wider grants, which is the setup where catching a schema change
+before the rules reach the evaluating cluster is worth the grant.
+
+#### What the count is scoped to
+
+The answer is a statement about one user, one set of clusters and one range, not
+about the rule everywhere it will run. Three of those differ between continuous
+integration and a long running ruler, so read the count as evidence rather than
+as a measurement.
+
+- **The user.** The replay connects as the source's own ClickHouse user, under
+  `readonly = 2` with that user's row policies applied. A validation user
+  pointed at a replica sees a different set of rows from the user that will
+  evaluate the rule, so the count is what *it* would have paged about. This is
+  the same reservation [`rule/attribute-key`](#rule-attribute-key) carries, and
+  the reason both warn rather than block.
+- **The sources.** A rule is replayed against every source it matched here. A
+  deployed ruler holding one datacenter's sources matches a different set, so a
+  count from continuous integration can cover clusters that ruler never
+  evaluates, and miss ones it does.
+- **The range.** 24h by default, so a rule that only misbehaves at month end
+  reports nothing. Widening the range is `--backfill-range`, and past the
+  table's retention the caveat above says the older windows read nothing.
+
+**Nothing here runs at startup.** `ruler run` refuses to start on the
+correctness checks, which are the offline ones; no check that needs a
+connection, this one included, is re-run when the ruler loads or reloads. So
+raising this to `error` blocks a pull request and can never block a rule that is
+already deployed. Spec 7.5 is where that closes: watch mode re-runs the same
+replay against loaded rules on a timer.
+
+**One replay, not one rewrite.** A bucketed `GROUP BY` over the whole range
+would scan the data once instead of once per window, and it cannot be built
+from a rule whose `expr` is free-form SQL. See spec 7.4 and the decision in
+spec 11.

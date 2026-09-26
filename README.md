@@ -92,7 +92,9 @@ ruler run --rules ./rules --sources ./rules/sources.yaml \
 ```
 
 `check` stays offline unless asked otherwise: `--online` asks ClickHouse what
-the query is and reads no rows, `--sample` reads rows and implies `--online`.
+the query is and reads no rows, `--sample` reads rows and implies `--online`,
+and `--backfill` replays each rule over a past range and implies `--online`
+too. Neither of the two that read rows implies the other.
 An error-severity finding refuses to start the ruler.
 
 ## Documentation
@@ -134,9 +136,14 @@ Working:
   it rather than as text, the result columns it will really produce, whether
   every cluster a rule matched agrees on those columns, and what one
   evaluation is predicted to read against configurable ceilings.
-- `--sample`, the one check that reads rows, confirming the map keys a rule
+- `--sample`, the check that reads rows once, confirming the map keys a rule
   reads exist in recent data. A renamed OTel attribute silences an alert
   forever and nothing else catches it.
+- `--backfill`, the check that reads rows per window: it replays a rule over a
+  past range, one query per evaluation the range holds, and reports how many
+  alerts it would have produced against how many evaluations merely matched.
+  The step is raised and the answer marked sampled rather than running 1,440
+  queries because a range and an interval multiplied out that way.
 - The ClickHouse user contract: `source/privileges` probes each source's user
   for the table functions it must not reach, `readonly = 2`, a constraint
   behind every limit, and the grant on its own table.
@@ -166,9 +173,6 @@ Working:
 
 Not built yet:
 
-- No backfill. `--sample` reads rows to confirm a rule's attribute keys exist,
-  but how often a rule would have fired over the last week needs the query run
-  across historical windows. Spec 7.4.
 - No `ruler watch`. Rules reload on `SIGHUP`, but nothing re-validates the
   rules already loaded on a timer, so a rule that became broken after a schema
   change is not reported until something reloads or re-runs `ruler check`.
