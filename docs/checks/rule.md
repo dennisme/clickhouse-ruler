@@ -1085,8 +1085,10 @@ as a measurement.
 correctness checks, which are the offline ones; no check that needs a
 connection, this one included, is re-run when the ruler loads or reloads. So
 raising this to `error` blocks a pull request and can never block a rule that is
-already deployed. Spec 7.5 is where that closes: watch mode re-runs the same
-replay against loaded rules on a timer.
+already deployed. Spec 7.5 is where that closes, and a replay is something you
+ask for rather than something the ruler loops on: it is the most expensive check
+there is, so it stays a report you run against deployed rules, not part of the
+re-check timer in spec 10.4.
 
 **One replay, not one rewrite.** A bucketed `GROUP BY` over the whole range
 would scan the data once instead of once per window, and it cannot be built

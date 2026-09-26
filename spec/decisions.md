@@ -44,6 +44,31 @@ and are what the code comments cite.
   Deriving `team` from a directory was tried and removed: a rule at the tree
   root has no directory, moving a file silently repoints who gets paged, and a
   label in no file is one nobody can grep for. See 6.3.1.
+- **The Alertmanager route tree is not generated.** Keying a generated tree on
+  `team` so that eval and routing share one source of truth was the plan, and
+  it is dropped. Alertmanager's configuration is owned by whoever runs that
+  Alertmanager and already sits under their review and change policy, so a
+  generator writes into a file whose production rules are theirs. Against that
+  cost it buys a tree keyed on one label, which is hand writable and then
+  static. A flag can add it later without changing anything else. What replaces
+  it is documentation: an alert whose labels say whose rule it is and which file
+  to edit is actionable without us touching config. See 5 and 6.5.
+- **There is no `ruler watch`.** A third mode re-validating loaded rules on a
+  timer was the plan. Most of what it would have re-asked is free from the
+  evaluations already running: every evaluation knows its result's column names
+  and types, its cost and whether it errored, so comparing one against the last
+  catches a dropped or retyped column, two sources that stopped agreeing, a cost
+  over a ceiling and an error that just started, at one group interval and no
+  extra query. **The comparison is on the result's shape, per rule, never on row
+  counts, per alert**: zero rows is the healthy state of most alert rules, so a
+  row-count comparison fires on every resolve and no threshold fixes that. What
+  is genuinely left is `rule/attribute-key`, the OTel map key rename, which
+  needs its own sampling query because the shape and the row count both look
+  healthy while the rule matches nothing forever. That one check gets a slow
+  timer inside `ruler run`. Neither feed refuses or unloads anything; both report
+  to `clickhouse_ruler_problem`, whose labels name the team and the file because
+  the fix belongs to the rule's owner rather than the ruler's operator. See
+  6.3.2, 8.2 and 10.4.
 - **Identity across sources.** A rule matching several sources produces one
   alert per source, kept apart by a protected `source` label. A source's other
   labels are free-form, travel onto its alerts, and are the operator's to

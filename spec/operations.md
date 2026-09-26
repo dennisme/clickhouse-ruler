@@ -143,12 +143,34 @@ Validation and config:
 
 | Metric | Type | Labels |
 | --- | --- | --- |
-| `clickhouse_ruler_problem` | gauge | `rule`, `check`, `severity` |
+| `clickhouse_ruler_problem` | gauge | `rule`, `check`, `severity`, `team`, `file` |
 | `clickhouse_ruler_rules_unmatched` | gauge | `rule_group` |
 | `clickhouse_ruler_config_last_reload_successful` | gauge | none |
 | `clickhouse_ruler_config_last_reload_timestamp_seconds` | gauge | none |
 
-`clickhouse_ruler_problem` is the `pint` analog. `clickhouse_ruler_rules_unmatched` counts rules this
+`clickhouse_ruler_problem` is the `pint` analog, and it is the only metric here
+aimed at somebody other than the operator. A rule that broke under a schema
+change is fixed by whoever owns the query, so the labels have to say whose it is
+and where to edit: `team` from the rule's effective labels, empty when nobody
+claimed it for the same reason the cost metrics leave it empty (8.2), and `file`
+so the finding names a path rather than a rule somebody then has to grep for.
+`check` is what makes it actionable at all, because every check has a page and
+every finding links to it (7.8), so the annotation on an alert built from this
+gauge lands the owner on an explanation instead of on our dashboard.
+
+Cardinality is rules times checks, bounded by the rules loaded, and the gauge is
+rebuilt per pass rather than incremented: findings that went away have to stop
+being series or the alert never clears. That makes a failed pass dangerous in
+the other direction, because blanking the gauge because the ruler could not ask
+would resolve every finding at once and read as a fix. A pass that fails leaves
+the previous answer standing and says so through the failure metrics instead.
+
+**We do not route it.** The tree is the operator's (6.5), so what ships is the
+expression, an explanation of what raising it means and who fixes it, and
+nothing that writes into their Alertmanager. Leading a horse to water is the
+whole of the offer.
+
+`clickhouse_ruler_rules_unmatched` counts rules this
 ruler loaded that match no source it holds, so it will never evaluate them
 (6.10). Expected to be non-zero on a per-datacenter ruler reading a shared
 repository, and expected to return to zero after a cluster rollout finishes.
@@ -156,8 +178,10 @@ Alerting on it staying raised is how the soft failure in 6.10 stops being
 ignored: the check warns at authoring time, this catches the case where nobody
 read the warning.
 
-Of these four, only `clickhouse_ruler_problem` is outstanding: it re-validates
-loaded rules on a timer, which is what `ruler watch` is. The reload pair exists
+Of these four, only `clickhouse_ruler_problem` is outstanding. It is fed from two
+places, and 10.4 is why: most of what it reports is drift the evaluation can see
+for free by comparing itself against the last one (6.3.2), and the rest is
+`rule/attribute-key`, which needs its own query on its own timer. The reload pair exists
 because `SIGHUP` reloads the files, and the two deliberately do not say the same
 thing. `clickhouse_ruler_config_last_reload_successful` is about the last
 attempt, so a refused reload leaves it at 0 until one succeeds, which is the
@@ -320,7 +344,7 @@ Everything in 8.1 through 8.6 is a mechanism. What an operator needs at three in
 the morning is the reading of it, and that is a page rather than a spec section:
 `docs/operations.md`, published with the check pages.
 
-Four things belong on it, and nothing else:
+Five things belong on it, and nothing else:
 
 - **What to watch, as expressions they can paste.** A missed iteration, an
   evaluation failure rate, a last evaluation going stale, send failures,
@@ -336,10 +360,21 @@ Four things belong on it, and nothing else:
   somebody who has not read 7.1, and both are the design working.
 - **The ClickHouse side.** `system.query_log` queries keyed on the
   `log_comment` from 8.5: what a rule cost, what it read, what timed out.
+- **A rule that broke while running**, which is the one item here not addressed
+  to the operator. `clickhouse_ruler_problem` (8.2, 10.4) is fixed by whoever
+  owns the query, so this section has a second job the other four do not: it has
+  to be readable by somebody who has never operated this ruler and does not want
+  to. It says what a raised gauge means, that the rule is still evaluating and
+  still paging, that `team` and `file` name who and where, and that `check` is
+  the link to the explanation. It also says what clearing means, because a gauge
+  that clears when the schema is fixed and a gauge that clears because a pass
+  could not run are different events and only the first is good news.
 
 What does not belong on it is a second description of the checks. Those have
 their own pages and their own generated facts (7.8), and an operations page
-restating a severity default is one more thing to go stale.
+restating a severity default is one more thing to go stale. That applies to the
+item above as much as the rest: it explains the signal and hands the reader to
+the check page, it does not re-explain `rule/attribute-key`.
 
 ---
 
@@ -543,10 +578,11 @@ Borrowed from `pint`:
 
 - `ruler check ./rules/` runs validation in CI. Only checks rules changed in
   the pull request, and comments inline on the diff.
-- `ruler` runs the eval loop and sends to Alertmanager.
-- `ruler watch` re-validates live rules continuously and exports a
-  `clickhouse_ruler_problem` gauge. Catches rules that *became* broken after a schema
-  change, which CI cannot. Alert on your alerts.
+- `ruler run` runs the eval loop, sends to Alertmanager, and reports rules that
+  became broken while it was running (10.4). Alert on your alerts.
+
+There is no third mode. `ruler watch` was going to be one, re-validating loaded
+rules continuously, and 10.4 is why it collapsed into `ruler run` instead.
 
 Built so far: `ruler check` with configurable policy, tiers 0 through 2 of
 section 7 including the checks that read the query through the database and
@@ -560,16 +596,10 @@ because whoever rolled the files out is the only party that knows when they are
 complete. A reload is all or nothing, keeps the pending state of every rule that
 is still the same rule, and refuses a reading that fails a correctness check
 (7.6). What it does not do is notice a rule that became broken while nothing
-changed on disk, which needs re-validation on a timer rather than on a signal.
+changed on disk, which is 10.4's job rather than the signal's.
 
-`ruler watch` does not exist, so loaded rules are not re-validated on a timer
-and `clickhouse_ruler_problem` is not exported.
-
-Next: watch mode, which brings that timer and the last metric in 8.2. Tier 3
-backfill is in, behind `ruler check --backfill` (7.4).
-
-The validation package is already re-runnable against loaded rules, so watch
-mode is a caller rather than a rewrite.
+Next: 10.4, which brings the last metric in 8.2. Tier 3 backfill is in, behind
+`ruler check --backfill` (7.4).
 
 ### 10.1 Validation as something other people can use
 
@@ -639,8 +669,8 @@ it needs no leader election, no shared state and no new features here.
 (6.10.1) land on alerts, so two rulers meant to be replicas of each other must
 carry the same ones. A label naming the replica, the obvious thing to reach
 for when two processes are emitting the same alert, is precisely what breaks
-deduplication: it makes every alert two alerts, and 6.5's route tree then
-routes both.
+deduplication: it makes every alert two alerts, and the route tree then routes
+both.
 
 **The cost is query load, and it is linear.** Each replica evaluates every
 matched rule against every matched source, so three rulers is three times the
@@ -755,3 +785,67 @@ annotations, and the summary comment additionally needs
 token nor secrets, so it cannot run the online checks or post a comment. That
 is correct behaviour, and 7.10 explains why `pull_request_target` is not the
 way around it.
+
+### 10.4 Reporting rules that broke while running
+
+The failure this exists for: a rule merges, passes every check, runs correctly
+for months, and then the schema moves under it. Nothing in the file changed, so
+CI has nothing to run and `SIGHUP` has nothing to reload. The rule is now wrong
+and the only two events that would surface it are the next rollout and the
+outage.
+
+`ruler watch` was the planned answer, as a third mode re-validating loaded rules
+on a timer. It is not built and it is not going to be, because most of what it
+would have re-asked is answerable from the evaluations already happening.
+
+**Two feeds, and the split is whether an extra query is needed.**
+
+The first is free and lives in the evaluator. Every evaluation already knows the
+result's column names and types, its cost, and whether it errored, so comparing
+each evaluation against the previous one detects a dropped or retyped column,
+two sources that stopped agreeing, a cost that crossed a ceiling, and an error
+that has just started. No query, and the latency is one group interval. 6.3.2 is
+the design, including why the comparison is on the result's shape per rule and
+never on row counts per alert: zero rows is the healthy state of most alert
+rules, so a row-count comparison fires on every resolve.
+
+The second is a timer, and it exists for exactly one check.
+`rule/attribute-key` (7.3) catches the OTel map key rename, which is the highest
+value check in the tool and the one thing in this section that no amount of
+watching the evaluation reveals: the query succeeds, the shape is unchanged, and
+it matches nothing forever. Answering it means sampling recent data, which is a
+query the evaluation does not make, so it gets its own interval.
+
+**What the timer costs, and therefore how it is sized.** One bounded query per
+rule per pass, against real data. That is affordable hourly and absurd every
+minute, and the interval is a setting rather than a derived value because how
+often a schema moves is a property of the organisation. It shares the ruler-wide
+and per-source query limits with evaluation (6.11) rather than getting its own
+budget, because a re-check pass that starved alerting would be trading the
+outage it exists to prevent for a worse one. Evaluation is the work that cannot
+wait; re-checking is the work that can.
+
+**It does not gate anything.** Both feeds report into
+`clickhouse_ruler_problem` (8.2) and neither unloads a rule, neither refuses an
+evaluation, and neither resolves an alert. Refusing belongs to reload alone
+(7.6). See 6.3.2 for why: a ruler that dropped a rule on a finding would stop
+paging for the condition on the strength of a schema change nobody reviewed.
+
+**The validation package is already re-runnable against loaded rules** (7.1), so
+neither feed is a rewrite. The evaluator comparison needs somewhere to keep the
+previous result's shape and the timer needs a caller, and the checks themselves
+are the ones CI runs. The shape does not currently leave `internal/query`: the
+column names and types are read, spent on scanning, and dropped, so carrying
+them out to the scheduler is a signature change rather than a pure addition.
+
+**Neither feed ships without its page.** The signal is addressed to somebody who
+owns a rule and may never have operated this ruler, so a gauge nobody explained
+is a gauge whose finding lands on the operator anyway, which is the outcome this
+whole section exists to avoid. 8.7 says what the operations page has to carry.
+Two rules keep it from sprawling: it explains the signal and links to the check
+page rather than re-explaining the check (7.8), and it states which feed found a
+thing, because "your rule's result changed shape" and "your rule's map key is
+gone from recent data" are different problems with different fixes and arrive on
+different clocks. How evaluation notices drift at all belongs on the how-it-works
+page, in a paragraph, not a section: it is one comparison on a result the
+evaluation already had.

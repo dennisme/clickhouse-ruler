@@ -173,10 +173,16 @@ Working:
 
 Not built yet:
 
-- No `ruler watch`. Rules reload on `SIGHUP`, but nothing re-validates the
-  rules already loaded on a timer, so a rule that became broken after a schema
-  change is not reported until something reloads or re-runs `ruler check`.
-- No Alertmanager route tree generation.
+- Nothing reports a rule that broke while the ruler was running. Rules reload on
+  `SIGHUP`, but a schema change under a rule nobody edited is not surfaced until
+  something reloads or re-runs `ruler check`. The design is in spec 10.4:
+  comparing each evaluation's result shape against the last one, plus a slow
+  timer for the OTel map key check, both feeding a
+  `clickhouse_ruler_problem` gauge labelled with the team and file to fix.
+
+Not planned: generating your Alertmanager route tree. That file is yours and
+already under your own review policy, so writing into it is not this tool's
+job. The rest of the non-goals are in [spec 5](spec.md#5-non-goals).
 
 Known gaps that will change:
 
