@@ -124,8 +124,9 @@ Working:
 
 - `ruler check ./rules/`, as text or as GitHub workflow commands annotating a
   pull request diff. Correctness checks always block; convention checks
-  default to warnings an operator raises in `ruler.yaml` or per source, and
-  `--explain` names the file that set each one.
+  default to warnings an operator raises in `ruler.yaml`, per source, or in a
+  team directory's own `ruler.yaml`, and `--explain` names the file that set
+  each one.
 - Offline checks: rule files parsed with a line number on every finding and
   strict unknown-field rejection, checks on rules and on the sources file,
   whose secrets come from a file or the environment.
@@ -173,8 +174,6 @@ Known gaps that will change:
   pinned to `0`, so a dead shard fails the evaluation rather than silently
   resolving alerts, but `address` still takes a single node and the cost caps
   are per shard. See spec 6.9.
-- Team-scoped policy files are not read. Policy comes from `ruler.yaml` and
-  from each source. See spec 7.7.
 
 ## Development
 

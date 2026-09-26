@@ -133,7 +133,7 @@ func check(args []string, stdout, stderr io.Writer) int {
 
 		// Rules are the other way round: only the sources they matched, since
 		// a rule is read through the cluster it will run on.
-		inspected, rows := inspectRules(ctx, set, root, *sample, *summary != "")
+		inspected, rows := inspectRules(ctx, set, *sample, *summary != "")
 		problems = append(problems, inspected...)
 
 		if *summary != "" {
@@ -156,7 +156,7 @@ func check(args []string, stdout, stderr io.Writer) int {
 		if *format == lint.FormatGitHub {
 			out = stderr
 		}
-		explainSet(out, set, root)
+		explainSet(out, set)
 	}
 
 	for _, p := range problems {
@@ -211,11 +211,12 @@ func loadPolicy(path, dir string) (*policy.Policy, []lint.Problem, error) {
 // explainSet prints the resolved policy per rule, naming the file that set
 // each severity so an author can see why a check blocks them instead of
 // guessing which of several files is responsible (spec 7.8).
-func explainSet(w io.Writer, set *ruleset.Set, root *policy.Policy) {
+func explainSet(w io.Writer, set *ruleset.Set) {
+	// The scopes the rule's location decided and the sources it matched
+	// are both already resolved on a loaded rule, so this is the same
+	// merge the loader validated against.
 	for _, r := range set.Rules {
-		// The matched sources are already resolved on a loaded rule, so this
-		// is the same merge the loader validated against.
-		scopes := []*policy.Policy{root}
+		scopes := []*policy.Policy{r.Policy}
 		for _, src := range r.Sources {
 			scopes = append(scopes, src.Policy)
 		}

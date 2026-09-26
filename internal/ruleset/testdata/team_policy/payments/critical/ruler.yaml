@@ -1,0 +1,4 @@
+# Nested below the team's own file, and additive to it.
+checks:
+  annotations/required:
+    severity: error

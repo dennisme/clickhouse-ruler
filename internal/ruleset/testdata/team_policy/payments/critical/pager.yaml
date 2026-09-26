@@ -1,0 +1,17 @@
+groups:
+  - name: pager
+    interval: 1m
+    rules:
+      - alert: PaymentsDown
+        sources:
+          team: payments
+        expr: |
+          SELECT ServiceName, count() AS value
+          FROM otel.otel_traces
+          WHERE Timestamp >= {{ .From }} AND Timestamp < {{ .To }}
+          GROUP BY ServiceName
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ .ServiceName }} is down"

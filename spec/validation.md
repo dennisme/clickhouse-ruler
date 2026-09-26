@@ -776,9 +776,33 @@ shipped default. Carrying `max-joins:2` into every union would make the default
 a maximum nobody could raise, and an operator who means to permit a fourth join
 could write it, have it parse, merge, and do nothing.
 
-Instance and datasource scope exist. Team-level files do not: they add file
-count and a trust question nobody has asked for yet, and because the merge is
-variadic over scopes, adding them later changes call sites and nothing else.
+**A team file governs its directory and everything below it.** A `ruler.yaml`
+anywhere in the rules tree applies to every rule at or under its directory, so
+a rule's policy is the instance file, every team file above it, and the
+policies of the sources it matched, all merged at once. Nested team
+directories are not a chain with a winner: both files are scopes, both apply,
+and the maximum decides, which is the same sentence as everywhere else in this
+section.
+
+The `ruler.yaml` at the rules root is the instance scope and not also a team
+file. Under a maximum, reading one file twice changes no severity, so this is
+not about the result: the origin recorded on a finding is what `--explain`
+prints, and naming the team scope for a setting the platform made points an
+author at the wrong file and the wrong owner.
+
+**Two names are reserved in the rules tree, and the decision is by name rather
+than by content.** `ruler.yaml` is policy and `sources.yaml` is the sources
+file, which the quick start keeps beside the rules. Neither is a rule file, and
+walking every `*.yaml` as one reports a pile of unknown fields against a file
+that is exactly right. The alternative is sniffing for a `groups:` key, which
+guesses about a file whose name the author can already read, and which reports
+nothing useful about a rule file with a typo in that one key.
+
+A team file's own parse problems are reported like any other file's. A
+`ruler.yaml` that will not parse is a file whose author believes a check is
+raised when it is not, and that silence is the one failure this scope cannot
+afford: what makes a team-owned file safe is that it can only tighten, which
+stops being true when a typo quietly drops the setting.
 
 **Exemptions are the one thing that loosens, and they sit outside the merge.**
 A rule can be correct everywhere and still fail a check against one cluster:

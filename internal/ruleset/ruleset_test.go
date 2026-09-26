@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/dennisme/clickhouse-ruler/internal/lint"
+	"github.com/dennisme/clickhouse-ruler/internal/policy"
 	"github.com/dennisme/clickhouse-ruler/internal/source"
 )
 
@@ -205,5 +206,132 @@ func TestLoadReportsRulesThatProduceTheSameAlert(t *testing.T) {
 	}
 	if !strings.Contains(p.Text, other) {
 		t.Errorf("text does not name the other rule's file: %s", p.Text)
+	}
+}
+
+// loadPolicy reads a fixture's instance policy the way the CLI reads the
+// ruler.yaml beside the rules it was pointed at.
+func loadPolicy(t *testing.T, path string) *policy.Policy {
+	t.Helper()
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading policy: %v", err)
+	}
+	p, problems := policy.Parse(path, data)
+	if len(problems) != 0 {
+		t.Fatalf("policy fixture problems: %v", problems)
+	}
+	return p
+}
+
+// severityOf finds the finding for a check against one rule file, so a test
+// can say what a scope did to a check rather than counting problems.
+func severityOf(t *testing.T, problems []lint.Problem, file, check string) lint.Problem {
+	t.Helper()
+
+	for _, p := range problems {
+		if p.Check == check && p.File == file {
+			return p
+		}
+	}
+	t.Fatalf("no %s finding against %s, got %v", check, file, problems)
+	return lint.Problem{}
+}
+
+// A team owns the directory its rules live in, so a ruler.yaml there is
+// policy for those rules and no others. The merge is a maximum, so the only
+// thing a team can do with it is make its own life stricter (spec 7.7).
+func TestLoadReadsTeamPolicy(t *testing.T) {
+	dir := filepath.Join("testdata", "team_policy")
+	instance := filepath.Join(dir, "ruler.yaml")
+	team := filepath.Join(dir, "payments", "ruler.yaml")
+	nested := filepath.Join(dir, "payments", "critical", "ruler.yaml")
+
+	payments := filepath.Join(dir, "payments", "latency.yaml")
+	pager := filepath.Join(dir, "payments", "critical", "pager.yaml")
+	search := filepath.Join(dir, "search", "errors.yaml")
+
+	sources := loadSourcesFrom(t, filepath.Join("team_policy", "sources.yaml"))
+	_, problems := Load(dir, sources, loadPolicy(t, instance))
+
+	// The team raised labels/required for its own directory, and --explain
+	// has to be able to say which file did it.
+	raised := severityOf(t, problems, payments, "labels/required")
+	if raised.Severity != lint.SeverityError {
+		t.Errorf("labels/required in the team directory = %v, want error", raised.Severity)
+	}
+	if raised.PolicyFile != team || raised.PolicyLine != 5 {
+		t.Errorf("policy origin = %s:%d, want %s:5", raised.PolicyFile, raised.PolicyLine, team)
+	}
+
+	// The sibling directory is untouched by another team's file.
+	sibling := severityOf(t, problems, search, "labels/required")
+	if sibling.Severity != lint.SeverityWarning {
+		t.Errorf("labels/required in the sibling directory = %v, want the shipped warning",
+			sibling.Severity)
+	}
+	if sibling.PolicyFile != "" {
+		t.Errorf("policy origin = %q, want the shipped default", sibling.PolicyFile)
+	}
+
+	// The team set annotations/runbook off and the instance set it to error.
+	// A maximum cannot go down, so the instance file is still the origin.
+	lowered := severityOf(t, problems, payments, "annotations/runbook")
+	if lowered.Severity != lint.SeverityError {
+		t.Errorf("annotations/runbook = %v, want the instance error a team cannot lower",
+			lowered.Severity)
+	}
+	if lowered.PolicyFile != instance || lowered.PolicyLine != 5 {
+		t.Errorf("policy origin = %s:%d, want %s:5", lowered.PolicyFile, lowered.PolicyLine, instance)
+	}
+
+	// A rule below two team files answers to both.
+	deep := severityOf(t, problems, pager, "annotations/required")
+	if deep.Severity != lint.SeverityError || deep.PolicyFile != nested {
+		t.Errorf("annotations/required = %v from %s, want error from %s",
+			deep.Severity, deep.PolicyFile, nested)
+	}
+	if got := severityOf(t, problems, pager, "labels/required"); got.PolicyFile != team {
+		t.Errorf("the directory above the nested one = %q, want %s", got.PolicyFile, team)
+	}
+}
+
+// The ruler.yaml at the rules root is the instance scope, passed in already.
+// Reading it again as a team file changes no severity under a maximum, but a
+// finding whose origin named the wrong scope would send --explain at the
+// wrong file, so it is left alone here.
+func TestLoadDoesNotReadTheInstanceFileAsTeamPolicy(t *testing.T) {
+	dir := filepath.Join("testdata", "team_policy")
+	sources := loadSourcesFrom(t, filepath.Join("team_policy", "sources.yaml"))
+
+	_, problems := Load(dir, sources, nil)
+
+	got := severityOf(t, problems, filepath.Join(dir, "search", "errors.yaml"), "labels/required")
+	if got.Severity != lint.SeverityWarning {
+		t.Errorf("labels/required = %v, want the shipped warning: the root ruler.yaml is "+
+			"the instance scope and this load was given none", got.Severity)
+	}
+}
+
+// Both reserved names live in the rules tree and neither is a rule file. The
+// quick start puts sources.yaml there, and a team's ruler.yaml is the point
+// of this scope, so parsing either as a rule reports a pile of unknown
+// fields against a file that is exactly right.
+func TestLoadDoesNotParseReservedNamesAsRules(t *testing.T) {
+	dir := filepath.Join("testdata", "team_policy")
+	sources := loadSourcesFrom(t, filepath.Join("team_policy", "sources.yaml"))
+
+	set, problems := Load(dir, sources, nil)
+
+	for _, p := range problems {
+		if filepath.Base(p.File) == "sources.yaml" || filepath.Base(p.File) == "ruler.yaml" {
+			if p.Check == "yaml/unknown-field" {
+				t.Errorf("a reserved file was parsed as a rule file: %s", p)
+			}
+		}
+	}
+	if len(set.Rules) != 3 {
+		t.Fatalf("expected the three rules, got %d", len(set.Rules))
 	}
 }

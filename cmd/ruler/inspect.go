@@ -24,7 +24,6 @@ import (
 func inspectRules(
 	ctx context.Context,
 	set *ruleset.Set,
-	root *policy.Policy,
 	sampling, summarising bool,
 ) ([]lint.Problem, []lint.SummaryRow) {
 	var problems []lint.Problem
@@ -43,7 +42,9 @@ func inspectRules(
 
 	for _, r := range set.Rules {
 		for _, src := range r.Sources {
-			merged := policy.Merge(root, src.Policy)
+			// The rule's own scopes are resolved on it already; the source
+			// is the one scope that differs per iteration here.
+			merged := policy.Merge(r.Policy, src.Policy)
 
 			checks := checksFromPolicy(merged, r, src)
 			checks.ReportCost = summarising

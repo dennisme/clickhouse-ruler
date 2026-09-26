@@ -1,0 +1,8 @@
+sources:
+  - name: otel_traces
+    labels: {team: payments}
+    address: localhost:9000
+    database: otel
+    username: ruler
+    table: otel_traces
+    timestamp_column: Timestamp
