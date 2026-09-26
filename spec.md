@@ -186,19 +186,11 @@ That is the property we are copying. Everything else follows from it.
 
 1. **Metrics tables.** The `pint` `promql/rate` and `promql/counter` checks have
    a loose analog for counter columns in OTel metrics tables. Worth it, or skip?
-2. **Restart loses pending state, a reload does not.** `ActiveAt` is held in
-   memory only, so a ruler restart still delays every pending alert by its full
-   `for`. A `SIGHUP` reload no longer does: a rule whose name, effective labels
-   and source are unchanged keeps the instances it was tracking, which is what
-   makes editing a rule file cheap and is most of the reason to reload rather
-   than restart. What is left open is the restart, and the replica added to an
-   existing set, which is the same problem read from the other end. Prometheus
-   solves both by restoring from an `ALERTS_FOR_STATE` series. Deferred.
-3. **Ownership at scale.** Deferred, not solved. Operating a ruler that
+2. **Ownership at scale.** Deferred, not solved. Operating a ruler that
    thousands of engineers page off means high availability, missed evaluation
    handling, clock skew, ClickHouse restarts mid window, and backfill after an
    outage. Revisit before anyone depends on it in production.
-4. **Sharded clusters.** `skip_unavailable_shards` is now pinned to `0`, so a
+3. **Sharded clusters.** `skip_unavailable_shards` is now pinned to `0`, so a
    dead shard fails the evaluation rather than silently resolving alerts. The
    rest of 6.9 is outstanding: `address` takes a single node, the cost caps
    are per shard rather than per query, and `evaluation_delay` has to cover
@@ -208,7 +200,7 @@ That is the property we are copying. Everything else follows from it.
    it carries no security meaning, so a wrong answer is a wrong finding rather
    than a tenancy hole. It is still a correctness question for the checks that
    read it.
-5. **Generating the route tree with free-form labels.** 6.5 says the tree is
+4. **Generating the route tree with free-form labels.** 6.5 says the tree is
    generated from the repository, keyed on `team`. With teams inventing rule
    labels and operators inventing source `labels` (6.10.1), what the generator
    should do with a combination no route covers is unsettled: emit a catch-all
