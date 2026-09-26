@@ -845,13 +845,23 @@ rather than the consequence of leaving a field out.
 is what makes one rule definition work across an estate: the same latency rule
 evaluates on every cluster whose source it matches.
 
-**Matched sources have to be schema-compatible, and nothing enforces it.** The
-author writes `FROM otel.otel_traces` in the SQL, so every source a rule
-matches must expose that table with those columns. Labelling sources such that
-a rule only matches compatible ones is an operator's job, and getting it wrong
-surfaces as a tier 1 failure against one source and not another (7.3), which
-is a confusing way to find out. A check that matched sources agree on table
-and column types is worth considering once tier 1 exists.
+**Matched sources have to be schema-compatible, and `rule/source-schema`
+checks it.** The author writes `FROM otel.otel_traces` in the SQL, so every
+source a rule matches must expose that table with those columns. Labelling
+sources such that a rule only matches compatible ones is an operator's job,
+and the failure it produces is a rule that resolves against both clusters and
+means something different on each: a column one returns and the other does not
+is a label on half the estate's alerts, and a column both return with
+different types is a threshold compared against another type. Tier 1, because
+the columns are the cluster's answer rather than the file's, so each source is
+asked and the answers are compared (7.3). Reported once for the rule, naming
+both sources and the column, because a finding per source says the rule is
+broken against one cluster and correct against the other, which is the
+confusing way to find out. A source nobody could reach, or whose user cannot
+read the table, returned no columns and so has not disagreed with anything;
+`rule/inspect` and `rule/table-access` already say what happened there. A
+warning, because which sources a selector reaches and whether two clusters
+carry the same table are both the operator's (7.6).
 
 ### 6.10.1 Identity when a rule matches several sources
 

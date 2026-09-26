@@ -633,3 +633,35 @@ func TestInspectSkipsTheEstimateWhenNothingAsked(t *testing.T) {
 		t.Errorf("cost = %+v, want nil when no ceiling and no table asked for one", *got.Cost)
 	}
 }
+
+// The columns leave the inspection whether or not anything was wrong with
+// them, because whether the sources a rule matched agree on its result is a
+// question about all of them at once and one inspection sees one source
+// (spec 6.10).
+func TestInspectCarriesTheResultColumns(t *testing.T) {
+	q := openQuerier(t, testSource(t))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	got, err := q.Inspect(ctx, rule.Rule{Alert: "Probe", Expr: goodExpr}, testGroup, describeChecks())
+	if err != nil {
+		t.Fatalf("Inspect: %v", err)
+	}
+	if len(got.Findings) != 0 {
+		t.Errorf("findings = %v, want none", checkNames(got.Findings))
+	}
+
+	types := map[string]string{}
+	for _, c := range got.Columns {
+		types[c.Name] = c.Type
+	}
+	// The server's own answer, so the type is asserted rather than assumed:
+	// Duration is UInt64 in the stack's schema and max() of it is the same.
+	if types["value"] != "UInt64" {
+		t.Errorf("columns = %v, want value as UInt64", got.Columns)
+	}
+	if _, ok := types["ServiceName"]; !ok {
+		t.Errorf("columns = %v, want the label column the rule groups by", got.Columns)
+	}
+}

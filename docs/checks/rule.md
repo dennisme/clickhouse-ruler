@@ -42,6 +42,7 @@ stricter, and a ceiling binds at its lowest value. See spec 7.6 and 7.7.
 | [`rule/select-star`](#rule-select-star) | `warning` by default | none | [7.3](https://github.com/dennisme/clickhouse-ruler/blob/main/spec.md) |
 | [`rule/settings`](#rule-settings) | fixed, always `error` | none | [7.3](https://github.com/dennisme/clickhouse-ruler/blob/main/spec.md) |
 | [`rule/source-match`](#rule-source-match) | `warning` by default | none | [6.10](https://github.com/dennisme/clickhouse-ruler/blob/main/spec.md) |
+| [`rule/source-schema`](#rule-source-schema) | `warning` by default | none | [6.10](https://github.com/dennisme/clickhouse-ruler/blob/main/spec.md) |
 | [`rule/syntax`](#rule-syntax) | fixed, always `error` | none | [7.3](https://github.com/dennisme/clickhouse-ruler/blob/main/spec.md) |
 | [`rule/table-access`](#rule-table-access) | `warning` by default | none | [7.3](https://github.com/dennisme/clickhouse-ruler/blob/main/spec.md) |
 | [`rule/table-function`](#rule-table-function) | `error` by default | an allowlist, shipped empty | [7.3](https://github.com/dennisme/clickhouse-ruler/blob/main/spec.md) |
@@ -467,6 +468,52 @@ takes that ability away from every source.
 
 If the finding is unexpected, `source/privileges` is the check that says which
 half of the user contract is missing.
+
+<a id="rule-source-schema"></a>
+
+### rule/source-schema
+
+The sources a rule matched do not agree on what the rule returns.
+
+A rule does not name a source, it selects them, and it writes its own table
+into the SQL. Every cluster the selector reaches therefore has to carry that
+table with the columns the query reads, and only the cluster can say whether it
+does. This check asks each of them and compares the answers.
+
+Both halves of a disagreement matter. A column one cluster returns and another
+does not is a label present on half the estate's alerts, which is a different
+alert identity per cluster. A column both return with different types is worse,
+because nothing looks wrong: the query resolves on both, every other check
+passes on both, and the threshold is compared against a `Float64` here and a
+`UInt64` there.
+
+```yaml
+# both clusters match, and only one of them has the column
+- alert: CheckoutIsSlow
+  sources: {team: payments}
+
+# narrowing the selector is one fix, and the other is the migration
+- alert: CheckoutIsSlow
+  sources: {team: payments, schema: v2}
+```
+
+Reported once for the rule, naming both sources and the column. Per source it
+would say the rule is broken against the cluster that has drifted and correct
+against the one that has not, which is the confusing answer this check exists
+to replace.
+
+A source nobody could reach, or whose user cannot read the table, has not
+disagreed with anything. Those are `rule/inspect` and `rule/table-access`, and
+they are not repeated here.
+
+A warning by default. Which sources a selector reaches is decided by the labels
+an operator put on them, and whether two clusters carry the same table is a
+migration somebody other than the rule's author owns, so an error would block a
+rule change behind another team's cluster. The operator who owns both clusters
+raises it, and by then the finding is about a file they can act on.
+
+`rule/source-match` is the related check with no connection behind it: it
+reports a rule that reaches no source at all.
 
 <a id="rule-cost"></a>
 

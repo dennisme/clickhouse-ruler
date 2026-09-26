@@ -226,3 +226,26 @@ and are what the code comments cite.
   file: the severity would be the same either way under a maximum, but the
   origin a finding carries is what `--explain` prints, and it has to name the
   scope that actually set it. See 7.7.
+- **Matched sources have to agree on a rule's result, and disagreement is
+  `rule/source-schema` at `warn`.** A rule selects sources rather than naming
+  one and writes its own table into the SQL, so every cluster a selector
+  reaches has to carry that table with the columns the query reads. Tier 1,
+  because the columns are the cluster's answer rather than the file's: each
+  source is asked through the `DESCRIBE` the result checks already run, and
+  the answers are compared afterwards. That is also the only place the
+  comparison can happen, since one inspection sees one source, which is why
+  the columns leave an inspection the way its cost estimate already does.
+  Reported once for the rule, naming both sources and the column, because per
+  source it would say the rule is broken against the cluster that has drifted
+  and correct against the one that has not, which is the confusing answer the
+  check exists to replace. A source nobody could reach, or whose user cannot
+  read the table, has not disagreed with anything: it produced no columns, so
+  it is not compared, and `rule/inspect` and `rule/table-access` have already
+  said what happened. `warn` rather than `error` even though the rule
+  genuinely cannot be correct everywhere it runs, and the reason is who is on
+  the critical path: which sources a selector reaches is decided by the labels
+  an operator put on them, and whether two clusters carry the same table is a
+  migration the rule's author does not own, so an error would block a rule
+  change behind another team's cluster. The severity of the finding is the
+  operator's to raise, and for them it is about a file they can act on.
+  See 6.10, 7.3, 7.6.

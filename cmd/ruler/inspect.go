@@ -41,6 +41,12 @@ func inspectRules(
 	}()
 
 	for _, r := range set.Rules {
+		// What each source said the rule returns, for the one check that
+		// compares the sources with each other rather than reading each on its
+		// own (spec 6.10). Only the sources that answered are collected: a
+		// cluster nobody could reach has not disagreed with anything.
+		var answered []sourceColumns
+
 		for _, src := range r.Sources {
 			// The rule's own scopes are resolved on it already; the source
 			// is the one scope that differs per iteration here.
@@ -66,6 +72,13 @@ func inspectRules(
 				r.File, r.Alert, r.Line(), src, merged, inspection.Findings, now)...)
 			rows = appendRow(rows, summarising, r, src, inspection.Cost)
 
+			if inspection.Columns != nil {
+				answered = append(answered, sourceColumns{
+					source:  src.Name,
+					columns: inspection.Columns,
+				})
+			}
+
 			if !sampling {
 				continue
 			}
@@ -84,6 +97,10 @@ func inspectRules(
 			problems = append(problems,
 				inspectionProblems(r.File, r.Alert, r.Line(), src, merged, sampled, now)...)
 		}
+
+		// After the loop, because the comparison needs every answer and no
+		// source's answer is the one it is measured against.
+		problems = append(problems, schemaProblems(r, answered, policy.Merge(r.Policy))...)
 	}
 	return problems, rows
 }

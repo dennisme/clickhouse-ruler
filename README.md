@@ -131,8 +131,9 @@ Working:
   strict unknown-field rejection, checks on rules and on the sources file,
   whose secrets come from a file or the environment.
 - `--online` checks, which read no rows: the query as ClickHouse itself parsed
-  it rather than as text, the result columns it will really produce, and what
-  one evaluation is predicted to read against configurable ceilings.
+  it rather than as text, the result columns it will really produce, whether
+  every cluster a rule matched agrees on those columns, and what one
+  evaluation is predicted to read against configurable ceilings.
 - `--sample`, the one check that reads rows, confirming the map keys a rule
   reads exist in recent data. A renamed OTel attribute silences an alert
   forever and nothing else catches it.

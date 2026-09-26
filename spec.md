@@ -210,14 +210,6 @@ That is the property we are copying. Everything else follows from it.
    branch, refuse to generate, or report it and continue. Not urgent, because
    nothing generates a route tree yet.
 
-6. **Matched sources have to be schema-compatible.** A rule writes
-   `FROM otel.otel_traces` in its SQL, so every source its selector matches
-   must expose that table with those columns. Nothing checks it, and getting
-   it wrong surfaces as a tier 1 failure against one source and not another,
-   which is a confusing way to find out. A check comparing matched sources'
-   tables and column types is the obvious fix and needs tier 1 first. See
-   6.10.
-
 ---
 
 ## 14. Documentation

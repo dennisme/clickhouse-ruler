@@ -209,6 +209,15 @@ Tier 1, metadata only, reads no table data:
   it is the one thing ClickHouse gives us that Prometheus does not. The cost
   is that it needs a connection, so it is tier 1 where their equivalent is
   free (7.9).
+- `rule/source-schema`, the sources one rule matched compared with each other
+  rather than each read on its own. A rule selects sources and writes its own
+  table into the SQL, so every cluster the selector reaches has to carry that
+  table with the columns the query reads (6.10). Tier 1 because the columns
+  are the cluster's answer rather than the file's: the `DESCRIBE` above
+  already asks each source, and this compares what came back. Reported once
+  for the rule, naming both sources and the column. A source that could not
+  be reached or whose user cannot read the table produced no columns, so it
+  is not compared and is not a disagreement.
 - `rule/cost`, from `EXPLAIN ESTIMATE`: predicted rows, parts and marks,
   summed across the tables a query reads, against two ceilings. One is what a
   single evaluation may read; the other is that number divided by the group's
@@ -542,6 +551,16 @@ and where they take a list of keys that list is configurable too:
   rule can run depends on which ruler is asking, so the same repository is
   legitimately unmatched on one ruler and fine on another (6.10, 10.2).
   Default `warn`.
+- `rule/source-schema`, matched sources that do not agree on what the rule
+  returns. Default `warn`, and unlike most of this list the finding is serious:
+  the rule cannot be correct everywhere it runs, because the result columns are
+  the alert's labels and a threshold compared against another type means
+  something else. What decides the severity is who is on the critical path.
+  Which sources a selector reaches is decided by the labels an operator put on
+  them, and whether two clusters carry the same table is a migration the rule's
+  author does not own, so an error would block a rule change behind another
+  team's cluster. The operator who owns both raises it, and for them the
+  finding is about a file they can act on.
 - `rule/duplicate-alert`, two rules whose alert name, effective labels and
   matched sources are all equal, so they share one fingerprint: one entry in
   the resend cadence and one alert in Alertmanager, where whichever evaluated

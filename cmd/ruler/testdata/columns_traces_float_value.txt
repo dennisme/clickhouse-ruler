@@ -1,0 +1,2 @@
+ServiceName	LowCardinality(String)
+value	Float64

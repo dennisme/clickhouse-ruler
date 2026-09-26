@@ -46,6 +46,13 @@ type Inspection struct {
 	// folded into a finding because the summary table wants the number for a
 	// rule that is within every ceiling too (spec 7.10).
 	Cost *CostEstimate
+
+	// Columns is what this source says the rule returns, nil when nothing
+	// resolved it. Carried out of the inspection for the same reason Cost is:
+	// one inspection is one rule against one source, and whether the sources a
+	// rule matched agree on its result is a question about all of them at once,
+	// which only the caller looping over them can ask (spec 6.10).
+	Columns []Column
 }
 
 // Checks is what an inspection should look for, resolved from policy by the
@@ -163,7 +170,7 @@ func (q *Querier) Inspect(ctx context.Context, r rule.Rule, who Attribution, c C
 	if err != nil {
 		return Inspection{}, err
 	}
-	return Inspection{Findings: append(out, costFindings...), Cost: cost}, nil
+	return Inspection{Findings: append(out, costFindings...), Cost: cost, Columns: cols}, nil
 }
 
 // inspectCost asks what the rule will read every time it runs.
