@@ -3,6 +3,8 @@ package scheduler
 import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
+
+	"github.com/dennisme/clickhouse-ruler/internal/buildinfo"
 )
 
 // Metrics are the scheduler's own operational signals (spec 8.2).
@@ -36,6 +38,8 @@ type Metrics struct {
 	RulesUnmatched *prometheus.GaugeVec
 	Problem        *prometheus.GaugeVec
 
+	BuildInfo *prometheus.GaugeVec
+
 	ConfigLastReloadSuccessful prometheus.Gauge
 	ConfigLastReloadTimestamp  prometheus.Gauge
 
@@ -51,7 +55,24 @@ type Metrics struct {
 func NewMetrics(reg prometheus.Registerer) *Metrics {
 	f := promauto.With(reg)
 
+	// One series per process, fixed at 1, carrying the build as labels. The
+	// convention the ecosystem already reads: prometheus_build_info and
+	// cortex_build_info are the same shape, so an operator's existing version
+	// panel works by changing the metric name (spec 8.2).
+	//
+	// Dirty state is deliberately not a label. A released binary is never
+	// dirty, so it would only ever distinguish one developer's laptop build
+	// from another's.
+	build := buildinfo.Get()
+	buildInfo := f.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "clickhouse_ruler_build_info",
+		Help: "Always 1. The version, commit and Go version of the running binary, as labels.",
+	}, []string{"version", "revision", "goversion"})
+	buildInfo.WithLabelValues(build.Version, build.Commit, build.GoVersion).Set(1)
+
 	return &Metrics{
+		BuildInfo: buildInfo,
+
 		EvaluationsTotal: f.NewCounterVec(prometheus.CounterOpts{
 			Name: "clickhouse_ruler_rule_evaluations_total",
 			Help: "Total number of rule evaluations.",

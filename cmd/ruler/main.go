@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/dennisme/clickhouse-ruler/internal/buildinfo"
 	"github.com/dennisme/clickhouse-ruler/internal/lint"
 	"github.com/dennisme/clickhouse-ruler/internal/policy"
 	"github.com/dennisme/clickhouse-ruler/internal/query"
@@ -51,7 +52,7 @@ func main() {
 
 func run(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		printf(stderr, "%s\n", "usage: ruler <check|run> [flags]")
+		printf(stderr, "%s\n", "usage: ruler <check|run|version> [flags]")
 		return exitUsage
 	}
 
@@ -62,8 +63,11 @@ func run(args []string, stdout, stderr io.Writer) int {
 		ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 		defer stop()
 		return runRun(ctx, args[1:], stdout, stderr)
+	case "version":
+		printf(stdout, "%s", buildinfo.Get())
+		return exitOK
 	default:
-		printf(stderr, "unknown command %q, want check or run\n", args[0])
+		printf(stderr, "unknown command %q, want check, run or version\n", args[0])
 		return exitUsage
 	}
 }

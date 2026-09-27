@@ -210,6 +210,26 @@ query was refused outright: a result overflow throws before the first
 progress packet, so that evaluation reports a duration and no rows. Timeouts
 and memory caps, which are the expensive rules, report what they read.
 
+Build:
+
+| Metric | Type | Labels |
+| --- | --- | --- |
+| `clickhouse_ruler_build_info` | gauge | `version`, `revision`, `goversion` |
+
+Always 1, one series per process, where the labels are the whole payload.
+`prometheus_build_info` and `cortex_build_info` are the same shape, so a
+version panel carried over works by changing the metric name. It answers
+which build each replica is running, which `ruler version` answers only for
+somebody who can reach the binary, and that is the question during a rollout
+that half landed.
+
+`version` is the release tag, stamped at build time, and reads `dev` for
+anything built outside the release pipeline. `revision` and `goversion` come
+from the toolchain's own build record rather than from a second stamp, so
+there is one symbol a release can get wrong instead of three. Whether the
+tree was dirty is not a label: a released binary never is, so it would only
+distinguish one developer's laptop build from another's.
+
 ### 8.3 Cardinality rule
 
 Label metrics by rule and group only. **Never by alert instance.**

@@ -134,6 +134,13 @@ series per rule.
 | `clickhouse_ruler_query_memory_usage_bytes` | histogram | `rule` |
 | `clickhouse_ruler_query_duration_seconds` | histogram | `rule` |
 | `clickhouse_ruler_query_queue_wait_seconds` | histogram | `source` |
+| `clickhouse_ruler_build_info` | gauge | `version`, `revision`, `goversion` |
+
+`clickhouse_ruler_build_info` is always 1 and exists for its labels: it says
+which build each replica is running, which matters during a rollout that only
+half landed. `version` is the release tag and reads `dev` for a binary built
+outside a release. `ruler version` prints the same facts, plus whether the
+tree was dirty, for anyone who can reach the binary.
 
 The two reload gauges are about the files rather than the rules.
 `clickhouse_ruler_config_last_reload_successful` is the last attempt, so a
