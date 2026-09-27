@@ -73,6 +73,19 @@ jobs:
 
     # Beyond the workflow's own: pull-requests to comment, actions to read and
     # write the stored coverage report, which is held as an artifact.
+    #
+    # This job runs the pull request's own code, and write permissions beside
+    # that are only safe because GitHub caps them. A fork's token is read only
+    # whatever this block asks for, and no secret reaches its runner, so the
+    # comment is simply refused there and octocov writes a job summary instead.
+    #
+    # What would turn that into a real hole is pull_request_target in place of
+    # pull_request, which runs a fork's code against the base repository with a
+    # write token. It is not worth the comment a fork would gain.
+    #
+    # The cap has one documented exception, "Send write tokens to workflows from
+    # pull requests", and it is offered to private repositories only. This one is
+    # public, so nothing here can raise a fork's token.
     permissions:
       contents: read
       packages: read
