@@ -557,33 +557,41 @@ func describeBackfill(b Backfill) string {
 func (q *Querier) backfillCaveats(ctx context.Context, sql string, b Backfill) []string {
 	var out []string
 
-	if ttl, ok := q.tableTTL(ctx); ok && b.Range > ttl {
-		out = append(out, fmt.Sprintf(
-			"the range is longer than the %s TTL on %s.%s, so the oldest windows read data the "+
-				"table has already deleted",
-			ttl, q.src.Database, q.src.Table))
+	// Which table the two questions below are asked of. Both are about stored
+	// parts rather than about the rows a rule reads, and a Distributed table has
+	// no parts and no TTL in its engine clause, so on a sharded cluster they are
+	// asked of the local table behind it (spec 6.9).
+	st := q.storageTable(ctx)
+	if st.Unanswerable != "" {
+		return []string{unresolvedCaveat(st)}
 	}
 
-	for _, added := range q.columnsAdded(ctx, sql, b.From) {
-		out = append(out, fmt.Sprintf(
-			"the %s column first appears at %s, inside the range, so every window before that read "+
-				"its default rather than a value the rule could compare",
-			added.Column, stamp(added.Earliest)))
+	if ttl, ok := q.tableTTL(ctx, st.Local); ok && b.Range > ttl {
+		out = append(out, ttlCaveat(ttl, st))
+	}
+
+	for _, added := range q.columnsAdded(ctx, sql, b.From, st.Local) {
+		out = append(out, columnCaveat(added, st))
 	}
 	return out
 }
 
-// tableTTL reads how long the source's table keeps a row.
+// tableTTL reads how long one table keeps a row.
 //
 // From system.tables, which the user contract in spec 6.7.2 leaves readable,
 // unlike the parts metadata columnsAdded asks for. An unreadable or
 // unrecognised TTL answers nothing rather than guessing: a caveat that names a
 // retention the table does not have is worse than no caveat.
-func (q *Querier) tableTTL(ctx context.Context) (time.Duration, bool) {
+//
+// The table is passed in rather than taken from the source, because a TTL is a
+// property of stored parts: on a sharded cluster the source names a Distributed
+// table whose engine clause has no TTL at all, and the answer lives on the local
+// table behind it (spec 6.9).
+func (q *Querier) tableTTL(ctx context.Context, ref tableRef) (time.Duration, bool) {
 	var engine string
 	err := q.conn.QueryRow(ctx,
 		"SELECT engine_full FROM system.tables WHERE database = ? AND name = ?",
-		q.src.Database, q.src.Table).Scan(&engine)
+		ref.Database, ref.Table).Scan(&engine)
 	if err != nil {
 		return 0, false
 	}
@@ -678,8 +686,8 @@ type columnAddition struct {
 // user with wider grants, which is the setup spec 10.3 describes, and that is
 // the one where a schema change is worth catching before the rules reach the
 // cluster that evaluates them.
-func (q *Querier) columnsAdded(ctx context.Context, sql string, from time.Time) []columnAddition {
-	earliest, err := q.columnHistory(ctx)
+func (q *Querier) columnsAdded(ctx context.Context, sql string, from time.Time, ref tableRef) []columnAddition {
+	earliest, err := q.columnHistory(ctx, ref)
 	if err != nil {
 		return nil
 	}
@@ -694,13 +702,16 @@ func (q *Querier) columnsAdded(ctx context.Context, sql string, from time.Time) 
 	return columnsAddedInside(earliest, identifiers(root), from)
 }
 
-// columnHistory is the oldest part each of the table's columns appears in.
-func (q *Querier) columnHistory(ctx context.Context) (map[string]time.Time, error) {
+// columnHistory is the oldest part each of one table's columns appears in.
+//
+// The table is passed in for the reason tableTTL's is: parts belong to a local
+// table, and a Distributed table has none of its own (spec 6.9).
+func (q *Querier) columnHistory(ctx context.Context, ref tableRef) (map[string]time.Time, error) {
 	rows, err := q.conn.Query(ctx, `
 SELECT column, min(min_time) AS earliest
 FROM system.parts_columns
 WHERE database = ? AND table = ? AND active
-GROUP BY column`, q.src.Database, q.src.Table)
+GROUP BY column`, ref.Database, ref.Table)
 	if err != nil {
 		return nil, err
 	}

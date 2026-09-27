@@ -365,6 +365,14 @@ role membership instead of what the roles contain. Every probe reads, and
 every one names an endpoint that can do nothing if the privilege turns out to
 be granted.
 
+**On a sharded cluster `table-readable` covers every node.** The source's
+`table:` is the `Distributed` table there, and a read of one contacts every shard
+even at `LIMIT 0`, so the assertion proves the fanout and the grant on each node
+rather than one row on the coordinator. A shard that cannot be reached reports
+`inconclusive` naming the node, rather than a missing grant: an unreachable
+cluster is an outage, and sending an operator to fix an access problem they do
+not have would waste the finding.
+
 The contract as DDL, which is the reference the probes assert against.
 `deploy/clickhouse/init/02-ruler-user.sql` is this file, and the integration
 tests connect as both of these users:

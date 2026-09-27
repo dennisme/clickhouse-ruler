@@ -223,12 +223,14 @@ Known gaps that will change:
 - Sharded clusters are only partly handled. `skip_unavailable_shards` is
   pinned to `0`, and a two node stack with an unreachable shard proves what
   that buys: the evaluation fails rather than returning half the cluster's rows
-  and resolving the alerts the missing shard held. Still outstanding is the
-  rest: the cost caps are enforced per shard rather than per query,
-  `evaluation_delay` has to cover the slowest shard, and what `table:` names on
-  a sharded cluster is undecided. A source names one endpoint and that is
-  decided rather than missing: making it highly available is the operator's job,
-  the same as the Alertmanager URL. See spec 6.9.
+  and resolving the alerts the missing shard held. `table:` is the table a rule
+  reads, so it is the `Distributed` one, and the checks that read it act on that.
+  Still outstanding is the rest: the cost caps are enforced per shard rather than
+  per query, and a prediction on a sharded cluster is out by the fanout because
+  `EXPLAIN ESTIMATE` answers for the coordinator's own parts alone, and
+  `evaluation_delay` has to cover the slowest shard. A source names one endpoint
+  and that is decided rather than missing: making it highly available is the
+  operator's job, the same as the Alertmanager URL. See spec 6.9.
 
 ## Development
 

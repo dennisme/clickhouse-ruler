@@ -397,3 +397,63 @@ and are what the code comments cite.
   with deliberately no precedence (7.7), which is the opposite of the override a
   default needs, and one block holding both rules would be unreadable. See 6.6,
   6.9, 6.10.1, 7.7.
+- **`table:` is the table a rule reads, so on a sharded cluster it is the
+  Distributed table.** 6.9 left this open on the assumption that getting it
+  wrong was a tenancy hole; 6.7.1 settled that it is not, so what is at stake is
+  whether a check reports on the table a rule queries or on a different table of
+  the same name. The query path already answers it: an author writes their own
+  `FROM`, and on a sharded cluster they name the Distributed table, because the
+  local `MergeTree` holds one shard of the rows. A `table:` naming the local one
+  would describe a table no rule reads. The local table's name is cluster
+  topology, and a rules repository should no more carry it than it carries the
+  node list, which is the same argument the one endpoint decision above makes.
+  What that is worth is measurable on the two node stack. The sample behind
+  `rule/attribute-key` is the one check that reads rows, and against the
+  Distributed table it saw both shards' rows and found a key on each; against
+  the coordinator's local table it saw one shard and reported the other shard's
+  key as one nothing writes. That is a false finding on a rule that works, on
+  exactly the rules hardest to be sure about, which is how a check gets switched
+  off. `DESCRIBE TABLE` needs no help: a Distributed table carries the full
+  structure, `Map` columns included, which is all the key check reads it for.
+  The `table-readable` assertion in 6.7.2 gets stronger rather than weaker,
+  which was not obvious: `SELECT 1 FROM <distributed> LIMIT 0` contacts every
+  shard, so it proves the fanout and the grant on each node rather than one row
+  in the coordinator's `system.tables`. Against the dead shard cluster the same
+  statement fails with `279` naming the unreachable address, and that reports
+  inconclusive, which is the honest answer to "can this user read the source's
+  table" when part of the cluster is gone.
+  **Two questions only a local `MergeTree` can answer, and they resolve
+  through.** Both are backfill caveats (7.4): the retention, read from
+  `engine_full` in `system.tables`, and the column history, read from
+  `system.parts_columns`. A Distributed table's `engine_full` carries no `TTL`
+  clause and a Distributed table has no parts, so asked naively both answer
+  nothing, and nothing is indistinguishable from a replay with no caveat to
+  make. So they read the engine first and, when it is `Distributed`, take the
+  local database and table out of its own arguments and ask about those. That
+  parses reliably because ClickHouse normalises what it stores:
+  `Distributed(ruler_shards, currentDatabase(), otel_traces)` comes back as
+  `Distributed('ruler_shards', 'otel', 'otel_traces')`, quoted literals with
+  `currentDatabase()` already resolved. The residue is stated rather than
+  hidden. The local table it resolves to is the coordinator's own copy, so both
+  answers are one shard's answer to a cluster question and a shard with a
+  different retention or a half applied `ALTER` is not covered; the caveat names
+  the table it read so nobody reads it as a claim about the cluster. A
+  coordinator carrying no local copy cannot answer at all, and that is reported
+  as unanswerable rather than passed over, because a caveat that silently
+  stopped appearing looks exactly like a replay that earned none. Reading every
+  shard instead would need `clusterAllReplicas` or `remote()`, which the user
+  contract revokes, and granting SOURCES back to qualify a count is a worse
+  trade than the caveat.
+  **What this does not decide.** `rule/cost` is not covered and is deliberately
+  left wrong for now: `EXPLAIN ESTIMATE` over a Distributed table answers for
+  the coordinator's own parts alone, measured as one part under the local
+  table's name with no multiplication by the shard count, so a prediction on a
+  sharded cluster is out by the fanout. That needs the shard count, which needed
+  this decision first, and it is the next slice; 6.9's per node caps paragraph
+  is where it lands. Nor does anything check that `table:` and a rule's own
+  `FROM` name the same table, so a source naming the Distributed table while a
+  rule reads the local one has its keys sampled against a table the rule does
+  not read. That is the same class of mistake as a rule reading another
+  database, which `rule/foreign-table` only warns about for the reason 6.7.1
+  gives, and no privilege separates the two tables either. See 6.9, 6.7.2, 7.3,
+  7.4.
