@@ -55,3 +55,29 @@ snapshot:
 # Groups / format / filters are not applied with github-native.
 changelog:
   use: github-native
+
+# Multi-arch image (buildx). Dockerfile.goreleaser packages the binary built
+# above; it does not recompile. The root Dockerfile is the build-from-source
+# one and is not used here.
+#
+# Two tags: the tag itself, which is what a deployment pins, and latest. No
+# versionless or major/minor tags, because nothing reads one yet.
+dockers_v2:
+  - images:
+      - ghcr.io/dennisme/clickhouse-ruler
+    tags:
+      - "{{ .Tag }}"
+      - latest
+    dockerfile: Dockerfile.goreleaser
+    platforms:
+      - linux/amd64
+      - linux/arm64
+    labels:
+      "org.opencontainers.image.title": "{{ .ProjectName }}"
+      "org.opencontainers.image.description": "Prometheus-style alert rules evaluated as ClickHouse SQL, checked before they run"
+      "org.opencontainers.image.url": "https://dennisme.github.io/clickhouse-ruler/"
+      "org.opencontainers.image.source": "https://github.com/dennisme/clickhouse-ruler"
+      "org.opencontainers.image.licenses": "Apache-2.0"
+      "org.opencontainers.image.created": "{{ .Date }}"
+      "org.opencontainers.image.revision": "{{ .FullCommit }}"
+      "org.opencontainers.image.version": "{{ .Version }}"

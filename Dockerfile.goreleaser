@@ -1,0 +1,13 @@
+# Release image: goreleaser already built the binary, this only packages it.
+# Context layout is $TARGETPLATFORM/ruler, for example linux/amd64/ruler.
+# For a build from source use the root Dockerfile instead.
+FROM alpine:3.24
+ARG TARGETPLATFORM
+# ClickHouse and Alertmanager are both reachable over TLS, and alpine ships no
+# root certificates, so a verified connection fails without this.
+RUN apk add --no-cache ca-certificates \
+    && addgroup -S ruler \
+    && adduser -S -G ruler ruler
+COPY ${TARGETPLATFORM}/ruler /usr/local/bin/ruler
+USER ruler
+ENTRYPOINT ["/usr/local/bin/ruler"]
