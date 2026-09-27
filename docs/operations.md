@@ -44,6 +44,61 @@ evaluation picks up.
 The counter does not say why. The log line `rule evaluation failed against a
 source` does, and it names the source and what the database replied.
 
+#### A shard that cannot be reached
+
+On a sharded cluster, a shard with no reachable replica fails every evaluation
+that reads a Distributed table over it. The log line carries what ClickHouse
+said, which names the node:
+
+```text
+rule evaluation failed against a source rule_group=api-latency rule=HighP99Latency
+  source=payments_prod error=rule "HighP99Latency": code: 279, message: All
+  connection tries failed. Log: Timeout exceeded while connecting to socket
+  (10.0.4.21:9000, connection timeout 1000 ms)
+```
+
+The same text is raised on `clickhouse_ruler_problem` as `rule/execution`,
+against the team that owns the rule file, and it stays raised for as long as the
+shard is missing rather than only on the tick it broke.
+
+Nothing has resolved. Alerts already firing keep being sent, and a `for` timer
+part way through keeps running, so the rule fires normally on the first
+evaluation after the shard comes back. What you lose is visibility into the rest
+of the cluster for as long as it lasts, which is the deliberate trade: the ruler
+refuses a result that is missing a shard rather than treating the missing rows as
+a recovered condition. [Sharded clusters and partial
+data](how-it-works.md#sharded-clusters-and-partial-data) is why.
+
+Confirm it at the database with `system.clusters`:
+
+```sql
+SELECT cluster, shard_num, replica_num, host_name, port, errors_count
+FROM system.clusters
+WHERE cluster = 'your_cluster'
+ORDER BY shard_num, replica_num;
+```
+
+And to check that nothing else pointed at the same cluster has been quietly
+answering with part of it, look for the queries that dropped a shard:
+
+```sql
+SELECT
+    event_time,
+    user,
+    ProfileEvents['DistributedConnectionFailAtAll'] AS shards_dropped,
+    substring(query, 1, 120) AS query
+FROM system.query_log
+WHERE type = 'QueryFinish'
+  AND event_time > now() - INTERVAL 1 DAY
+  AND ProfileEvents['DistributedConnectionFailAtAll'] > 0
+ORDER BY event_time DESC;
+```
+
+A row there is a query that succeeded while missing a shard, which means the
+client that ran it has `skip_unavailable_shards = 1` somewhere. The ruler cannot
+appear in that list: it sends the setting as `0`, and the reference profile pins
+it.
+
 ### Last evaluation going stale
 
 ```promql

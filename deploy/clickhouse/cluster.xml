@@ -30,7 +30,13 @@
 
      The inter-node user is the restricted one from 02-ruler-user.sql, which is
      what a real cluster looks like: the ruler's user exists on every node and
-     reads one table there. Nothing here needs an administrator. -->
+     reads one table there. Nothing here needs an administrator.
+
+     It carries no password element because `ruler_payments` is created there
+     IDENTIFIED WITH no_password. Give that user a password without adding one
+     here and the coordinator fails to authenticate to every shard, which
+     reaches a rule as a failed evaluation naming a connection it could not
+     make: the same shape as the dead shard below, for an unrelated reason. -->
 <clickhouse>
     <remote_servers>
         <!-- Two shards, both reachable. -->
@@ -51,7 +57,7 @@
             </shard>
         </ruler_shards>
 
-        <!-- One reachable shard and one that never resolves. -->
+        <!-- One reachable shard and one nothing answers on. -->
         <ruler_dead_shard>
             <shard>
                 <replica>

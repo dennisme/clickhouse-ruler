@@ -590,11 +590,16 @@ caps nothing.
 | `result_overflow_mode = throw` | see below |
 | `timeout_overflow_mode = throw` | see below |
 
-**Both overflow modes must throw.** Their other setting truncates, which hands
-the ruler a partial result that looks like a complete one. Fewer rows means
-instances disappear, and disappearing instances resolve alerts. A rule that
-exceeds its limits has to fail loudly, for the same reason
-`skip_unavailable_shards` is pinned in 6.9.
+**Both overflow modes must throw, and so must a missing shard.** Their other
+setting truncates, which hands the ruler a partial result that looks like a
+complete one. Fewer rows means instances disappear, and disappearing instances
+resolve alerts. `skip_unavailable_shards` is the third setting in this family and
+it is pinned to `0` for the same reason, not because the ruler has an opinion
+about topology: at `1`, "no rows" and "I could not reach the data" become the
+same reply. Alert expressions are aggregates, so a result missing a shard is a
+different number rather than a shorter one, and a threshold comparison cannot
+tell. All three are one requirement: a rule that cannot be answered completely
+has to fail loudly. 6.9 has what a shard adds to it.
 
 **Every limit above needs a settings constraint, or it is advisory.** The
 ruler sends settings with each query, which requires `readonly = 2`, because
@@ -869,6 +874,28 @@ reproduced, and it is what makes the second one proof rather than an assertion
 about an error string. It has to run as a user without the reference profile,
 since the profile's `CONST` refuses the raised setting outright, which is the
 contract in 6.7.2 doing its half of the job.
+
+**Failing is safe here, which is what makes the pin affordable.** A failed query
+leaves the alert state untouched: the `for` timer of a pending alert keeps
+running, a firing alert stays firing and keeps being sent, and the failure is
+counted, logged with what the cluster replied, and raised as `rule/execution`
+against the team that owns the file. So refusing a partial result costs one
+tick of visibility into the shards that did answer, while accepting one resolves
+the alerts the missing shard held. There is no per-rule setting for tolerating
+it, and there should not be: a rule selects sources by label and runs against
+every cluster that matches, so how much of a cluster may be missing is a
+property of that cluster. If it is ever wanted it belongs on the source, beside
+the other caps, and as a coverage floor rather than a boolean, since three of
+four shards and ninety nine of a hundred are not the same answer.
+
+**What a skipped shard looks like, if tolerance is ever built.** ClickHouse
+reports it in profile events rather than in the progress packets:
+`DistributedConnectionFailAtAll` counts the shards a query gave up on, beside
+`DistributedConnectionTries` and `DistributedConnectionFailTry`. The ruler
+already subscribes to profile events for the cost metrics in 8.2, so the counter
+arrives on a stream it reads. Nothing needs it today, because the query fails
+instead and the error names the unreachable node, which is what reaches the
+problem signal.
 
 The dead shard is an unroutable address from the range RFC 5737 reserves for
 documentation, not a container the test stops. Stopping a container needs docker
