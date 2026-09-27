@@ -64,7 +64,7 @@ integration-clean: compose-up
 coverage:
     env -u GOROOT GOTOOLCHAIN=auto go test -count=1 -coverpkg=./... ./... \
         -coverprofile coverage.out -covermode count
-    just coverage-report
+    env -u GOROOT GOTOOLCHAIN=auto go tool cover -html=coverage.out -o coverage.html
 
 # Coverage from every test in the tree. Requires the stack: `just compose-up`.
 #
@@ -79,7 +79,7 @@ coverage-integration:
     RULER_ALERTMANAGER_URL="{{alertmanager_url}}" \
         env -u GOROOT GOTOOLCHAIN=auto go test -tags=integration -count=1 -p 1 \
         -coverpkg=./... ./... -coverprofile coverage.out -covermode count
-    just coverage-report
+    env -u GOROOT GOTOOLCHAIN=auto go tool cover -html=coverage.out -o coverage.html
 
 # Bring the stack up, measure coverage across every test, then always tear it down.
 coverage-integration-clean: compose-up
@@ -87,13 +87,6 @@ coverage-integration-clean: compose-up
     set -euo pipefail
     trap 'just compose-down' EXIT
     just coverage-integration
-
-# Render coverage.out as HTML to read and as cobertura for the pull request comment.
-[private]
-coverage-report:
-    env -u GOROOT GOTOOLCHAIN=auto go tool cover -html=coverage.out -o coverage.html
-    env -u GOROOT GOTOOLCHAIN=auto go run github.com/boumenot/gocover-cobertura@v1.4.0 \
-        --by-files -ignore-gen-files < coverage.out > coverage.xml
 
 # Run golangci-lint, formatters included.
 #

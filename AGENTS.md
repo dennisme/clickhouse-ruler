@@ -75,6 +75,10 @@ Three things that bite:
   `cmd/ruler` are proven against a real ClickHouse, so an untagged run credits
   none of it. `just coverage` is the fast local version and reports a lower
   number for that reason.
+- The pull request comment comes from `octocov`, configured in `.octocov.yml`.
+  It carries the delta against `main`, read back from the report the default
+  branch's own run stored. A fork pull request gets a job summary instead: its
+  workflow token cannot comment.
 - `just integration` uses `-p 1`. Several integration tests bind a webhook
   sink to the fixed port in `deploy/alertmanager/alertmanager.yml`, so parallel
   packages fight over it. Do not remove that flag.

@@ -7,9 +7,6 @@ on:
     branches: [main]
   pull_request:
 
-# Fork PRs get a read-only GITHUB_TOKEN, which cannot post a PR comment. The
-# coverage comment is posted by coverage-comment.yaml on workflow_run, with the
-# base repository's token and the artifact the integration job uploads.
 permissions:
   contents: read
   packages: read
@@ -74,6 +71,14 @@ jobs:
     name: integration (${{ matrix.label }})
     continue-on-error: ${{ !matrix.required }}
 
+    # Beyond the workflow's own: pull-requests to comment, actions to read and
+    # write the stored coverage report, which is held as an artifact.
+    permissions:
+      contents: read
+      packages: read
+      pull-requests: write
+      actions: write
+
     env:
       # Empty means the version pinned in compose.yaml, which stays the single
       # place that version is written down: naming it here as well would let the
@@ -107,29 +112,13 @@ jobs:
       - name: Integration tests
         run: just coverage-integration-clean
 
-      # Only the pinned leg, which is the required one. Both legs would collide
-      # on the artifact name, and a number measured against whatever ClickHouse
-      # released this week is not the one to report on a pull request.
+      # Only the pinned leg, which is the required one. A number measured
+      # against whatever ClickHouse released this week is not the one to report
+      # on a pull request, and both legs would fight over the stored report.
       #
-      # pr-number.txt travels with the report because
-      # workflow_run.pull_requests is often empty for fork PRs, and
-      # commits/{sha}/pulls does not resolve a fork head either.
-      # github.event.pull_request.number is reliable on a pull_request event.
-      - name: Prepare coverage artifact
-        if: matrix.required && github.event_name == 'pull_request'
-        run: |
-          set -euo pipefail
-          echo -n "${{ github.event.pull_request.number }}" > pr-number.txt
-          test -s pr-number.txt
-          test -f coverage.xml
-
-      - name: Upload coverage report
-        if: matrix.required && github.event_name == 'pull_request'
-        uses: actions/upload-artifact@v4
-        with:
-          name: coverage-report
-          path: |
-            coverage.xml
-            pr-number.txt
-          retention-days: 5
-          if-no-files-found: error
+      # Configured in .octocov.yml. On main it stores the number a pull
+      # request's delta is measured against; on a pull request it reads that
+      # back and comments the difference.
+      - name: Report coverage
+        if: matrix.required
+        uses: k1LoW/octocov-action@v1
