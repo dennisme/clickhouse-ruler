@@ -179,10 +179,11 @@ ignored: the check warns at authoring time, this catches the case where nobody
 read the warning.
 
 Of these four, `clickhouse_ruler_problem` is the only one fed from somewhere
-other than the loader, and the half of it that reads the evaluations is built.
-It is fed from two places, and 10.4 is why: most of what it reports is drift the evaluation can see
-for free by comparing itself against the last one (6.3.2), and the rest is
-`rule/attribute-key`, which needs its own query on its own timer. The reload pair exists
+other than the loader. It is fed from two places, and 10.4 is why: most of what
+it reports is drift the evaluation can see for free by comparing itself against
+the last one (6.3.2), and the rest is `rule/attribute-key`, which needs its own
+query on its own timer. Each feed rebuilds only the checks it owns, so a finding
+answered on one clock is not blanked by a pass on the other. The reload pair exists
 because `SIGHUP` reloads the files, and the two deliberately do not say the same
 thing. `clickhouse_ruler_config_last_reload_successful` is about the last
 attempt, so a refused reload leaves it at 0 until one succeeds, which is the
@@ -589,8 +590,8 @@ Built so far: `ruler check` with configurable policy, tiers 0 through 2 of
 section 7 including the checks that read the query through the database and
 the one that reads rows, and `ruler run`, which ticks groups on their
 intervals, evaluates against every matched source, delivers to Alertmanager,
-and reloads all three files on `SIGHUP`. The observability in section 8 is
-complete apart from the timer half of `clickhouse_ruler_problem`.
+re-checks loaded rules against recent data on `--recheck-interval`, and reloads
+all three files on `SIGHUP`. The observability in section 8 is complete.
 
 Hot reload is `SIGHUP` and nothing else: nothing watches the filesystem,
 because whoever rolled the files out is the only party that knows when they are
@@ -599,8 +600,7 @@ is still the same rule, and refuses a reading that fails a correctness check
 (7.6). What it does not do is notice a rule that became broken while nothing
 changed on disk, which is 10.4's job rather than the signal's.
 
-Next: 10.4, which brings the last metric in 8.2. Tier 3 backfill is in, behind
-`ruler check --backfill` (7.4).
+Tier 3 backfill is in, behind `ruler check --backfill` (7.4).
 
 ### 10.1 Validation as something other people can use
 
@@ -799,15 +799,14 @@ outage.
 on a timer. It is not built and it is not going to be, because most of what it
 would have re-asked is answerable from the evaluations already happening.
 
-**Two feeds, and the split is whether an extra query is needed.** The first is
-built and the second is not.
+**Two feeds, and the split is whether an extra query is needed.**
 
 The first is free and lives in the evaluator. Every evaluation already knows the
 result's column names and types, its cost, and whether it errored, so comparing
 each evaluation against the previous one detects a dropped or retyped column,
-two sources that stopped agreeing, a cost that crossed a ceiling, and an error
-that has just started. No query, and the latency is one group interval. 6.3.2 is
-the design, including why the comparison is on the result's shape per rule and
+two sources that stopped agreeing, a cost that crossed a ceiling, and a query
+that failed, which reports under `rule/execution`. No query, and the latency is
+one group interval. 6.3.2 is the design, including why the comparison is on the result's shape per rule and
 never on row counts per alert: zero rows is the healthy state of most alert
 rules, so a row-count comparison fires on every resolve.
 
@@ -835,10 +834,21 @@ paging for the condition on the strength of a schema change nobody reviewed.
 
 **The validation package is already re-runnable against loaded rules** (7.1), so
 neither feed is a rewrite. The evaluator comparison keeps the previous result's
-shape per rule and source in `internal/scheduler`, and `query.Run` now returns
-that shape and what the query cost beside the samples rather than reading the
-column types, spending them on scanning and dropping them. The timer still needs
-a caller, and the checks themselves are the ones CI runs.
+shape per rule and source in `internal/scheduler`, and `query.Run` returns that
+shape and what the query cost beside the samples rather than reading the column
+types, spending them on scanning and dropping them. The timer calls the same
+`query.Sample` the checks CI runs call, through the same policy resolution, and
+sizing it is `--recheck-interval` with zero for not at all.
+
+**Both feeds are built.** The evaluator feed reports every tick and the timer
+runs on `--recheck-interval`, an hour by default and zero for not at all, since a
+pass that reads real data must not start on a ruler nobody asked. Each feed
+rebuilds only the gauge series of the checks it owns: `rule/columns`,
+`rule/source-schema`, `rule/cost` and `rule/execution` are the evaluation's, and
+`rule/attribute-key` is the timer's. Scoping the rebuild by check is what keeps
+one clock from resolving the other's findings, and it is also what lets a pass
+where nothing answered leave the previous answer standing per check rather than
+for the whole rule.
 
 **Neither feed ships without its page.** The evaluator feed's is the
 "a rule that broke while running" section of the operations page, with the

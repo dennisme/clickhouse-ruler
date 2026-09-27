@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"reflect"
 	"sync"
+	"time"
 
 	"github.com/dennisme/clickhouse-ruler/internal/lint"
 	"github.com/dennisme/clickhouse-ruler/internal/notify"
@@ -63,6 +64,10 @@ type runner struct {
 
 	concurrency int
 	resend      scheduler.Resend
+
+	// recheck is how often loaded rules are re-checked against real data, zero
+	// for not at all (spec 10.4).
+	recheck time.Duration
 
 	// sched is nil until build, so connect can be the one place that opens
 	// connections for both startup and a reload.
@@ -197,7 +202,7 @@ func (r *runner) connect(ctx context.Context, cfg *config) error {
 // group goroutines are the process rather than the files.
 func (r *runner) build(cfg *config) {
 	r.sched = scheduler.New(cfg.set, toQuerierMap(r.queriers), r.cadence,
-		r.metrics, r.clock, r.concurrency, r.log, r.resend)
+		r.metrics, r.clock, r.concurrency, r.log, r.resend, r.recheck)
 }
 
 // reload re-reads the files and replaces what is running with them.

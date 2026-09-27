@@ -155,8 +155,12 @@ clickhouse_ruler_problem > 0
 addressed to whoever operates the ruler. A rule can pass every check, merge,
 run correctly for months, and then the schema moves under it. Nothing in the
 file changed, so CI has nothing to run and a reload has nothing to re-read.
-Every evaluation of a rule is compared against the one before it, and a result
-that changed shape raises this gauge.
+
+Two things feed it, on two clocks. Every evaluation of a rule is compared
+against the one before it, which costs no query and answers within one group
+interval. Alongside that a slow pass re-checks each rule against recent data on
+`--recheck-interval`, which costs one bounded query per rule per source and
+answers the one question no evaluation can.
 
 Read it by its labels, not by its value:
 
@@ -168,34 +172,48 @@ Read it by its labels, not by its value:
 | `check` | What is wrong, and the name of the page that explains it: [the check pages](checks/index.md). |
 | `severity` | What the same finding would do in CI. An `error` would fail the build; a `warning` is what the policy in effect set. |
 
+The log line carries one more field the gauge does not: `feed`, either
+`evaluation` or `re-check`. "Your rule's result changed shape" and "your rule's
+map key is gone from recent data" are different problems, with different fixes,
+arriving on different clocks.
+
 **The rule is still evaluating and still paging.** Nothing is unloaded,
 nothing is refused, no alert is resolved. A ruler that dropped a rule because
 its result changed shape would stop paging for the condition on the strength of
 a schema change nobody reviewed, so this reports and never acts. The rule is
 wrong in a way somebody has to fix; it is not switched off while they do.
 
-What raises it today comes from the evaluations already happening, so the three
-checks it can name are [`rule/columns`](checks/rule.md#rule-columns) for a column dropped,
-renamed or retyped under the query, [`rule/source-schema`](checks/rule.md#rule-source-schema) for
-two clusters that stopped agreeing on what the rule returns, and
-[`rule/cost`](checks/rule.md#rule-cost) for a query that read more than its ceiling
-allows. The log line `a rule broke while running` carries the same labels plus
-the detail, which says what changed rather than that something did.
+Four checks come from the evaluations already happening:
+[`rule/columns`](checks/rule.md#rule-columns) for a column dropped, renamed or
+retyped under the query, [`rule/source-schema`](checks/rule.md#rule-source-schema)
+for two clusters that stopped agreeing on what the rule returns,
+[`rule/cost`](checks/rule.md#rule-cost) for a query that read more than its
+ceiling allows, and [`rule/execution`](checks/rule.md#rule-execution) for a query
+that failed, which is a rule evaluating nothing at all. The log line
+`a rule broke while running` carries the same labels plus the detail, which says
+what changed rather than that something did.
+
+One check comes from the re-check pass:
+[`rule/attribute-key`](checks/rule.md#rule-attribute-key), the OTel map key
+rename. `attributes['http.status_code']` becoming `http.response.status_code`
+leaves the query parsing, the columns unchanged and every evaluation succeeding
+against nothing, forever, so neither the shape nor the row count can see it. The
+only answer is sampling recent data, which no evaluation does. Set
+`--recheck-interval 0` and nothing runs it, in which case `ruler check --sample`
+in CI is all that answers the question.
 
 **Two ways it clears, and only one is good news.** A finding that went away
-stops being a series on the next evaluation, which is the schema being fixed.
-A gauge that clears because nothing raised it is different from a gauge that
-was never rebuilt: a pass where every source failed leaves the previous answer
+stops being a series on the next pass that could ask, which is the schema being
+fixed. A gauge that clears because nothing raised it is different from a gauge
+that was never rebuilt: a pass where nothing answered leaves the previous answer
 standing rather than blanking it, because reporting "nothing is wrong" when the
 ruler could not ask would read as a fix. When this drops, check
 `clickhouse_ruler_rule_evaluation_failures_total` before believing it.
 
-There is one thing it does not catch yet, and it is the most valuable check in
-the tool. An OTel map key rename, `attributes['http.status_code']` becoming
-`http.response.status_code`, leaves the query parsing, the columns unchanged
-and every evaluation succeeding against nothing, forever. Answering it means
-sampling recent data, which no evaluation does, so it needs its own timer and
-is not built. Until it is, `ruler check --sample` is what answers it, in CI.
+Each feed clears only its own checks, so an evaluation cannot blank the
+re-check pass's answer and the pass cannot blank an evaluation's. That also means
+a `rule/attribute-key` finding outlives a fix by up to one `--recheck-interval`:
+nothing re-asks until the pass runs again.
 
 ### A reload the ruler refused
 
@@ -240,7 +258,7 @@ about what they typed.
 | warn | `annotation template failed, the alert carries the error instead` | A rule author's problem, not an operator's. The alert was delivered with the template error where its annotation should be, so somebody is reading that error on their page. `annotation` names which one; fix it in the rule file. |
 | error | `metrics listener stopped` | The HTTP surface is gone, so metrics and probes are unanswered while the evaluation loop carries on. Usually the `listen` address is already taken. Restart it. |
 | warn | `shutdown timeout expired with evaluations still running` | A query or a send was cut off part way through. This is the only signal that says so. If it happens on every restart, raise `--shutdown-timeout` above your slowest evaluation. |
-| warn | `a rule broke while running` | Not an operator's problem to fix. `team` and `file` say whose rule it is and where, `check` names the page explaining it, and `problem` says what changed. The rule is still evaluating and still paging. Warned rather than errored however severe the finding is, because nothing about the ruler is failing. |
+| warn | `a rule broke while running` | Not an operator's problem to fix. `team` and `file` say whose rule it is and where, `check` names the page explaining it, `feed` says which clock found it, and `problem` says what changed. The rule is still evaluating and still paging. Warned rather than errored however severe the finding is, because nothing about the ruler is failing. |
 | warn | `refusing a source that failed the user contract` | Deliberate, see below. |
 | info | `reloading` / `reloaded` | Nothing. A `SIGHUP` arrived and the files were re-read. `reloaded` carries the `rules` and `sources` count now running, which is the pair to compare against the `ruler running` line. |
 | error | `refusing the reload, the previous configuration keeps running` | Read `reason`, then the findings on stderr. The ruler is still evaluating the rules it had before the signal. Nothing is degraded and nothing was applied. |

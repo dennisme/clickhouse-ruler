@@ -173,17 +173,14 @@ Working:
 - A rule that broke while running, reported to whoever owns it: every
   evaluation is compared against the one before it, so a column dropped or
   retyped under the query, two clusters that stopped agreeing on what a rule
-  returns, or a query reading past its ceiling raises
-  `clickhouse_ruler_problem` with the team and the file to fix. It reports and
-  never refuses, so the rule keeps evaluating and keeps paging.
-
-Not built yet:
-
-- The one case an evaluation cannot see: a renamed OTel map key. The query
-  still parses, returns the same columns and matches nothing forever, so
-  answering it means sampling recent data on a timer of its own rather than
-  comparing evaluations. Until it exists, `ruler check --sample` is where that
-  check runs. The design is in spec 10.4.
+  returns, a query reading past its ceiling or a query that stopped running at
+  all raises `clickhouse_ruler_problem` with the team and the file to fix. It
+  reports and never refuses, so the rule keeps evaluating and keeps paging.
+- The one case an evaluation cannot see, on a slow timer beside it: a renamed
+  OTel map key leaves the query parsing, returning the same columns and matching
+  nothing forever, so `--recheck-interval` re-asks it against recent data, an
+  hour by default and one bounded query per rule per source. It shares the query
+  budget with evaluation, which always goes first.
 
 Not planned: generating your Alertmanager route tree. That file is yours and
 already under your own review policy, so writing into it is not this tool's

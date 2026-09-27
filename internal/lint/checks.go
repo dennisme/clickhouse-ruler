@@ -44,6 +44,7 @@ const (
 
 	CheckRuleSyntax           = "rule/syntax"
 	CheckRuleInspect          = "rule/inspect"
+	CheckRuleExecution        = "rule/execution"
 	CheckRuleSelectStar       = "rule/select-star"
 	CheckRuleTableFunction    = "rule/table-function"
 	CheckRuleNondeterministic = "rule/nondeterministic"
@@ -294,6 +295,20 @@ var checks = []Check{
 	{
 		Name: CheckRuleInspect, Spec: "7.3", Fixed: true,
 		Summary: "the ruler could not reach the cluster to read the rule's SQL",
+	},
+
+	// The one check nothing in CI can raise: it is the running ruler saying a
+	// rule's query stopped executing against a cluster, which is the fourth
+	// thing an evaluation knows about drift for free (spec 6.3.2).
+	//
+	// An error by default, because a rule whose query does not run is not
+	// watching anything: it cannot fire, and every dashboard built on it reads
+	// as quiet. Configurable all the same, so a cluster an operator already
+	// knows is broken can be turned down or exempted per source rather than
+	// paging the rule's owner for somebody else's outage (spec 7.7).
+	{
+		Name: CheckRuleExecution, Spec: "6.3.2", Default: SeverityError,
+		Summary: "a rule whose query failed against a cluster while the ruler was running",
 	},
 
 	// A rule with SELECT * evaluates correctly today and refingerprints every

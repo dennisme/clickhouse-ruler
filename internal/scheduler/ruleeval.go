@@ -18,10 +18,13 @@ import (
 	"github.com/dennisme/clickhouse-ruler/internal/ruleset"
 )
 
-// Querier runs one rule and returns a sample per matched row. query.Querier
-// satisfies this; the interface exists so a test can stand in for ClickHouse.
+// Querier is what one source's connection does for a running ruler: it
+// evaluates a rule, and it samples recent data for the re-check pass
+// (spec 10.4). query.Querier satisfies this; the interface exists so a test can
+// stand in for ClickHouse.
 type Querier interface {
 	Run(ctx context.Context, r rule.Rule, who query.Attribution, now time.Time) (query.Evaluation, error)
+	Sample(ctx context.Context, r rule.Rule, who query.Attribution, c query.SampleChecks, now time.Time) ([]query.Finding, error)
 }
 
 // Reasons a source produced no samples that are not the query's own error.
@@ -90,22 +93,29 @@ type Result struct {
 	// a delivery problem, not an evaluation problem (spec 6.5).
 	SendError error
 
-	// Problems holds what comparing this evaluation against the previous one
-	// found: a rule the schema moved under, sources that stopped agreeing, or
-	// a query whose measured cost crossed its ceilings (spec 6.3.2). They are
-	// reported and never acted on, so a rule appearing here has kept its alert
-	// state and is still paging.
+	// Problems holds what this evaluation found about the rule itself: a
+	// result the schema moved under, sources that stopped agreeing, a query
+	// whose measured cost crossed its ceilings, or a query that failed
+	// (spec 6.3.2). They are reported and never acted on, so a rule appearing
+	// here has kept its alert state and is still paging.
 	//
-	// Empty means nothing was found, but only when Compared says the
-	// comparison ran at all.
+	// Empty means nothing was found, for the checks Answered names. A finding
+	// for a check outside it is still this rule's finding and still reported:
+	// a source that replied is evidence about that source whatever the rule's
+	// other clusters did.
 	Problems []lint.Problem
 
-	// Compared says at least one source answered, so Problems is this rule's
-	// current answer and the gauge built from it can be rebuilt. False is a
-	// pass that could not ask: blanking the gauge then would resolve every
-	// finding at once and read as a schema somebody fixed, so the previous
-	// answer is left standing (spec 8.2).
-	Compared bool
+	// Answered is the checks this pass has a current answer for, so the gauge
+	// series this rule holds for each of them can be rebuilt from Problems. A
+	// check absent here is one the pass could not ask about: blanking its
+	// series then would resolve the finding and read as a schema somebody
+	// fixed, so the previous answer is left standing (spec 8.2).
+	//
+	// Per check rather than per pass, because the two things a pass can fail
+	// to answer are different. A source that did not reply says nothing about
+	// its result's shape or its cost, and a source the ruler holds no
+	// connection for says nothing about whether the query runs.
+	Answered []string
 
 	// Pending and Firing are counts of currently tracked instances across
 	// every matched source, for the clickhouse_ruler_alerts_active gauge. Counts only:
@@ -192,6 +202,13 @@ func (e *RuleEval) Evaluate(ctx context.Context, now time.Time) Result {
 		shape []query.Column
 		usage query.Usage
 
+		// queryErr is set when the query itself failed, which is a finding
+		// about the rule. err covers that and more: a source with no
+		// connection open, a query abandoned at shutdown, and rows that could
+		// not be turned into alerts are all reported to the operator and none
+		// of them says the rule's query stopped running.
+		queryErr error
+
 		// acquired says the query got its source slot, so wait is a real
 		// measurement rather than the zero value of a query that never ran.
 		acquired bool
@@ -224,7 +241,7 @@ func (e *RuleEval) Evaluate(ctx context.Context, now time.Time) Result {
 			release()
 
 			if err != nil {
-				results[i].err = err
+				results[i].err, results[i].queryErr = err, err
 				return
 			}
 			results[i].shape, results[i].usage = evaluation.Shape, evaluation.Usage
@@ -245,11 +262,17 @@ func (e *RuleEval) Evaluate(ctx context.Context, now time.Time) Result {
 	}
 	wg.Wait()
 
-	// Only the sources that answered, in source order: a cluster the query
-	// failed against has not drifted, and leaving its baseline standing means
-	// the next successful evaluation is compared against the last real result
-	// rather than against nothing.
+	// The two halves of the pass, in source order. A cluster the query failed
+	// against has not drifted, so leaving its baseline standing means the next
+	// successful evaluation is compared against the last real result rather
+	// than against nothing; the failure is reported on its own.
 	var answered []evaluated
+	var failures []failed
+
+	// asked counts the sources that reached their cluster and got a reply,
+	// whether it was a result or an error. Anything else is a source nothing
+	// was learned about.
+	asked := 0
 
 	var current []alert.Alert
 	for i, r := range results {
@@ -263,8 +286,13 @@ func (e *RuleEval) Evaluate(ctx context.Context, now time.Time) Result {
 		}
 		if r.err != nil {
 			res.SourceErrors = append(res.SourceErrors, SourceError{Source: name, Err: r.err})
+			if r.queryErr != nil {
+				asked++
+				failures = append(failures, failed{source: e.rule.Sources[i], err: r.queryErr})
+			}
 			continue
 		}
+		asked++
 		answered = append(answered, evaluated{
 			source: e.rule.Sources[i],
 			shape:  r.shape,
@@ -273,10 +301,8 @@ func (e *RuleEval) Evaluate(ctx context.Context, now time.Time) Result {
 		current = append(current, r.alerts...)
 	}
 
-	if len(answered) > 0 {
-		res.Compared = true
-		res.Problems = e.drift.inspect(answered, now)
-	}
+	res.Problems = e.drift.inspect(answered, failures, now)
+	res.Answered = answeredChecks(len(answered) > 0, asked == len(e.rule.Sources))
 
 	for _, a := range current {
 		switch a.Phase {
@@ -292,6 +318,23 @@ func (e *RuleEval) Evaluate(ctx context.Context, now time.Time) Result {
 	}
 	res.SendError = e.cadence.Send(ctx, now, e.rule.Group.Interval, current)
 	return res
+}
+
+// answeredChecks says which checks a pass can rebuild the gauge for.
+//
+// The shape comparison and the cost measurement need a result, so one source
+// answering is enough to make them this rule's current answer. Whether the
+// query runs needs every source to have been asked: a rule whose second cluster
+// has no connection open would otherwise report that its query is fine there.
+func answeredChecks(gotAResult, askedEverySource bool) []string {
+	var out []string
+	if gotAResult {
+		out = append(out, lint.CheckRuleColumns, lint.CheckRuleSourceSchema, lint.CheckRuleCost)
+	}
+	if askedEverySource {
+		out = append(out, lint.CheckRuleExecution)
+	}
+	return out
 }
 
 // carry takes over the alert state prev accumulated for the same rule, so a

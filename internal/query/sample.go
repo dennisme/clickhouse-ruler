@@ -10,6 +10,7 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2"
 
 	"github.com/dennisme/clickhouse-ruler/internal/lint"
+	"github.com/dennisme/clickhouse-ruler/internal/policy"
 	"github.com/dennisme/clickhouse-ruler/internal/rule"
 	"github.com/dennisme/clickhouse-ruler/internal/source"
 )
@@ -39,6 +40,27 @@ type SampleChecks struct {
 	// default: a rule can land before the data does, and the operator who
 	// would rather that block says so (spec 7.3).
 	RequireRows bool
+}
+
+// SamplingFromPolicy translates the resolved policy into what a sample should
+// do, and says whether to sample at all.
+//
+// A check at severity off is not sampled for, rather than sampled and then
+// dropped. That is the line the metadata checks draw too, and it matters more
+// here: honouring `off` after the fact would read rows an operator asked nobody
+// to read.
+func SamplingFromPolicy(p *policy.Policy) (SampleChecks, bool) {
+	setting := p.For(lint.CheckRuleAttributeKey)
+	if setting.Severity == lint.SeverityOff {
+		return SampleChecks{}, false
+	}
+
+	maxRows, _ := setting.Limit(lint.LimitSampleRows)
+
+	return SampleChecks{
+		MaxRows:     maxRows,
+		RequireRows: setting.Flag(lint.FlagRequireRows),
+	}, true
 }
 
 // sampleTimeout bounds one rule's sample. Longer than inspectTimeout because

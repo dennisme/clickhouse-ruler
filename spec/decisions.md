@@ -58,17 +58,19 @@ and are what the code comments cite.
   evaluations already running: every evaluation knows its result's column names
   and types, its cost and whether it errored, so comparing one against the last
   catches a dropped or retyped column, two sources that stopped agreeing, a cost
-  over a ceiling and an error that just started, at one group interval and no
-  extra query. **The comparison is on the result's shape, per rule, never on row
+  over a ceiling and a query that failed, at one group interval and no extra
+  query. The last of those needed a name of its own, `rule/execution`, because
+  "the query stopped running" is not `rule/inspect`. **The comparison is on the result's shape, per rule, never on row
   counts, per alert**: zero rows is the healthy state of most alert rules, so a
   row-count comparison fires on every resolve and no threshold fixes that. What
   is genuinely left is `rule/attribute-key`, the OTel map key rename, which
   needs its own sampling query because the shape and the row count both look
   healthy while the rule matches nothing forever. That one check gets a slow
-  timer inside `ruler run`. Neither feed refuses or unloads anything; both report
-  to `clickhouse_ruler_problem`, whose labels name the team and the file because
-  the fix belongs to the rule's owner rather than the ruler's operator. See
-  6.3.2, 8.2 and 10.4.
+  timer inside `ruler run`, on `--recheck-interval`. Neither feed refuses or
+  unloads anything; both report to `clickhouse_ruler_problem`, whose labels name
+  the team and the file because the fix belongs to the rule's owner rather than
+  the ruler's operator, and each rebuilds only the checks it owns so one clock
+  cannot resolve the other's findings. See 6.3.2, 8.2 and 10.4.
 - **Identity across sources.** A rule matching several sources produces one
   alert per source, kept apart by a protected `source` label. A source's other
   labels are free-form, travel onto its alerts, and are the operator's to

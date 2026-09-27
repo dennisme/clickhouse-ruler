@@ -99,6 +99,7 @@ than something to work around.
 | `--config` | `ruler.yaml` beside `--rules` | policy file |
 | `--listen` | `:9090` | address for `/metrics`, `/-/healthy`, `/-/ready` |
 | `--query-concurrency` | `8` | rule queries allowed against ClickHouse at once, across every group; `0` is unbounded. A source can set `max_concurrent_queries` to bound itself further inside this |
+| `--recheck-interval` | `1h` | how often loaded rules are re-checked against recent data for the map keys they read, which no evaluation can see; `0` turns the pass off. One bounded query per rule per source, sharing `--query-concurrency` with evaluation |
 | `--resend-interval` | `100s` | how often a still-firing alert is re-posted |
 | `--resend-tolerance` | `4` | how many resend periods a firing alert stays valid for, so how many consecutive failed evaluations or sends it survives, and how long a resolved alert is retried for. `4` is Prometheus' own number. Minimum `2` |
 | `--shutdown-timeout` | `30s` | how long an in-flight evaluation gets to finish once shutdown starts |

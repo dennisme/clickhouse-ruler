@@ -32,12 +32,23 @@ type Scheduler struct {
 	concurrency int
 	resend      Resend
 
+	// recheckInterval is how often the re-check pass runs, zero when an
+	// operator did not ask for it. The pass reads real data, so nothing runs
+	// on a ruler that never configured it (spec 10.4).
+	recheckInterval time.Duration
+
 	// mu guards the loaded configuration and the goroutines running it, so a
 	// reload arriving on the signal handler cannot race a shutdown arriving on
 	// another signal.
-	mu      sync.Mutex
-	groups  []GroupSpec
-	evals   map[ruleKey]*RuleEval
+	mu     sync.Mutex
+	groups []GroupSpec
+	evals  map[ruleKey]*RuleEval
+
+	// recheck is the loaded configuration's re-check pass, nil when no interval
+	// is configured. Rebuilt by every reload, like the groups, because the
+	// rules it asks about are what the reload replaced.
+	recheck *GroupSpec
+
 	loaded  configured
 	base    context.Context
 	cancel  context.CancelFunc
@@ -96,22 +107,35 @@ type namedEval struct {
 //
 // queryConcurrency is the ruler-wide ceiling on queries in flight, and resend
 // is the pair every rule's resolved-alert retention is sized from (spec 6.5).
+// recheckInterval is how often loaded rules are re-checked against real data,
+// zero for not at all (spec 10.4).
 // A nil log discards every line, so a caller that does not care about output
 // does not have to build a handler.
-func New(set *ruleset.Set, queriers map[string]Querier, cadence *notify.Cadence, metrics *Metrics, clock Clock, queryConcurrency int, log *slog.Logger, resend Resend) *Scheduler {
+func New(
+	set *ruleset.Set,
+	queriers map[string]Querier,
+	cadence *notify.Cadence,
+	metrics *Metrics,
+	clock Clock,
+	queryConcurrency int,
+	log *slog.Logger,
+	resend Resend,
+	recheckInterval time.Duration,
+) *Scheduler {
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
 	}
 
 	s := &Scheduler{
-		clock:       clock,
-		metrics:     metrics,
-		log:         log,
-		cadence:     cadence,
-		concurrency: queryConcurrency,
-		resend:      resend,
+		clock:           clock,
+		metrics:         metrics,
+		log:             log,
+		cadence:         cadence,
+		concurrency:     queryConcurrency,
+		resend:          resend,
+		recheckInterval: recheckInterval,
 	}
-	s.groups, s.evals = s.build(set, queriers, nil)
+	s.groups, s.evals, s.recheck = s.build(set, queriers, nil)
 	s.loaded = describe(set)
 	return s
 }
@@ -152,10 +176,10 @@ func (s *Scheduler) Reload(set *ruleset.Set, queriers map[string]Querier) {
 		s.cancel = nil
 	}
 
-	groups, evals := s.build(set, queriers, s.evals)
+	groups, evals, recheck := s.build(set, queriers, s.evals)
 	next := describe(set)
 	s.deleteGoneSeries(s.loaded, next)
-	s.groups, s.evals, s.loaded = groups, evals, next
+	s.groups, s.evals, s.recheck, s.loaded = groups, evals, recheck, next
 
 	if running {
 		s.startLocked()
@@ -179,7 +203,10 @@ func (s *Scheduler) Reload(set *ruleset.Set, queriers map[string]Querier) {
 // source's limit is part of the file being reloaded.
 // A rule with no matched source is counted in clickhouse_ruler_rules_unmatched
 // and never evaluated (spec 6.10).
-func (s *Scheduler) build(set *ruleset.Set, queriers map[string]Querier, prev map[ruleKey]*RuleEval) ([]GroupSpec, map[ruleKey]*RuleEval) {
+// The re-check pass is built from the same rules and shares their query limits,
+// so the work it does queues behind the evaluations rather than beside them
+// (spec 6.11, 10.4).
+func (s *Scheduler) build(set *ruleset.Set, queriers map[string]Querier, prev map[ruleKey]*RuleEval) ([]GroupSpec, map[ruleKey]*RuleEval, *GroupSpec) {
 	type groupKey struct{ file, name string }
 
 	limits := newQueryLimits(s.concurrency, matchedSources(set))
@@ -207,6 +234,7 @@ func (s *Scheduler) build(set *ruleset.Set, queriers map[string]Querier, prev ma
 	now := s.clock.Now()
 	specs := make([]GroupSpec, 0, len(order))
 	evals := make(map[ruleKey]*RuleEval, len(set.Rules))
+	var rechecked []recheckRule
 
 	for _, k := range order {
 		groupName := ruleset.GroupID(k.file, k.name)
@@ -227,6 +255,7 @@ func (s *Scheduler) build(set *ruleset.Set, queriers map[string]Querier, prev ma
 			}
 			evals[key] = eval
 			named = append(named, namedEval{rule: r.Alert, eval: eval, team: r.Team(), file: r.File})
+			rechecked = append(rechecked, recheckRule{rule: r, team: r.Team(), file: r.File})
 		}
 		s.metrics.RulesUnmatched.WithLabelValues(groupName).Set(float64(unmatched))
 
@@ -239,7 +268,29 @@ func (s *Scheduler) build(set *ruleset.Set, queriers map[string]Querier, prev ma
 		})
 	}
 
-	return specs, evals
+	return specs, evals, s.recheckSpec(rechecked, queriers, limits, now)
+}
+
+// recheckSpec is the re-check pass as one more thing to tick, or nil when no
+// interval is configured.
+//
+// Staggered like a group, and by the same function, so a fleet of rulers sharing
+// an interval do not all read rows on the same minute.
+func (s *Scheduler) recheckSpec(
+	rules []recheckRule,
+	queriers map[string]Querier,
+	limits *queryLimits,
+	now time.Time,
+) *GroupSpec {
+	if s.recheckInterval <= 0 || len(rules) == 0 {
+		return nil
+	}
+	return &GroupSpec{
+		Name:     "recheck",
+		Interval: s.recheckInterval,
+		Start:    now.Add(staggerOffset("recheck", s.recheckInterval)),
+		Eval:     recheckPass(rules, queriers, limits, s.metrics, s.log),
+	}
 }
 
 // describe records what set puts on the registry.
@@ -386,27 +437,37 @@ func evalGroup(groupName string, evals []namedEval, m *Metrics, log *slog.Logger
 				// A rule that broke while running, reported to whoever owns
 				// it rather than to whoever operates the ruler (spec 6.3.2,
 				// 10.4). The gauge is rebuilt from this pass so a finding
-				// that went away stops being a series, and a pass that could
-				// not ask rebuilds nothing.
-				if res.Compared {
+				// that went away stops being a series, and only for the
+				// checks the pass could answer: the rest keep the last answer
+				// that was real.
+				//
+				// Scoped by check rather than by rule so the two feeds into
+				// this gauge cannot blank each other's findings (spec 10.4).
+				// The re-check timer's answers arrive on their own clock and
+				// an evaluation knows nothing about them.
+				for _, check := range res.Answered {
 					m.Problem.DeletePartialMatch(prometheus.Labels{
-						"rule": ne.rule, "file": ne.file,
+						"rule": ne.rule, "file": ne.file, "check": check,
 					})
-					for _, p := range res.Problems {
-						m.Problem.WithLabelValues(
-							ne.rule, p.Check, p.Severity.String(), ne.team, p.File).Set(1)
+				}
+				// Raised whether or not the pass could answer for the whole
+				// rule. A source that did reply is evidence about that source,
+				// and a finding raised while another source was unreachable is
+				// cleared by the first pass that reaches both.
+				for _, p := range res.Problems {
+					m.Problem.WithLabelValues(
+						ne.rule, p.Check, p.Severity.String(), ne.team, p.File).Set(1)
 
-						// A warning however severe the finding is: the rule is
-						// still evaluating and still paging, so nothing about
-						// the ruler is failing. The severity is the check's,
-						// and it is carried as a field rather than as the level
-						// for exactly that reason.
-						log.Warn("a rule broke while running",
-							"rule_group", groupName, "rule", ne.rule,
-							"check", p.Check, "severity", p.Severity.String(),
-							"team", ne.team, "file", p.File,
-							"problem", p.Text)
-					}
+					// A warning however severe the finding is: the rule is
+					// still evaluating and still paging, so nothing about
+					// the ruler is failing. The severity is the check's,
+					// and it is carried as a field rather than as the level
+					// for exactly that reason.
+					log.Warn("a rule broke while running",
+						"rule_group", groupName, "rule", ne.rule,
+						"check", p.Check, "severity", p.Severity.String(),
+						"team", ne.team, "file", p.File,
+						"feed", feedEvaluation, "problem", p.Text)
 				}
 				for _, qw := range res.QueueWaits {
 					m.QueryQueueWait.WithLabelValues(qw.Source).Observe(qw.Wait.Seconds())
@@ -435,6 +496,15 @@ func (s *Scheduler) Start(ctx context.Context) {
 func (s *Scheduler) startLocked() {
 	ctx, cancel := context.WithCancel(s.base)
 	s.cancel = cancel
+
+	if s.recheck != nil {
+		spec := *s.recheck
+		s.wg.Add(1)
+		go func() {
+			defer s.wg.Done()
+			runGroup(ctx, s.clock, spec, nil, nil)
+		}()
+	}
 
 	for _, spec := range s.groups {
 		spec := spec

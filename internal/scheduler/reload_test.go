@@ -40,7 +40,7 @@ func reloadSched(t *testing.T, set *ruleset.Set, queriers map[string]Querier) (*
 	clock := newFakeClock(time.Unix(0, 0))
 	cadence := notify.NewCadence(&recordingSender{}, time.Minute, notify.DefaultResendTolerance)
 
-	return New(set, queriers, cadence, metrics, clock, 0, nil, testResend), metrics, reg, clock
+	return New(set, queriers, cadence, metrics, clock, 0, nil, testResend, 0), metrics, reg, clock
 }
 
 // evalAll runs every group once at tickAt, which is what the tests that are
