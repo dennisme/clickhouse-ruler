@@ -209,9 +209,11 @@ That is the property we are copying. Everything else follows from it.
 4. **A failed annotation template.** The page always goes out and the annotation
    that failed carries its error as its value, which is decided (6.5). What is not
    is whether that error belongs in the author's own field at all, since a consumer
-   may be relying on `summary` being a known string, and whether the ruler should
-   own an annotation of its own to put it in, which is a reserved name and so a
-   check rather than a note in the docs. The same entry carries the other half: a
+   may be relying on `summary` being a known string. That the ruler owns an
+   annotation of its own to put it in is settled: `ruler_` is a reserved prefix
+   and `annotations/protected` refuses a rule that writes one, fixed at `error`,
+   because the field a responder reads is the field the ruler would overwrite on
+   the evaluation that failed. The same entry carries the other half: a
    broken template is the author's defect and reaches the annotation, the log and a
    counter, none of which names the team or the file or clears when it is fixed.
    6.5 has the three shapes and which one to build.

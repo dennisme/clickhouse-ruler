@@ -29,6 +29,12 @@ and are what the code comments cite.
   query because it states where the evaluation happened and the query is in no
   position to know better. `alertname` and `source` are written last and are
   protected: an identity query data can set is a routing hazard. See 6.3.1.
+- **The ruler owns the `ruler_` annotation prefix.** A failed annotation
+  template puts its error in an annotation the ruler writes, so the name is
+  reserved and `annotations/protected` refuses a rule that sets one. A prefix
+  rather than the single name `ruler_error`, so the next ruler-owned field needs
+  no second reserved name. Fixed at `error` and not renameable: turning it off
+  restores the silent overwrite, on the one evaluation nobody watches. See 6.5.
 - **Source selection is a selector on the rule.** A source carries `labels`
   saying what it is; a rule carries a `sources` selector saying what it wants.
   Adding terms narrows. The reverse, sources declaring requirements on rules,

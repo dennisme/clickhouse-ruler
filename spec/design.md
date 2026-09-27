@@ -479,19 +479,36 @@ the one to build:
    a consumer treated as stable.
 3. A short bounded marker in the failed annotation and the error beside it in one
    the ruler owns. `summary` becomes something like `<ruler: annotation "summary"
-   failed>`, greppable and fixed in length, and the ruler's own annotation carries
-   `annotation "summary": template: summary:1:25: executing "summary" at <.p99>:
-   map has no entry for key "p99"`. A consumer wanting a known string gets a short
+   failed>`, greppable and fixed in length, and the ruler's own annotation,
+   `ruler_error`, carries `annotation "summary": template: summary:1:25:
+   executing "summary" at <.p99>: map has no entry for key "p99"`. A consumer wanting a known string gets a short
    one with a fixed prefix, a responder still sees that something is wrong, and a
    machine has one field to read.
 
-**A ruler-owned annotation is a name collision, and the answer is a check rather
-than a warning in the docs.** `rule/protected-label` already refuses a rule whose
-result columns produce a label the ruler owns (7.3), and an annotation the ruler
-writes is the same problem one field over, so the reserved name belongs in the
-`annotations/*` family as a check of its own. Documenting it instead leaves an
-author's `ruler_error` silently overwritten on the evaluation that fails, which is
-the one evaluation nobody is watching.
+**A ruler-owned annotation is a name collision, and the answer is a check.**
+`rule/protected-label` already refuses a rule whose result columns produce a
+label the ruler owns (7.3), and an annotation the ruler writes is the same
+problem one field over. The reserved name is `ruler_`, a prefix rather than the
+single name `ruler_error`, so the next field the ruler owns needs no second
+reserved name and no second line in the docs. Prometheus reserves `__` for the
+same reason. `annotations/protected` refuses a rule whose `annotations` block
+sets any key starting with `ruler_`.
+
+It is tier 0 and fixed at `error`, and the reason is not
+`rule/protected-label`'s reason. A label collision breaks routing;
+Alertmanager matches on labels alone, so this one cannot. It is fixed because
+annotations are what a human reads: an Alertmanager template builds the
+PagerDuty title and the Slack message out of them, so the field a responder
+reads is the field the ruler overwrites, and it overwrites it on the
+evaluation that already failed, which is the one nobody is watching.
+Documenting the name instead leaves that overwrite silent.
+
+The check is configurable in neither severity nor name, which is deliberate:
+`severity: off` would restore exactly the silent overwrite the check exists to
+stop, and a configurable reserved name is a second escape hatch for one
+collision. An author already emitting `ruler_*` from a tool they are migrating
+off can be answered by renaming the ruler's own field, which is a change here
+rather than a knob, and nobody has asked for it.
 
 **And the owner has to hear about it, which is what the shape above is for.** A
 failed template is the rule author's defect, found only while running because a
