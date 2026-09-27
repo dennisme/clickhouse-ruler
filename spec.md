@@ -206,17 +206,15 @@ That is the property we are copying. Everything else follows from it.
    ceiling on a cluster is per shard, and `evaluation_delay` has to clear the
    slowest shard, which is a larger number rather than new configuration.
 
-4. **A failed annotation template.** The page always goes out and the annotation
-   that failed carries its error as its value, which is decided (6.5). What is not
-   is whether that error belongs in the author's own field at all, since a consumer
-   may be relying on `summary` being a known string. That the ruler owns an
-   annotation of its own to put it in is settled: `ruler_` is a reserved prefix
-   and `annotations/protected` refuses a rule that writes one, fixed at `error`,
-   because the field a responder reads is the field the ruler would overwrite on
-   the evaluation that failed. The same entry carries the other half: a
-   broken template is the author's defect and reaches the annotation, the log and a
-   counter, none of which names the team or the file or clears when it is fixed.
-   6.5 has the three shapes and which one to build.
+4. **Who hears that an annotation template failed.** Where the error goes is
+   settled and built: the page goes out, the failed annotation carries a short
+   marker, and `ruler_error` carries the error, which is a name the ruler owns
+   and `annotations/protected` reserves (6.5). What is left is the owner. A
+   broken template is the author's defect, and it reaches the annotation, the log
+   and a counter, none of which names the team or the file or clears when it is
+   fixed. `clickhouse_ruler_problem` is the surface that does all three, and
+   raising it there means carrying a rule's origin into evaluation, which the
+   alert state does not hold today.
 
 ---
 

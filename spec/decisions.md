@@ -142,10 +142,12 @@ and are what the code comments cite.
   ruler has to keep reading true. See 8.2.
 - **A broken annotation template never stops a page.** Each annotation renders
   independently, the ones that worked are delivered, and the one that failed
-  carries its error as its value. Hard or soft is a check-time choice through
-  `annotations/template`; at runtime the page always goes out. Anything else
-  means a mistake in one annotation costs a responder the others next to it.
-  See 6.5 and 7.6.
+  carries a short fixed marker while `ruler_error` carries the error itself. A
+  consumer parsing `summary` keeps a known short string, a responder still sees
+  that something is wrong, and a machine has one field to read. Hard or soft is a
+  check-time choice through `annotations/template`; at runtime the page always
+  goes out. Anything else means a mistake in one annotation costs a responder the
+  others next to it. See 6.5 and 7.6.
 - **Labels decide identity; the fingerprint is a bucket.** Two instances that
   hash alike stay two alerts, compared on their label sets. Prometheus keys on
   the hash alone, and the comparison is cheap enough that there is no reason to
