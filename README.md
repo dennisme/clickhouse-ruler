@@ -145,92 +145,86 @@ The manual is at
 
 Honest picture of what exists today.
 
-Working:
+Working, with the manual linked for each:
 
-- `ruler check ./rules/`, as text or as GitHub workflow commands annotating a
-  pull request diff. Correctness checks always block; convention checks
-  default to warnings an operator raises in `ruler.yaml`, per source, or in a
-  team directory's own `ruler.yaml`, and `--explain` names the file that set
-  each one.
-- Offline checks: rule files parsed with a line number on every finding and
-  strict unknown-field rejection, checks on rules and on the sources file,
-  whose secrets come from a file or the environment.
-- `--online` checks, which read no rows: the query as ClickHouse itself parsed
-  it rather than as text, the result columns it will really produce, whether
-  every cluster a rule matched agrees on those columns, and what one
-  evaluation is predicted to read against configurable ceilings.
-- `--sample`, the check that reads rows once, confirming the map keys a rule
-  reads exist in recent data. A renamed OTel attribute silences an alert
-  forever and nothing else catches it.
-- `--backfill`, the check that reads rows per window: it replays a rule over a
-  past range, one query per evaluation the range holds, and reports how many
-  alerts it would have produced against how many evaluations merely matched.
-  The step is raised and the answer marked sampled rather than running 1,440
-  queries because a range and an interval multiplied out that way.
-- The ClickHouse user contract: `source/privileges` probes each source's user
-  for the table functions it must not reach, `readonly = 2`, a constraint
-  behind every limit, and the grant on its own table.
-- `check --summary`, a markdown table of what each rule is predicted to read
-  per evaluation and per second, written to a file or to stdout for a pull
-  request comment. Needs `--online`, because the cost of a rule is a question
-  for the cluster it runs on.
-- Per-source exemptions, with a stated reason and an expiry date that fails
-  the build once it passes. Rule files cannot carry one.
-- `ruler run`: groups ticked on their own intervals and staggered, rules and
-  sources evaluated concurrently under a ruler-wide query limit with an
-  optional per-source limit inside it, the alert state machine, annotation templating, Alertmanager delivery with a resend cadence
-  and its own expiry, resolved alerts retried, and a shutdown that does not
-  cut an evaluation off.
-- Metrics on `/metrics`, `/-/healthy` for the process and a `/-/ready` that
-  can fail, structured logs naming the rule and source behind every failure,
-  a `log_comment` on every query for reading cost back out of
-  `system.query_log`, and two Grafana dashboards in `deploy/grafana`.
-- What each rule costs the cluster, per rule and per team: rows and bytes
-  read, peak memory and query duration, taken from the driver as the query
-  runs rather than from a follow-up query.
-- `SIGHUP` re-reads the rules, sources and policy files and replaces what is
-  running, keeping the `for` timer of every alert already pending and refusing
-  a version that fails a correctness check.
-- A two node ClickHouse and Alertmanager compose stack, with an end to end test
-  taking a rule from a file all the way to a delivered notification, and a
-  `Distributed` table over a cluster with a dead shard so the evaluation is
-  proven to fail rather than to resolve the alerts that shard held.
-- A rule that broke while running, reported to whoever owns it: every
-  evaluation is compared against the one before it, so a column dropped or
-  retyped under the query, two clusters that stopped agreeing on what a rule
-  returns, a query reading past its ceiling or a query that stopped running at
-  all raises `clickhouse_ruler_problem` with the team and the file to fix. It
-  reports and never refuses, so the rule keeps evaluating and keeps paging.
-- The one case an evaluation cannot see, on a slow timer beside it: a renamed
-  OTel map key leaves the query parsing, returning the same columns and matching
-  nothing forever, so `--recheck-interval` re-asks it against recent data, an
-  hour by default and one bounded query per rule per source. It shares the query
-  budget with evaluation, which always goes first.
+- **Checks in a pull request.** `ruler check ./rules/`, as text or as GitHub
+  workflow commands annotating the diff. Rule and source files are parsed with a
+  line number on every finding and unknown fields rejected outright. Correctness
+  checks always block; convention checks are warnings an operator raises in
+  `ruler.yaml`, per source or per team directory, and `--explain` names the file
+  that set each one. Exemptions carry a reason and an expiry that fails the build
+  once it passes. `--summary` writes the cost table for a pull request comment.
+  [Checks](https://dennisme.github.io/clickhouse-ruler/checks/).
+- **Three tiers that read the cluster, each consented to on its own.**
+  `--online` reads no rows: the query as ClickHouse itself parsed it, the columns
+  it will really produce, whether every cluster a rule matched agrees on them,
+  and what one evaluation is predicted to read against configurable ceilings,
+  scaled to the cluster on a sharded one. `--sample` reads rows once, confirming
+  the map keys a rule reads exist in recent data, which is the rename that
+  silences an alert forever. `--backfill` replays a rule over a past range and
+  reports how many alerts it would have produced against how many evaluations
+  merely matched.
+- **The ClickHouse user contract, probed rather than assumed.**
+  `source/privileges` asks each source's user for the table functions it must not
+  reach, `readonly = 2`, a constraint behind every limit, the grant on its own
+  table, and the one system table a sharded cost needs.
+  [How it works](https://dennisme.github.io/clickhouse-ruler/how-it-works/).
+- **`ruler run`.** Groups ticked on their own intervals and staggered, rules and
+  sources evaluated concurrently under a ruler-wide query limit with an optional
+  per-source limit inside it, the alert state machine, annotation templating,
+  Alertmanager delivery with a resend cadence and its own expiry, resolved alerts
+  retried, and a shutdown that does not cut an evaluation off. `SIGHUP` replaces
+  what is running, keeping the `for` timer of every pending alert and refusing a
+  version that fails a correctness check.
+  [Running it](https://dennisme.github.io/clickhouse-ruler/running/).
+- **An operator surface.** Metrics on `/metrics`, `/-/healthy` for the process
+  and a `/-/ready` that can fail, structured logs naming the rule and source
+  behind every failure, a `log_comment` on every query for reading cost back out
+  of `system.query_log`, what each rule cost the cluster per rule and per team
+  taken from the driver as the query runs, and two Grafana dashboards in
+  `deploy/grafana`.
+  [Operations](https://dennisme.github.io/clickhouse-ruler/operations/).
+- **What broke after it merged, reported to whoever owns it.** Every evaluation
+  is compared against the one before it, and a slow timer beside it re-asks the
+  one question no evaluation can: a renamed OTel map key leaves the query
+  parsing, returning the same columns and matching nothing forever. A column
+  dropped or retyped, two clusters that stopped agreeing, a query over its
+  ceiling, a query that stopped running, or a source that no longer meets the
+  contract raises `clickhouse_ruler_problem` with the file to fix. It reports and
+  never refuses, so the rule keeps evaluating and keeps paging.
 
 Not planned: generating your Alertmanager route tree. That file is yours and
 already under your own review policy, so writing into it is not this tool's
 job. The rest of the non-goals are in [spec 5](spec.md#5-non-goals).
 
-Known gaps that will change:
+Limits to know about, accepted rather than waiting on work:
 
-- A restart loses pending alert state. `ActiveAt` is held in memory, so every
-  alert part way through its `for` starts again, and one whose condition clears
-  inside that second `for` never pages. Firing alerts survive, because
-  Alertmanager holds them until the expiry on the last send. Reloading keeps
-  pending alerts; restarting does not. See
-  [operations](https://dennisme.github.io/clickhouse-ruler/operations/#what-a-restart-loses).
+- A restart loses pending alert state, and that is the answer rather than a
+  gap. `ActiveAt` is held in memory, so every alert part way through its `for`
+  starts again, and one whose condition clears inside that second `for` never
+  pages. Firing alerts survive, because Alertmanager holds them until the expiry
+  on the last send. Keeping the state means granting the ruler somewhere to write
+  and owning a schema and a retention policy for it, to buy back one `for` of
+  latency on a restart, and Prometheus behaves the same way when its own state
+  series is unavailable. So reload rather than restart: `SIGHUP` keeps pending
+  alerts. See
+  [operations](https://dennisme.github.io/clickhouse-ruler/operations/#what-a-restart-loses)
+  and spec 11.
 
-- Sharded clusters are only partly handled. `skip_unavailable_shards` is
-  pinned to `0`, and a two node stack with an unreachable shard proves what
-  that buys: the evaluation fails rather than returning half the cluster's rows
-  and resolving the alerts the missing shard held. `table:` is the table a rule
-  reads, so it is the `Distributed` one, and the checks that read it act on that.
-  Still outstanding is the rest: the cost caps are enforced per shard rather than
-  per query, and a prediction on a sharded cluster is out by the fanout because
-  `EXPLAIN ESTIMATE` answers for the coordinator's own parts alone, and
-  `evaluation_delay` has to cover the slowest shard. A source names one endpoint
-  and that is decided rather than missing: making it highly available is the
-  operator's job, the same as the Alertmanager URL. See spec 6.9.
+- Sharded clusters are handled, with two limits of their own.
+  `skip_unavailable_shards` is pinned to `0`, and a two node stack with an
+  unreachable shard proves what that buys: the evaluation fails rather than
+  returning half the cluster's rows and resolving the alerts the missing shard
+  held. `table:` is the table a rule reads, so it is the `Distributed` one, and
+  the checks that read it act on that. A predicted cost is scaled to the cluster
+  by the shard count from `system.clusters`, which the user contract grants, and
+  is reported as not estimated where that count cannot be read rather than
+  comparing one shard's number against a cluster's ceiling. The two limits are
+  that `max_execution_time` and `max_memory_usage` are enforced per node, so the
+  real ceiling on a cluster is per shard, and that `evaluation_delay` has to
+  cover the slowest shard. A source names one endpoint, which is decided rather
+  than missing: making it highly available is the operator's job, the same as the
+  Alertmanager URL. See spec 6.9.
 
 ## Development
 

@@ -235,9 +235,12 @@ func TestSelected(t *testing.T) {
 			want:    nil,
 		},
 		{
-			name:    "all, in report order rather than configured order",
-			require: []string{lint.AssertionTableReadable, lint.AssertionReadonly, lint.AssertionConstraints, lint.AssertionSourcesRevoked},
-			want:    lint.Assertions(),
+			name: "all, in report order rather than configured order",
+			require: []string{
+				lint.AssertionTableReadable, lint.AssertionClustersReadable,
+				lint.AssertionReadonly, lint.AssertionConstraints, lint.AssertionSourcesRevoked,
+			},
+			want: lint.Assertions(),
 		},
 		{
 			name:    "a subset, for a cluster that cannot meet the whole contract",
@@ -292,5 +295,44 @@ func TestClassifyProbeTimeout(t *testing.T) {
 	// Anything else still goes through the ordinary reading.
 	if got, _ := classifyProbe(denied(), true); got != StatusPass {
 		t.Errorf("classifyProbe(denied) = %v, want %v", got, StatusPass)
+	}
+}
+
+// Whether a sharded source can count its own shards, which is the grant behind
+// a cost prediction that answers for the cluster rather than for one node
+// (spec 6.7.2, 6.9).
+func TestClassifyCountable(t *testing.T) {
+	tests := []struct {
+		name   string
+		err    error
+		status Status
+	}{
+		{"countable", nil, StatusPass},
+		{"denied", denied(), StatusFail},
+		{"connection to clickhouse failed", dialErr(), StatusInconclusive},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, detail := classifyCountable(tt.err)
+			if got != tt.status {
+				t.Errorf("classifyCountable(%v) = %v, want %v", tt.err, got, tt.status)
+			}
+			if got != StatusPass && detail == "" {
+				t.Error("a non-passing assertion must say why")
+			}
+		})
+	}
+}
+
+// The finding has to name the grant, because an operator reading it is being
+// asked to add exactly one and the check is the only place it is written down.
+func TestClustersDeniedNamesTheGrant(t *testing.T) {
+	_, detail := classifyCountable(denied())
+
+	for _, want := range []string{"system.clusters", "shard_num", "no ceiling"} {
+		if !strings.Contains(detail, want) {
+			t.Errorf("detail = %q, want it to carry %q", detail, want)
+		}
 	}
 }

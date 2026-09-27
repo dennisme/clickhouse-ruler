@@ -103,7 +103,7 @@ func TestSourcePrivilegesDefaults(t *testing.T) {
 	if got.Severity != lint.SeverityWarning {
 		t.Errorf("severity = %v, want warning", got.Severity)
 	}
-	if len(got.Keys) != 4 {
+	if len(got.Keys) != len(lint.Assertions()) {
 		t.Errorf("keys = %v, want every assertion required by default", got.Keys)
 	}
 	if !lint.Configurable(lint.CheckSourcePrivileges) {
@@ -128,8 +128,8 @@ func TestSourcePrivilegesMergeIsStrictest(t *testing.T) {
 	if got.Severity != lint.SeverityError {
 		t.Errorf("severity = %v, want error: a source cannot soften the instance policy", got.Severity)
 	}
-	if len(got.Keys) != 4 {
-		t.Errorf("keys = %v, want the default four unioned with both scopes", got.Keys)
+	if len(got.Keys) != len(lint.Assertions()) {
+		t.Errorf("keys = %v, want every default assertion unioned with both scopes", got.Keys)
 	}
 }
 

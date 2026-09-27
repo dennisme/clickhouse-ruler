@@ -82,10 +82,11 @@ const (
 // keys of source/privileges, so they live beside it: an operator on a managed
 // cluster drops the one assertion they cannot satisfy and keeps the rest.
 const (
-	AssertionSourcesRevoked = "sources-revoked"
-	AssertionReadonly       = "readonly"
-	AssertionConstraints    = "constraints"
-	AssertionTableReadable  = "table-readable"
+	AssertionSourcesRevoked   = "sources-revoked"
+	AssertionReadonly         = "readonly"
+	AssertionConstraints      = "constraints"
+	AssertionTableReadable    = "table-readable"
+	AssertionClustersReadable = "clusters-readable"
 )
 
 // The ceilings rule/complexity counts against, written into its key list as
@@ -570,6 +571,7 @@ var assertionOrder = []string{
 	AssertionReadonly,
 	AssertionConstraints,
 	AssertionTableReadable,
+	AssertionClustersReadable,
 }
 
 // Assertions lists every contract assertion in report order.

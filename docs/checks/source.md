@@ -28,7 +28,7 @@ alone. See spec 6.6 and 7.7.
 | [`source/max-rows`](#source-max-rows) | fixed, always `error` | none | [6.7](https://github.com/dennisme/clickhouse-ruler/blob/main/spec.md) |
 | [`source/name`](#source-name) | fixed, always `error` | none | [6.6](https://github.com/dennisme/clickhouse-ruler/blob/main/spec.md) |
 | [`source/password`](#source-password) | fixed, always `error` | none | [6.6](https://github.com/dennisme/clickhouse-ruler/blob/main/spec.md) |
-| [`source/privileges`](#source-privileges) | `warning` by default | required: `constraints`, `readonly`, `sources-revoked`, `table-readable` | [6.7.2](https://github.com/dennisme/clickhouse-ruler/blob/main/spec.md) |
+| [`source/privileges`](#source-privileges) | `warning` by default | required: `clusters-readable`, `constraints`, `readonly`, `sources-revoked`, `table-readable` | [6.7.2](https://github.com/dennisme/clickhouse-ruler/blob/main/spec.md) |
 | [`source/table`](#source-table) | fixed, always `error` | none | [6.6](https://github.com/dennisme/clickhouse-ruler/blob/main/spec.md) |
 | [`source/timestamp-column`](#source-timestamp-column) | fixed, always `error` | none | [6.8](https://github.com/dennisme/clickhouse-ruler/blob/main/spec.md) |
 | [`source/username`](#source-username) | fixed, always `error` | none | [6.6](https://github.com/dennisme/clickhouse-ruler/blob/main/spec.md) |
@@ -342,7 +342,8 @@ Not a check on any rule. It asserts that the guarantees the rule checks are
 allowed to stop making are actually in place: that table functions are revoked
 so a query cannot read around the row policies, that the user is read only,
 that the per-query limits cannot be raised by the query they are sent with,
-and that the table the source names is actually readable.
+that the table the source names is actually readable, and that a sharded source
+can count its own shards.
 
 Each assertion is reported by name, so a finding says which half of the
 contract is missing. They are the check's keys, so an operator on a managed
@@ -355,6 +356,12 @@ checks:
     keys: [sources-revoked, readonly, table-readable]
 ```
 
+The check runs at `ruler check`, at startup and on every reload, and what it
+finds while the ruler runs is also raised on
+[`clickhouse_ruler_source_problem`](../operations.md#a-source-that-does-not-meet-the-contract),
+so a contract that stopped holding is visible without reading the stream the
+ruler was started on.
+
 It defaults to a warning because a ruler pointed at an existing cluster fails
 it on the first run, and a check that blocks the first run gets switched off
 rather than fixed. The finding is about the operator's own file, so the person
@@ -364,6 +371,24 @@ Privileges are probed rather than read out of `SHOW GRANTS`, which reports
 role membership instead of what the roles contain. Every probe reads, and
 every one names an endpoint that can do nothing if the privilege turns out to
 be granted.
+
+**`clusters-readable` is the one assertion that only applies to some sources.**
+It asks whether the user can count the shards behind a `Distributed` table, which
+is the grant a cost prediction needs to answer for the cluster instead of for the
+node the ruler connected to. A source whose table is a local `MergeTree` passes it
+without being asked, because nothing requests a shard count for one shard.
+
+Without the grant, nothing else about the source looks different: every rule
+evaluates, and `rule/cost` reports the prediction as not estimated and applies no
+ceiling. That silence is why this is an assertion rather than a note on the cost
+finding. The fix is one grant:
+
+```sql
+GRANT SELECT(cluster, shard_num) ON system.clusters TO ruler_reader;
+```
+
+Drop the key on a cluster where that grant is not available, and the cost check
+then reports what it could not answer per rule instead.
 
 **On a sharded cluster `table-readable` covers every node.** The source's
 `table:` is the `Distributed` table there, and a read of one contacts every shard

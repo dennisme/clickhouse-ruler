@@ -225,15 +225,21 @@ Tier 1, metadata only, reads no table data:
   cheap hourly and ruinous every fifteen seconds. A rule on a 30s interval
   reading 400GB is arithmetic.
 
-  **On a sharded cluster the estimate is one shard's.** `EXPLAIN ESTIMATE` over
-  a Distributed table answers from the coordinator's own parts and names the
-  local table in the row it returns, so the ceiling is compared against roughly
-  `1/N` of what the cluster reads on `N` shards. This is the one part of 6.9 that
-  reading `table:` as the Distributed table does not fix, and it is outstanding
-  rather than accepted: 6.9 carries the plan, which is to scale by the shard
-  count and to report the cost unestimated on a source where that count cannot
-  be read. A caveat alone cannot carry it, because a cost reported too low
-  exceeds no ceiling and so produces no finding for a caveat to attach to.
+  **On a sharded cluster the number is scaled to the cluster.** `EXPLAIN
+  ESTIMATE` over a Distributed table answers from the coordinator's own parts and
+  names the local table in the row it returns, so what the server hands back is
+  roughly `1/N` of what the cluster reads on `N` shards. The check multiplies it
+  by the shard count out of `system.clusters` before comparing it against either
+  ceiling, and the finding says that is what the number is: the coordinator's
+  parts times the shard count, not a measurement of the cluster. Where the
+  source's user cannot read that count, the cost is reported unestimated and no
+  ceiling is applied, because a cost left at a shard's exceeds nothing and so
+  produces no finding for a caveat to attach to. The missing grant itself is
+  reported by `source/privileges` as its `clusters-readable` assertion, once per
+  source, so the fallback is something an operator is told about rather than a
+  ceiling that quietly stopped applying. 6.9 has the argument for both,
+  and the summary table in 7.10 carries the marker for the rules that raise no
+  finding at all.
 
   **The window the check renders is the window it estimates.** A check
   substitutes literal timestamps for `{{ .From }}` and `{{ .To }}`, and those
@@ -1082,6 +1088,7 @@ writes it to stdout:
 | --- | --- | --- | --- | --- |
 | rules/payments/latency.yaml | HighP99Latency | payments_prod | 4127000 | 30s |
 | rules/payments/latency.yaml | HighP99Latency | payments_staging | 90000 | 30s |
+| rules/payments/errors.yaml | ErrorRate | payments_shards | 8254000 (4 shards) | 1m |
 ```
 
 Posting it is the workflow's job. A job that can comment already holds the
@@ -1091,10 +1098,21 @@ credentials.
 
 A cell that is not a number says why it is not one, and never says zero. A
 rule nobody was allowed to estimate, a query the server predicts will read no
-part at all, and a source that could not be read are three different facts,
-and all three are different from a rule that reads nothing. The middle one is
-its own answer because an empty `EXPLAIN ESTIMATE` is what an empty table, a
-fully pruned window and a metadata-only count all return.
+part at all, a sharded source whose shard count could not be counted, and a
+source that could not be read are four different facts, and all four are
+different from a rule that reads nothing. The second is its own answer because an
+empty `EXPLAIN ESTIMATE` is what an empty table, a fully pruned window and a
+metadata-only count all return. The third is its own answer because the rule's
+own table was readable and the cluster behind it was not, so the number exists
+and covers one shard of an unknown number (6.9).
+
+**A number that was scaled says so, in the cell.** This table is the only place
+a sharded rule within its ceilings can be told how its number was arrived at:
+`rule/cost` reports on breach, so a rule that is comfortable raises no finding
+and a finding is the only thing a caveat can hang from. A cell reading the
+coordinator's parts times the shard count, beside the count itself, is what keeps
+a reader from taking a scaled prediction for a measured one, and it costs the
+column nothing a reader has to decode.
 
 The row key is the rule **and** the source, never the rule alone. A rule
 matches sources by label and evaluates against each one, so a rule that is

@@ -876,6 +876,29 @@ can afford it. Raise it on the source rather than the instance when only one
 cluster is that big, and remember a source can only tighten: the shipped
 ceilings apply where nothing else is configured.
 
+**On a sharded cluster the number is the cluster's.** `EXPLAIN ESTIMATE` over a
+`Distributed` table answers for the parts on the node the ruler connected to, so
+on four shards it covers roughly a quarter of what an evaluation reads. The check
+multiplies it by the shard count from `system.clusters` before comparing it
+against either ceiling, and says so in the finding, because the product assumes
+the shards hold roughly the same amount rather than measuring them.
+
+Shards are often not even: a hot sharding key, a shard added later that
+ClickHouse never rebalanced into, a different retention on one node, or writes
+sent straight to a local table all leave one shard holding more than another. The
+error runs both ways, so treat a scaled number as the order of magnitude it is
+good for. What measures a cluster read rather than predicting it is an
+evaluation, and the rows and bytes each rule really reads are already recorded
+per rule and per team once it runs.
+
+That needs one grant the user contract asks for, `SELECT(cluster, shard_num) ON
+system.clusters`, and `source/privileges` reports a source that is missing it as
+`clusters-readable`, once per source rather than once per rule. Without it the
+cost is reported as not estimated and no ceiling is applied: a shard's number compared against a cluster's ceiling would pass a
+rule reading several times what an operator allowed, and would do it silently.
+The cost table on a pull request carries the same answer per rule, whether it
+breached a ceiling or not.
+
 **When a rule is over, the finding says why if it can.** A second question
 goes to the query plan, and if the primary key excluded no granules the
 finding says so. That is the usual cause and the usual fix: the rule's time

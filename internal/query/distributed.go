@@ -28,6 +28,12 @@ type storage struct {
 	// Source is the table the source names, which is the table a rule reads.
 	Source tableRef
 
+	// Cluster is the cluster a Distributed table fans a query out across, and
+	// is empty for a local one. It is read for the shard count behind a cost
+	// prediction, and the engine clause is the only place it is written down:
+	// a source names a table and the table names its cluster (spec 6.9).
+	Cluster string
+
 	// Local is the table holding the parts, which is Source itself on a single
 	// node and the table behind the Distributed engine on a cluster.
 	Local tableRef
@@ -64,7 +70,7 @@ func (q *Querier) storageTable(ctx context.Context) storage {
 		return storage{Source: own, Local: own}
 	}
 
-	local, ok := distributedTarget(engineFull)
+	cluster, local, ok := distributedTarget(engineFull)
 	if !ok {
 		return storage{
 			Source:       own,
@@ -72,7 +78,53 @@ func (q *Querier) storageTable(ctx context.Context) storage {
 			Unanswerable: "its engine clause does not name a local table this can read",
 		}
 	}
-	return storage{Source: own, Local: local, Distributed: true}
+	return storage{Source: own, Cluster: cluster, Local: local, Distributed: true}
+}
+
+// fanout is how many shards an estimate covers one of, and whether that could
+// be counted at all.
+//
+// Two fields rather than a count where zero means unknown, because the two
+// answers lead different places: a number scales a prediction up to the
+// cluster, and an absence turns the ceiling off instead of comparing a shard's
+// number against a cluster's (spec 6.9).
+type fanout struct {
+	// Shards is how many shards a query spreads across, and is 1 on a single
+	// node.
+	Shards uint64
+
+	// Counted says Shards is what the server answered rather than what nobody
+	// could ask.
+	Counted bool
+}
+
+// countShards is how many shards the source's table fans a query out across.
+//
+// One round trip to `system.clusters`, which the contract in spec 6.7.2 grants
+// for this and nothing else, and only for a Distributed source: a local table is
+// its own single shard, so a single node source asks nothing and never needs the
+// grant. A user without it is told its cost was not estimated, because the
+// alternative is a shard's number compared against a cluster's ceiling, which is
+// wrong in the direction that lets a rule through (spec 6.9).
+func (q *Querier) countShards(ctx context.Context) fanout {
+	st := q.storageTable(ctx)
+	if !st.Distributed {
+		return fanout{Shards: 1, Counted: true}
+	}
+	if st.Cluster == "" {
+		return fanout{}
+	}
+
+	// Distinct shard numbers rather than rows: a cluster's replicas are rows of
+	// the same shard, and counting those would multiply a prediction by the
+	// copies of the data rather than by the parts of it.
+	var shards uint64
+	err := q.conn.QueryRow(ctx,
+		"SELECT uniqExact(shard_num) FROM system.clusters WHERE cluster = ?", st.Cluster).Scan(&shards)
+	if err != nil || shards == 0 {
+		return fanout{}
+	}
+	return fanout{Shards: shards, Counted: true}
 }
 
 // name writes a table the way a caveat names it.
@@ -143,27 +195,27 @@ const distributedEngine = "Distributed"
 // an expression after the server formatted it is not one this can resolve, and
 // the two questions behind this exist to qualify a count: a qualification naming
 // the wrong table is worse than none, which is the line parseTTL already draws.
-func distributedTarget(engineFull string) (tableRef, bool) {
+func distributedTarget(engineFull string) (cluster string, local tableRef, ok bool) {
 	rest, ok := strings.CutPrefix(strings.TrimSpace(engineFull), distributedEngine+"(")
 	if !ok {
-		return tableRef{}, false
+		return "", tableRef{}, false
 	}
 
 	var args [3]string
 	for i := range args {
 		if i > 0 {
 			if rest, ok = strings.CutPrefix(strings.TrimLeft(rest, " "), ","); !ok {
-				return tableRef{}, false
+				return "", tableRef{}, false
 			}
 		}
 		if args[i], rest, ok = quotedLiteral(strings.TrimLeft(rest, " ")); !ok {
-			return tableRef{}, false
+			return "", tableRef{}, false
 		}
 	}
-	if args[1] == "" || args[2] == "" {
-		return tableRef{}, false
+	if args[0] == "" || args[1] == "" || args[2] == "" {
+		return "", tableRef{}, false
 	}
-	return tableRef{Database: args[1], Table: args[2]}, true
+	return args[0], tableRef{Database: args[1], Table: args[2]}, true
 }
 
 // quotedLiteral reads one single quoted string from the front of s and returns

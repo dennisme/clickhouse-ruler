@@ -147,7 +147,9 @@ func (r *runner) report(problems []lint.Problem) {
 // is a handful of statements per source, each refused before it does any work,
 // and never one per evaluation.
 func (r *runner) connect(ctx context.Context, cfg *config) error {
-	if refused := refusedSources(ctx, r.sourcesPath, cfg.set, cfg.root, r.stderr, r.log); len(refused) > 0 {
+	if refused := refusedSources(
+		ctx, r.sourcesPath, cfg.set, cfg.root, r.metrics, r.stderr, r.log,
+	); len(refused) > 0 {
 		refuseSources(cfg.set, refused)
 	}
 

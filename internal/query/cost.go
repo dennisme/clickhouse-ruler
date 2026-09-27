@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 	"time"
@@ -46,23 +47,66 @@ const (
 	// CostRefused is the source's own user not being allowed to look, which
 	// is a fact about the grant rather than about the rule (spec 6.7.2).
 	CostRefused
+
+	// CostShardsUnknown is a sharded source whose shard count could not be
+	// read, so what the server estimated covers the parts on the coordinator
+	// alone and no ceiling was applied to it.
+	//
+	// A different fact from CostRefused, and it has a different fix: that user
+	// cannot read the rule's own table, this one can and cannot count the
+	// cluster behind it. Reporting a shard's number as a cluster's is the
+	// reading this answer exists to refuse (spec 6.9).
+	CostShardsUnknown
 )
 
 // CostEstimate is what one source predicts a rule reads on every evaluation.
 //
-// Predicted, never measured. Rows is meaningful only when Status is
+// Predicted, never measured. Rows and Shards are meaningful only when Status is
 // CostEstimated.
 type CostEstimate struct {
 	Rows   uint64
 	Status CostStatus
+
+	// Shards is how many shards Rows was multiplied by, and is 1 on a single
+	// node. Above 1 it says the number is the parts on the node the ruler
+	// connected to scaled up to the cluster rather than anything measured, which
+	// is what the finding and the summary table both carry (spec 6.9, 7.10).
+	Shards uint64
 }
 
 // costFrom turns what the server estimated into what the caller reports.
-func costFrom(est []Estimate) CostEstimate {
+//
+// `EXPLAIN ESTIMATE` answers for the parts on the node it was asked, so on a
+// sharded cluster it covers one shard of the fanout and the cluster's number is
+// that times the shard count (spec 6.9).
+func costFrom(est []Estimate, f fanout) CostEstimate {
 	if len(est) == 0 {
 		return CostEstimate{Status: CostNoParts}
 	}
-	return CostEstimate{Rows: estimatedRows(est), Status: CostEstimated}
+	if !f.Counted {
+		return CostEstimate{Status: CostShardsUnknown}
+	}
+	return CostEstimate{
+		Rows:   scaled(estimatedRows(est), f.Shards),
+		Status: CostEstimated,
+		Shards: f.Shards,
+	}
+}
+
+// scaled multiplies one shard's estimate up to the cluster's, saturating rather
+// than wrapping.
+//
+// A wrapped product reports the largest read there is as a small one, which is
+// the single rule this check exists to catch. Nothing is lost by stopping at the
+// top: every number up there is over any ceiling anybody configured.
+func scaled(rows, shards uint64) uint64 {
+	if shards <= 1 || rows == 0 {
+		return rows
+	}
+	if rows > math.MaxUint64/shards {
+		return math.MaxUint64
+	}
+	return rows * shards
 }
 
 // Cost is how much a rule may read, resolved from policy by the caller.
@@ -213,11 +257,14 @@ func RowsPerSecond(rows uint64, interval time.Duration) float64 {
 
 // overCost describes what a rule exceeds, or returns empty when it is within
 // its ceilings or none are configured.
-func overCost(est []Estimate, limit *Cost, interval time.Duration) string {
-	if limit == nil || len(est) == 0 {
+func overCost(cost CostEstimate, limit *Cost, interval time.Duration) string {
+	// A cost the server estimated nothing for and one nobody could scale to the
+	// cluster are both numbers no ceiling applies to, and reporting a breach of
+	// a ceiling the number was never comparable to is a false finding (spec 6.9).
+	if limit == nil || cost.Status != CostEstimated {
 		return ""
 	}
-	rows := estimatedRows(est)
+	rows := cost.Rows
 	rate := RowsPerSecond(rows, interval)
 
 	var over []string
@@ -236,7 +283,23 @@ func overCost(est []Estimate, limit *Cost, interval time.Duration) string {
 	if interval > 0 {
 		detail += fmt.Sprintf(", every %s this group evaluates", interval)
 	}
-	return detail + ", and the estimate is the optimiser's prediction rather than a measurement"
+	detail += ", and the estimate is the optimiser's prediction rather than a measurement"
+	return withFanout(detail, cost.Shards)
+}
+
+// withFanout says a cluster's number was arrived at from one node's.
+//
+// Appended to the ceiling's finding, like the pruning note, and for the same
+// reason: it qualifies the number this finding already reported rather than
+// saying anything on its own. Left off a single node source, where there is one
+// shard and a sentence about fanout is noise on every rule (spec 6.9).
+func withFanout(detail string, shards uint64) string {
+	if shards <= 1 {
+		return detail
+	}
+	return detail + fmt.Sprintf(". EXPLAIN ESTIMATE answers for the parts on the node the ruler "+
+		"connected to, so this number is that answer multiplied by the %d shards of the cluster, "+
+		"which assumes they hold roughly the same amount", shards)
 }
 
 // withPruning adds why a rule is expensive, when the plan says why.

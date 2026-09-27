@@ -136,6 +136,8 @@ func (q *Querier) Privileges(ctx context.Context, require []string) []Assertion 
 			out = append(out, q.assertConstraints(ctx))
 		case lint.AssertionTableReadable:
 			out = append(out, q.assertTableReadable(ctx))
+		case lint.AssertionClustersReadable:
+			out = append(out, q.assertClustersReadable(ctx))
 		}
 	}
 	return out
@@ -249,6 +251,61 @@ func (q *Querier) assertTableReadable(ctx context.Context) Assertion {
 
 	status, detail := classifyReadable(q.conn.Exec(ctx, sql))
 	return Assertion{Name: lint.AssertionTableReadable, Status: status, Detail: detail}
+}
+
+// assertClustersReadable checks the grant a sharded source's cost depends on.
+//
+// Asked of the source's own topology rather than of every user, because the
+// grant is only part of what a source needs when its table is a Distributed one:
+// a local table is its own single shard, the prediction is already the whole
+// answer, and a finding about a count nothing asks for would be noise on every
+// single node source (spec 6.9).
+//
+// Without it, `EXPLAIN ESTIMATE` still answers and still covers the coordinator's
+// parts alone, so a cost is reported unestimated and no ceiling is applied. That
+// is the quiet failure this assertion exists to make loud: nothing else about
+// the source looks different, and a ceiling nobody is comparing against is
+// indistinguishable from a rule inside it.
+func (q *Querier) assertClustersReadable(ctx context.Context) Assertion {
+	a := Assertion{Name: lint.AssertionClustersReadable}
+
+	if st := q.storageTable(ctx); !st.Distributed {
+		// Nothing asks this source for a shard count, so the contract holds
+		// whether the grant is there or not.
+		a.Status = StatusPass
+		return a
+	}
+
+	// The same read countShards makes, bounded to nothing: what is being
+	// asserted is the grant, and the count itself belongs to the cost check.
+	err := q.conn.Exec(ctx, "SELECT cluster, shard_num FROM system.clusters LIMIT 0")
+	a.Status, a.Detail = classifyCountable(err)
+	return a
+}
+
+// classifyCountable reads the outcome of the shard count's grant.
+//
+// A denial is the whole point of the assertion and names the grant to add,
+// because an operator reading the finding is being asked for exactly one and
+// this is the only place it is written down. Any other failure says nothing
+// about the grant, so it reports as inconclusive rather than sending somebody
+// to fix an access problem they do not have.
+func classifyCountable(err error) (Status, string) {
+	if err == nil {
+		return StatusPass, ""
+	}
+
+	var ex *clickhouse.Exception
+	if errors.As(err, &ex) && ex.Code == codeAccessDenied {
+		return StatusFail, "this source's table is Distributed and its user cannot count the " +
+			"cluster's shards, so a predicted cost covers the connected node's parts alone and no " +
+			"ceiling is applied to it: grant SELECT(cluster, shard_num) ON system.clusters"
+	}
+	if errors.As(err, &ex) {
+		return StatusInconclusive, fmt.Sprintf("counting the cluster's shards failed with code %d: %s",
+			ex.Code, ex.Message)
+	}
+	return StatusInconclusive, "clickhouse did not answer: " + err.Error()
 }
 
 // classifyReadable reads the outcome of the one query that has to succeed.

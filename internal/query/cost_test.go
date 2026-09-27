@@ -2,6 +2,7 @@ package query
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -133,7 +134,8 @@ func TestOverCost(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := overCost(est, tt.cost, tt.interval) != ""; got != tt.want {
+			cost := costFrom(est, fanout{Shards: 1, Counted: true})
+			if got := overCost(cost, tt.cost, tt.interval) != ""; got != tt.want {
 				t.Errorf("overCost = %v, want %v", got, tt.want)
 			}
 		})
@@ -143,8 +145,8 @@ func TestOverCost(t *testing.T) {
 // The numbers an author acts on: what it reads, how often, and what that
 // comes to per second.
 func TestOverCostDetail(t *testing.T) {
-	got := overCost(readEstimate(t, "estimate_bounded.txt"),
-		&Cost{MaxRows: 1000, MaxRowsPerSecond: 10}, 30*time.Second)
+	cost := costFrom(readEstimate(t, "estimate_bounded.txt"), fanout{Shards: 1, Counted: true})
+	got := overCost(cost, &Cost{MaxRows: 1000, MaxRowsPerSecond: 10}, 30*time.Second)
 
 	for _, want := range []string{"126272", "30s", "estimate"} {
 		if !contains(got, want) {
@@ -193,7 +195,7 @@ func TestUnprunedTablesReadsATreeDrawnPlan(t *testing.T) {
 func TestCostFrom(t *testing.T) {
 	est := readEstimate(t, "estimate_two_tables.txt")
 
-	got := costFrom(est)
+	got := costFrom(est, fanout{Shards: 1, Counted: true})
 	if got.Status != CostEstimated {
 		t.Errorf("status = %v, want estimated", got.Status)
 	}
@@ -207,7 +209,89 @@ func TestCostFrom(t *testing.T) {
 // metadata. Zero rows would read as a measurement of a free query rather than
 // the absence of one.
 func TestCostFromWithNoParts(t *testing.T) {
-	if got := costFrom(nil); got.Status != CostNoParts {
+	if got := costFrom(nil, fanout{Shards: 1, Counted: true}); got.Status != CostNoParts {
 		t.Errorf("status = %v, want no parts", got.Status)
+	}
+}
+
+// A sharded rule's cost is the cluster's, not the coordinator's. EXPLAIN
+// ESTIMATE answers for the parts on the node it was asked, so an unscaled
+// number on two shards is half of what every evaluation reads (spec 6.9).
+func TestCostFromScalesByTheShardCount(t *testing.T) {
+	est := readEstimate(t, "estimate_bounded.txt")
+
+	got := costFrom(est, fanout{Shards: 3, Counted: true})
+
+	if got.Status != CostEstimated {
+		t.Errorf("status = %v, want estimated", got.Status)
+	}
+	if want := estimatedRows(est) * 3; got.Rows != want {
+		t.Errorf("rows = %d, want %d: one shard's estimate times the shard count", got.Rows, want)
+	}
+	if got.Shards != 3 {
+		t.Errorf("shards = %d, want 3: the number says how it was arrived at", got.Shards)
+	}
+}
+
+// A shard count nobody could read turns the ceiling off rather than comparing a
+// shard's number against a cluster's, which is the reading that lets a rule
+// through (spec 6.9).
+func TestCostFromWithAnUncountedFanout(t *testing.T) {
+	got := costFrom(readEstimate(t, "estimate_bounded.txt"), fanout{})
+
+	if got.Status != CostShardsUnknown {
+		t.Errorf("status = %v, want the shard count reported unreadable", got.Status)
+	}
+	if got.Rows != 0 {
+		t.Errorf("rows = %d, want none: a number here would be one shard's read as a cluster's", got.Rows)
+	}
+}
+
+// Multiplication that wrapped would report the largest read there is as a small
+// one, which is the one rule this check must not let through.
+func TestCostFromSaturatesRatherThanWrapping(t *testing.T) {
+	huge := []Estimate{{Database: "otel", Table: "otel_traces", Rows: math.MaxUint64 / 2}}
+
+	got := costFrom(huge, fanout{Shards: 4, Counted: true})
+
+	if got.Rows != math.MaxUint64 {
+		t.Errorf("rows = %d, want %d: the product does not fit and the ceiling is exceeded either way",
+			got.Rows, uint64(math.MaxUint64))
+	}
+}
+
+// The finding says the number is a multiplication, because a reader who takes a
+// scaled prediction for a measured one acts on a precision it does not have.
+func TestOverCostSaysTheNumberWasScaled(t *testing.T) {
+	cost := costFrom(readEstimate(t, "estimate_bounded.txt"), fanout{Shards: 2, Counted: true})
+
+	got := overCost(cost, &Cost{MaxRows: 1000, MaxRowsPerSecond: 10}, 30*time.Second)
+
+	for _, want := range []string{"252544", "2 shards", "connected to"} {
+		if !contains(got, want) {
+			t.Errorf("detail = %q, want it to carry %q", got, want)
+		}
+	}
+}
+
+// A single node source says nothing about shards. There is one, the estimate is
+// the whole answer, and a sentence about fanout would be noise on every rule.
+func TestOverCostIsSilentAboutOneShard(t *testing.T) {
+	cost := costFrom(readEstimate(t, "estimate_bounded.txt"), fanout{Shards: 1, Counted: true})
+
+	got := overCost(cost, &Cost{MaxRows: 1000, MaxRowsPerSecond: 10}, 30*time.Second)
+
+	if contains(got, "shard") {
+		t.Errorf("detail = %q, want no mention of shards on a single node source", got)
+	}
+}
+
+// No count, no ceiling. Reporting the breach of a ceiling the number was never
+// comparable to is the false finding the fallback exists to avoid (spec 6.9).
+func TestOverCostAppliesNoCeilingWithoutAShardCount(t *testing.T) {
+	cost := costFrom(readEstimate(t, "estimate_bounded.txt"), fanout{})
+
+	if got := overCost(cost, &Cost{MaxRows: 1, MaxRowsPerSecond: 1}, time.Second); got != "" {
+		t.Errorf("detail = %q, want nothing: the estimate covers one shard of an unknown number", got)
 	}
 }

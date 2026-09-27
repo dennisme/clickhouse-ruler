@@ -195,22 +195,26 @@ That is the property we are copying. Everything else follows from it.
    moved: 8.8 says what an operator can see of cadence and of the delay between a
    condition and a notification, and why the delay carries no target from us.
    Seeing it is not handling it, so this item stands.
-3. **Sharded clusters.** `skip_unavailable_shards` is pinned to `0`, and a
-   two node stack with an unreachable shard proves it: the evaluation fails
-   rather than silently resolving the alerts that shard held. What `table:`
-   means is decided: it is the table a rule reads, so the Distributed one, and
-   the checks that read it act on that, see `decisions.md`. `address` stays one
-   endpoint, also decided rather than outstanding. What is left in 6.9 is the
-   cost caps, which are per shard rather than per query, and `evaluation_delay`,
-   which has to cover the slowest shard. The cost half has a shape and no code:
-   `EXPLAIN ESTIMATE` over a Distributed table answers for the coordinator's own
-   parts, so the ceiling is compared against roughly `1/N` of what the cluster
-   reads. 6.9 has the plan, which is to scale by the shard count out of
-   `system.clusters` and to report the cost unestimated where that grant is
-   absent, because a caveat cannot cover the case that hurts: an underreported
-   cost raises no finding for a caveat to attach to. The compose stack carries
-   the second node every proof needs, so what is left is arithmetic and a grant
-   rather than topology.
+3. **Sharded clusters.** Settled, and kept here because this is where it was
+   asked. Every part of it is now decided and proven on the two node stack: the
+   `skip_unavailable_shards` pin, `table:` naming the Distributed table, one
+   `address` rather than a list, and a predicted cost scaled to the cluster by the
+   shard count out of `system.clusters` or reported unestimated where that count
+   cannot be read. 6.9 has the whole of it and `decisions.md` has the arguments.
+   What 6.9 still says about shards is two facts rather than two gaps:
+   `max_execution_time` and `max_memory_usage` are enforced per node, so the real
+   ceiling on a cluster is per shard, and `evaluation_delay` has to clear the
+   slowest shard, which is a larger number rather than new configuration.
+
+4. **A failed annotation template.** The page always goes out and the annotation
+   that failed carries its error as its value, which is decided (6.5). What is not
+   is whether that error belongs in the author's own field at all, since a consumer
+   may be relying on `summary` being a known string, and whether the ruler should
+   own an annotation of its own to put it in, which is a reserved name and so a
+   check rather than a note in the docs. The same entry carries the other half: a
+   broken template is the author's defect and reaches the annotation, the log and a
+   counter, none of which names the team or the file or clears when it is fixed.
+   6.5 has the three shapes and which one to build.
 
 ---
 
