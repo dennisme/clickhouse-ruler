@@ -29,3 +29,16 @@ ENGINE = Distributed(ruler_dead_shard, otel, otel_traces, rand());
 -- node.
 GRANT SELECT ON otel.otel_traces_shards TO ruler_reader;
 GRANT SELECT ON otel.otel_traces_dead_shard TO ruler_reader;
+
+-- A user under the same contract without the one grant that counts shards, so
+-- the fallback has something to run against.
+--
+-- What it proves is the answer the fallback exists for: this user can read the
+-- Distributed table and every rule evaluates, so the only thing it cannot do is
+-- say how many shards the number it was handed covers. A ruler that compared
+-- that number against a cluster's ceiling would pass a rule reading N times
+-- what the ceiling allows, silently, on exactly the clusters where a cost
+-- matters most (spec 6.9).
+CREATE USER IF NOT EXISTS ruler_uncounted_shards IDENTIFIED WITH no_password SETTINGS PROFILE ruler;
+GRANT SELECT ON otel.otel_traces_shards TO ruler_uncounted_shards;
+GRANT SELECT ON otel.otel_traces TO ruler_uncounted_shards;

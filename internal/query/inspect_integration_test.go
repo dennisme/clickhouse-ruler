@@ -558,11 +558,20 @@ func TestInspectSaysNothingAboutAnAffordableRule(t *testing.T) {
 // what it would actually open and one part of three rows is one granule.
 func seedManySpans(t *testing.T, q *Querier) {
 	t.Helper()
+	seedManySpansAt(t, q.src.Address)
+}
+
+// seedManySpansAt writes those rows to one node, which is how a sharded cluster
+// is seeded: a Distributed table is what a rule reads, not what a test writes
+// through, and rows inserted through one land wherever the sharding key sends
+// them (spec 6.9).
+func seedManySpansAt(t *testing.T, address string) {
+	t.Helper()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	conn := adminConn(t, q.src.Address)
+	conn := adminConn(t, address)
 	if err := conn.Exec(ctx, "TRUNCATE TABLE otel.otel_traces"); err != nil {
 		t.Fatalf("truncate: %v", err)
 	}

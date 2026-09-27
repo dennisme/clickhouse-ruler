@@ -44,10 +44,10 @@ const deadShardHost = "192.0.2.1"
 
 // shardTwoAddress is the second shard, as `just integration` passes it.
 //
-// Read here rather than added to testSource: a source is one address today
-// (spec 6.9 wants a list, a later slice), and the only reason a test needs the
-// second node directly is to seed it. Distributed queries reach it through the
-// cluster definition, not through this.
+// Read here rather than added to testSource: a source is one address and stays
+// one (spec 6.9), and the only reason a test needs the second node directly is to
+// seed it. Distributed queries reach it through the cluster definition, not
+// through this.
 func shardTwoAddress(t *testing.T) string {
 	t.Helper()
 
@@ -102,6 +102,19 @@ func shardedRule(table string) rule.Rule {
 		Expr:   fmt.Sprintf(shardedLatencyExpr, table),
 		Window: 5 * time.Minute,
 	}
+}
+
+// shardedCostRule is the same rule over a window wide enough to hold the rows a
+// cost test seeded.
+//
+// A cost check renders its bounds ending at now and spanning the rule's own
+// window, because those bounds are what the optimiser prunes on. The fixture is
+// written around anchor, which is an hour behind, so a five minute rule estimates
+// correctly at nothing and there is no number to scale.
+func shardedCostRule(table string) rule.Rule {
+	r := shardedRule(table)
+	r.Window = 24 * time.Hour
+	return r
 }
 
 // seedKeyAt writes one row to one node carrying one map key, so a key exists on
@@ -391,4 +404,161 @@ func TestBackfillTTLCaveatResolvesTheLocalTable(t *testing.T) {
 			t.Errorf("detail = %q, missing %q", findings[0].Detail, want)
 		}
 	}
+}
+
+// How many shards the source's table fans a query out across, read off the
+// cluster definition rather than written into a test.
+//
+// The dead shard cluster is counted too, and that is the point of asserting it:
+// `system.clusters` is a definition, so the count survives the node behind it
+// being gone. A prediction scaled by two on a cluster that answers from one is
+// the right number for the cluster the rule is pointed at, and the evaluation
+// fails on the missing shard anyway.
+func TestCountShardsReadsTheClusterDefinition(t *testing.T) {
+	cases := []struct {
+		name string
+		src  source.Source
+		want fanout
+	}{
+		{
+			name: "both shards",
+			src:  shardedSource(t, "otel_traces_shards"),
+			want: fanout{Shards: 2, Counted: true},
+		},
+		{
+			name: "a shard nothing answers on is still a shard",
+			src:  shardedSource(t, "otel_traces_dead_shard"),
+			want: fanout{Shards: 2, Counted: true},
+		},
+		{
+			// A local table is its own single shard, so nothing is asked of
+			// system.clusters and a single node source never needs the grant.
+			name: "a local table",
+			src:  testSource(t),
+			want: fanout{Shards: 1, Counted: true},
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := openQuerier(t, c.src).countShards(context.Background()); got != c.want {
+				t.Errorf("countShards = %+v, want %+v", got, c.want)
+			}
+		})
+	}
+}
+
+// The predicted cost of a sharded rule is the cluster's, measured against the
+// coordinator's own answer to the same question.
+//
+// Both numbers come from the same server on the same rows, so the assertion is
+// the arithmetic and nothing else: `EXPLAIN ESTIMATE` over the Distributed table
+// answers for the parts on the node it was asked, which is what the local table
+// answers on its own, and the cluster's number is that times the two shards the
+// definition has (spec 6.9).
+func TestCostScalesToTheCluster(t *testing.T) {
+	sharded := openQuerier(t, shardedSource(t, "otel_traces_shards"))
+	local := openQuerier(t, testSource(t))
+
+	seedManySpans(t, local)
+	seedManySpansAt(t, shardTwoAddress(t))
+
+	onNode := estimatedCost(t, local, shardedCostRule("otel_traces"))
+	onCluster := estimatedCost(t, sharded, shardedCostRule("otel_traces_shards"))
+
+	if onNode.Rows == 0 {
+		t.Fatalf("the coordinator estimated %+v, want rows to scale", onNode)
+	}
+	if onCluster.Shards != 2 {
+		t.Errorf("shards = %d, want 2: the number says what it was multiplied by", onCluster.Shards)
+	}
+	if want := onNode.Rows * 2; onCluster.Rows != want {
+		t.Errorf("rows = %d, want %d: the coordinator's %d parts across two shards",
+			onCluster.Rows, want, onNode.Rows)
+	}
+}
+
+// A finding on a sharded rule says the number is a multiplication, because a
+// reader who takes it for a measurement acts on a precision it does not have.
+func TestCostFindingSaysItWasScaled(t *testing.T) {
+	q := openQuerier(t, shardedSource(t, "otel_traces_shards"))
+
+	seedManySpans(t, openQuerier(t, testSource(t)))
+	seedManySpansAt(t, shardTwoAddress(t))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	got, err := q.Inspect(ctx, shardedCostRule("otel_traces_shards"), testGroup,
+		costChecks(100, 1_000_000, time.Minute))
+	if err != nil {
+		t.Fatalf("Inspect: %v", err)
+	}
+	if len(got.Findings) != 1 || got.Findings[0].Check != lint.CheckRuleCost {
+		t.Fatalf("findings = %v, want only %s", got.Findings, lint.CheckRuleCost)
+	}
+	for _, want := range []string{"2 shards", "connected to"} {
+		if !strings.Contains(got.Findings[0].Detail, want) {
+			t.Errorf("detail = %q, want it to carry %q", got.Findings[0].Detail, want)
+		}
+	}
+}
+
+// A user that cannot count the cluster is told its cost was not estimated,
+// rather than having one shard's number compared against the cluster's ceiling.
+//
+// This is the fallback, and what it costs is visible here: the ceiling is one
+// hundred rows, the rows are there to exceed it, and no finding is reported
+// because the number the server handed back was never comparable to it. Wrong in
+// the other direction is worse, because it passes a rule reading twice what the
+// operator allowed and says nothing (spec 6.9).
+func TestCostIsUnestimatedWithoutTheClusterCount(t *testing.T) {
+	src := shardedSource(t, "otel_traces_shards")
+	src.Username = "ruler_uncounted_shards"
+	q := openQuerier(t, src)
+
+	seedManySpans(t, openQuerier(t, testSource(t)))
+	seedManySpansAt(t, shardTwoAddress(t))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	got, err := q.Inspect(ctx, shardedCostRule("otel_traces_shards"), testGroup,
+		costChecks(100, 1_000_000, time.Minute))
+	if err != nil {
+		t.Fatalf("Inspect: %v", err)
+	}
+	if got.Cost == nil {
+		t.Fatal("cost = nil, want the estimate reported as unscaled")
+	}
+	if got.Cost.Status != CostShardsUnknown {
+		t.Errorf("cost = %+v, want the shard count reported unreadable", *got.Cost)
+	}
+	if len(got.Findings) != 0 {
+		t.Errorf("findings = %v, want none: no ceiling applies to a number covering one shard of "+
+			"an unknown count", got.Findings)
+	}
+}
+
+// estimatedCost asks one source what a rule reads every time it evaluates.
+func estimatedCost(t *testing.T, q *Querier, r rule.Rule) CostEstimate {
+	t.Helper()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	c := describeChecks()
+	c.ReportCost = true
+
+	got, err := q.Inspect(ctx, r, testGroup, c)
+	if err != nil {
+		t.Fatalf("Inspect: %v", err)
+	}
+	if got.Cost == nil {
+		t.Fatal("cost = nil, want an estimate")
+	}
+	if got.Cost.Status != CostEstimated {
+		t.Fatalf("cost = %+v, want an estimate the optimiser made", *got.Cost)
+	}
+	return *got.Cost
 }

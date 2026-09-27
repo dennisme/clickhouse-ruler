@@ -190,12 +190,21 @@ func (q *Querier) inspectCost(ctx context.Context, sql string, c Checks) (*CostE
 	} else if finding != nil {
 		return &CostEstimate{Status: CostRefused}, []Finding{*finding}, nil
 	}
-	cost := costFrom(est)
+	// What the server answered covers the parts on the node it was asked, so on
+	// a sharded cluster it is one shard of the fanout and the cluster's number
+	// is that times the shard count (spec 6.9). Asked only when there is
+	// something to scale: an estimate covering no part at all is the same answer
+	// however many shards hold none of it.
+	f := fanout{Shards: 1, Counted: true}
+	if len(est) > 0 {
+		f = q.countShards(ctx)
+	}
+	cost := costFrom(est, f)
 
 	// A query the server estimated nothing for reads no table it tracks this
 	// way: a constant, or a count it can answer from metadata. Nothing to
 	// report, and nothing that would make a ceiling meaningful.
-	detail := overCost(est, c.Cost, c.Interval)
+	detail := overCost(cost, c.Cost, c.Interval)
 	if detail == "" {
 		return &cost, nil, nil
 	}

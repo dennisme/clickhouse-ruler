@@ -38,11 +38,28 @@ func costCell(cost *query.CostEstimate) string {
 		return "not estimated: this source's user cannot read what the rule asks for"
 	case query.CostNoParts:
 		return "not estimated: the server predicts no part will be read"
+	case query.CostShardsUnknown:
+		return "not estimated: this source's shard count could not be read, so what the server " +
+			"answered covers the coordinator's parts alone"
 	case query.CostEstimated:
-		return strconv.FormatUint(cost.Rows, 10)
+		return rowsCell(cost)
 	default:
 		return "not estimated"
 	}
+}
+
+// rowsCell is the number, and how it was arrived at when a cluster's was scaled
+// from a node's.
+//
+// This table is the only place a sharded rule inside its ceilings is told that.
+// `rule/cost` reports on breach, so a comfortable rule raises no finding, and a
+// finding is the only thing a caveat can hang from (spec 6.9, 7.10).
+func rowsCell(cost *query.CostEstimate) string {
+	rows := strconv.FormatUint(cost.Rows, 10)
+	if cost.Shards <= 1 {
+		return rows
+	}
+	return fmt.Sprintf("%s (%d shards)", rows, cost.Shards)
 }
 
 // intervalCell is how often the rule evaluates. A group that set none has no

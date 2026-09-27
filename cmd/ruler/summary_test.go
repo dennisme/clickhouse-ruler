@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/dennisme/clickhouse-ruler/internal/query"
@@ -37,5 +38,35 @@ func TestIntervalCell(t *testing.T) {
 	}
 	if got := intervalCell(30_000_000_000); got != "30s" {
 		t.Errorf("intervalCell(30s) = %q, want %q", got, "30s")
+	}
+}
+
+// A scaled number says so in the cell. rule/cost reports on breach, so a
+// sharded rule within its ceilings raises no finding and this table is the only
+// place it can be told the number is a multiplication (spec 7.10).
+func TestCostCellSaysWhatWasScaled(t *testing.T) {
+	scaled := &query.CostEstimate{Rows: 8254000, Shards: 4, Status: query.CostEstimated}
+	if got, want := costCell(scaled), "8254000 (4 shards)"; got != want {
+		t.Errorf("costCell = %q, want %q", got, want)
+	}
+
+	// One shard is every single node source, and a parenthetical on each of
+	// them is noise rather than a qualification.
+	single := &query.CostEstimate{Rows: 4127000, Shards: 1, Status: query.CostEstimated}
+	if got, want := costCell(single), "4127000"; got != want {
+		t.Errorf("costCell = %q, want %q", got, want)
+	}
+}
+
+// A shard count nobody could read is its own cell, not a number and not the
+// refusal a rule's own table produces: that user cannot read the table, this one
+// can and cannot count the cluster behind it (spec 6.9, 7.10).
+func TestCostCellWithoutAShardCount(t *testing.T) {
+	got := costCell(&query.CostEstimate{Status: query.CostShardsUnknown})
+
+	for _, want := range []string{"not estimated", "shard count", "coordinator"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("costCell = %q, want it to carry %q", got, want)
+		}
 	}
 }

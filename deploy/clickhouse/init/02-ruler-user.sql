@@ -30,8 +30,16 @@ CREATE SETTINGS PROFILE IF NOT EXISTS ruler SETTINGS
 -- SELECT on one table, and nothing else. Not the database: the source names a
 -- table, and a wider grant is invisible both to the checks and to a diff of
 -- the rules repository.
+--
+-- The exception is one column pair of one system table: how many shards the
+-- cluster behind a Distributed table has, so a cost prediction answers for the
+-- cluster rather than for the node the ruler connected to (spec 6.9). It holds
+-- no row a rule could read, which is what makes it affordable where a grant on
+-- data would not be. A single node source never asks for it, and it is granted
+-- here anyway because there is one contract rather than one per topology.
 CREATE ROLE IF NOT EXISTS ruler_reader;
 GRANT SELECT ON otel.otel_traces TO ruler_reader;
+GRANT SELECT(cluster, shard_num) ON system.clusters TO ruler_reader;
 
 CREATE USER IF NOT EXISTS ruler_payments IDENTIFIED WITH no_password SETTINGS PROFILE ruler;
 GRANT ruler_reader TO ruler_payments;
@@ -59,6 +67,7 @@ GRANT REMOTE ON *.* TO ruler_wide;
 -- its own user rather than widening the first's role (spec 6.10).
 CREATE ROLE IF NOT EXISTS ruler_dc2_reader;
 GRANT SELECT ON otel_dc2.otel_traces TO ruler_dc2_reader;
+GRANT SELECT(cluster, shard_num) ON system.clusters TO ruler_dc2_reader;
 
 CREATE USER IF NOT EXISTS ruler_dc2 IDENTIFIED WITH no_password SETTINGS PROFILE ruler;
 GRANT ruler_dc2_reader TO ruler_dc2;

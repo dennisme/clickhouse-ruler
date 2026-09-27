@@ -63,12 +63,22 @@ func TestDistributedTargetReadsTheEngineArguments(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got, ok := distributedTarget(c.engineFull)
+			cluster, got, ok := distributedTarget(c.engineFull)
 			if ok != c.wantOK {
 				t.Fatalf("distributedTarget(%q) ok = %v, want %v", c.engineFull, ok, c.wantOK)
 			}
-			if ok && got != c.want {
+			if !ok {
+				return
+			}
+			if got != c.want {
 				t.Errorf("distributedTarget(%q) = %+v, want %+v", c.engineFull, got, c.want)
+			}
+			// The cluster is read for the same reason the table is: the shard
+			// count behind a cost comes from `system.clusters`, and the only
+			// place the cluster's name is written down is this engine clause
+			// (spec 6.9).
+			if want := "ruler_shards"; cluster != want {
+				t.Errorf("distributedTarget(%q) cluster = %q, want %q", c.engineFull, cluster, want)
 			}
 		})
 	}
