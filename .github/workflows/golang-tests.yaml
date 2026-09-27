@@ -7,6 +7,9 @@ on:
     branches: [main]
   pull_request:
 
+# Fork PRs get a read-only GITHUB_TOKEN, which cannot post a PR comment. The
+# coverage comment is posted by coverage-comment.yaml on workflow_run, with the
+# base repository's token and the artifact the integration job uploads.
 permissions:
   contents: read
   packages: read
@@ -39,28 +42,6 @@ jobs:
 
       - name: Unit tests
         run: just test
-
-      - name: Coverage
-        run: just coverage
-
-      - name: Prepare coverage artifact
-        if: github.event_name == 'pull_request'
-        run: |
-          set -euo pipefail
-          echo -n "${{ github.event.pull_request.number }}" > pr-number.txt
-          test -s pr-number.txt
-          test -f coverage.xml
-
-      - name: Upload coverage report
-        if: github.event_name == 'pull_request'
-        uses: actions/upload-artifact@v4
-        with:
-          name: coverage-report
-          path: |
-            coverage.xml
-            pr-number.txt
-          retention-days: 5
-          if-no-files-found: error
 
   # The tests that need a real ClickHouse, run against more than one version.
   #
@@ -118,5 +99,37 @@ jobs:
       # ClickHouse image and the same init schema developers run locally.
       # compose-down runs even when the tests fail, so a cancelled or broken
       # run leaves no volume behind.
+      #
+      # Coverage is measured here rather than beside the unit tests, because the
+      # checks in internal/query and most of cmd/ruler are proven against a real
+      # ClickHouse. An untagged run credits none of it and reports a number well
+      # below what the tree actually covers.
       - name: Integration tests
-        run: just integration-clean
+        run: just coverage-integration-clean
+
+      # Only the pinned leg, which is the required one. Both legs would collide
+      # on the artifact name, and a number measured against whatever ClickHouse
+      # released this week is not the one to report on a pull request.
+      #
+      # pr-number.txt travels with the report because
+      # workflow_run.pull_requests is often empty for fork PRs, and
+      # commits/{sha}/pulls does not resolve a fork head either.
+      # github.event.pull_request.number is reliable on a pull_request event.
+      - name: Prepare coverage artifact
+        if: matrix.required && github.event_name == 'pull_request'
+        run: |
+          set -euo pipefail
+          echo -n "${{ github.event.pull_request.number }}" > pr-number.txt
+          test -s pr-number.txt
+          test -f coverage.xml
+
+      - name: Upload coverage report
+        if: matrix.required && github.event_name == 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: |
+            coverage.xml
+            pr-number.txt
+          retention-days: 5
+          if-no-files-found: error

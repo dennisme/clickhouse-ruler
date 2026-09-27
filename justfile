@@ -51,9 +51,46 @@ integration-clean: compose-up
     trap 'just compose-down' EXIT
     just integration
 
+# Coverage from the unit tests alone. No container needed.
+#
+# -coverpkg=./... is what makes the number mean anything. Without it a package
+# is credited only for what its own tests reach, so internal/lint/reader.go
+# reads zero while every rule and source file in the tree is parsed through it.
+#
+# The number this prints understates the tree, because the checks in
+# internal/query and most of cmd/ruler are proven against a real ClickHouse and
+# those tests are behind a build tag. `coverage-integration` is the honest one,
+# and is what CI reports.
 coverage:
-    env -u GOROOT GOTOOLCHAIN=auto go test -count=1 ./... \
+    env -u GOROOT GOTOOLCHAIN=auto go test -count=1 -coverpkg=./... ./... \
         -coverprofile coverage.out -covermode count
+    just coverage-report
+
+# Coverage from every test in the tree. Requires the stack: `just compose-up`.
+#
+# One run rather than two profiles merged: the build tag only adds the
+# integration files to the package, so a tagged run executes the untagged unit
+# tests as well and the single profile already covers both.
+#
+# -p 1 for the same reason `integration` uses it: two integration packages at
+# once fight over the webhook sink's fixed port.
+coverage-integration:
+    RULER_CLICKHOUSE_ADDR="{{clickhouse_addr}}" \
+    RULER_ALERTMANAGER_URL="{{alertmanager_url}}" \
+        env -u GOROOT GOTOOLCHAIN=auto go test -tags=integration -count=1 -p 1 \
+        -coverpkg=./... ./... -coverprofile coverage.out -covermode count
+    just coverage-report
+
+# Bring the stack up, measure coverage across every test, then always tear it down.
+coverage-integration-clean: compose-up
+    #!/usr/bin/env bash
+    set -euo pipefail
+    trap 'just compose-down' EXIT
+    just coverage-integration
+
+# Render coverage.out as HTML to read and as cobertura for the pull request comment.
+[private]
+coverage-report:
     env -u GOROOT GOTOOLCHAIN=auto go tool cover -html=coverage.out -o coverage.html
     env -u GOROOT GOTOOLCHAIN=auto go run github.com/boumenot/gocover-cobertura@v1.4.0 \
         --by-files -ignore-gen-files < coverage.out > coverage.xml
