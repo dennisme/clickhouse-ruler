@@ -78,6 +78,11 @@ Evaluation:
 | `clickhouse_ruler_rule_group_last_evaluation_timestamp_seconds` | gauge | `rule_group` |
 | `clickhouse_ruler_rule_group_last_duration_seconds` | gauge | `rule_group` |
 
+Nothing here carries the group's configured interval, and nothing measures how
+late a tick started when it did not overrun one. Both are cadence questions an
+operator asks in the terms of this table and cannot get answers to from it, and
+8.8 says what they need.
+
 A missed iteration means the evaluation took longer than the group interval.
 It is the single most important operational signal here, because alerts are
 then silently late.
@@ -117,10 +122,10 @@ what make the guard rails in 6.7 observable rather than theoretical:
 
 | Metric | Type | Labels |
 | --- | --- | --- |
-| `clickhouse_ruler_query_read_rows_total` | counter | `rule`, `team` |
-| `clickhouse_ruler_query_read_bytes_total` | counter | `rule`, `team` |
+| `clickhouse_ruler_query_read_rows_total` | counter | `rule`, `team`, `source` |
+| `clickhouse_ruler_query_read_bytes_total` | counter | `rule`, `team`, `source` |
 | `clickhouse_ruler_query_memory_usage_bytes` | histogram | `rule` |
-| `clickhouse_ruler_query_duration_seconds` | histogram | `rule` |
+| `clickhouse_ruler_query_duration_seconds` | histogram | `rule`, `rule_group`, `team`, `source` |
 | `clickhouse_ruler_query_queue_wait_seconds` | histogram | `source` |
 
 Source these from the ClickHouse Go driver's progress callbacks rather than
@@ -129,7 +134,8 @@ query itself, so there is no follow up query and no dependency on query log
 retention.
 
 These enable two things worth having: alerting on expensive alert rules, and
-per team chargeback.
+per team chargeback, both per cluster. 8.8 is why `source` is on them and what
+each label costs.
 
 `clickhouse_ruler_query_queue_wait_seconds` is the exception to the `rule` and
 `team` labelling above, because it measures the per-source concurrency limit
@@ -357,8 +363,10 @@ One further omission worth stating rather than discovering. Duration is shown
 against nothing, because the group's interval is configuration and 8.2 exposes
 no metric carrying it. A panel cannot draw the line an operator is meant to
 read the duration against, so it says so in its description instead. Exposing
-the interval as a gauge is the obvious fix and is not free: it is another
-series per group, and it is a metric whose only consumer is a dashboard.
+the interval as a gauge is the obvious fix, and declining it here rested on its
+only consumer being a dashboard. 8.8 is where that stops being true: the interval
+is what every cadence expression is read against, so the gauge is carried there
+with the rest of the cadence work rather than as a panel's convenience.
 
 ### 8.7 The operations page
 
@@ -397,6 +405,298 @@ their own pages and their own generated facts (7.8), and an operations page
 restating a severity default is one more thing to go stale. That applies to the
 item above as much as the rest: it explains the signal and hands the reader to
 the check page, it does not re-explain `rule/attribute-key`.
+
+### 8.8 Query latency, cadence and the lag budget
+
+Three questions an operator asks during an incident that 8.2 does not answer.
+All three are metric shape rather than mechanism, so they are named here rather
+than discovered against a dashboard that renders an empty graph (8.6).
+
+**How long a given cluster's queries take.**
+`clickhouse_ruler_query_duration_seconds` carries `rule` alone, and a rule
+evaluates against every source its selector matches (6.10), so a rule spanning
+four clusters folds four clusters into one histogram. "Is this cluster slow" is
+the first question asked when alerts arrive late and it is the one this metric
+cannot be asked. It needs `source`, which is the label
+`clickhouse_ruler_query_queue_wait_seconds` already carries for the same reason:
+how long a query takes is a property of the cluster as much as of the rule
+pointed at it.
+
+`rule_group` and `team` belong on it as well, for separate reasons. `rule_group`
+because the group is the scheduling unit (6.11), so a group's query latency
+against its interval is the arithmetic behind a missed iteration, and the
+existing `clickhouse_ruler_rule_evaluation_duration_seconds` is whole-tick wall
+time across concurrently evaluated rules rather than what any query took. `team`
+because rows and bytes carry it and duration does not, so chargeback can say what
+a team read and not what they made the cluster spend time on.
+
+None of the three multiplies cardinality the way 8.3 warns about. A rule belongs
+to one group and carries one `team`, so both are determined by the `rule` label
+and add no series. `source` multiplies by the fanout of a rule's selector, which
+is the number of clusters an operator deliberately pointed it at, and it is the
+same multiplier the cost counters take below.
+
+Any of them can be dropped again. A histogram's series count is its label set
+times its buckets, so these are the most expensive metrics here to widen, and a
+deployment that finds the fanout too dear should lose a dimension rather than
+lose the metric. `team` goes first, because the cost counters already answer
+ownership and latency by team is a convenience on top of them. `rule_group` goes
+next, because a group's cadence is answered by the group metrics and this label
+only saves a join. `source` is the one that cannot go: without it the question
+that started this section has no answer at all. Dropping a label is a one line
+change and 8.3 is the rule it is measured against, not this table.
+
+**Rows and bytes take `source` in the same slice, and that is chargeback per
+cluster.** The cost counters carry `rule` and `team`, so they say what a team read
+and not where they read it. A team whose rules span a shared cluster and a cluster
+of their own gets one number covering both, which is the number nobody can act on:
+the shared cluster is where their reading costs somebody else something, and it is
+the only part of their bill an operator can negotiate about. The same label
+answers the smaller question that comes first, which is which cluster a bill came
+from when the total moved and no rule changed.
+
+Counters are the cheap half of this. One series each, no buckets, so `source` on
+rows and bytes costs the selector fanout and nothing more, against a histogram
+where the same label multiplies every bucket.
+
+`clickhouse_ruler_query_memory_usage_bytes` stays on `rule` alone until somebody
+asks. Peak memory is a property of the query rather than of the cluster it ran on,
+the cap it is read against in 6.7 is the same wherever the rule evaluates, and it
+is a six bucket histogram that would pay the fanout for a reading nobody has
+needed yet.
+
+Once the cost counters carry `source`, a source leaving the configuration has to
+take their series with it, the way queue wait's already does. Left behind, they
+read as a cluster this ruler still bills for.
+
+**The wiring already knows all three, which is why this is one slice and not
+three.** `internal/query` receives a `query.Attribution` carrying the group and
+the team, because `log_comment` needs the group already (8.5), and the querier
+holds its own source. So nothing has to be threaded from the scheduler: what
+changes is the `Recorder` signature and the adapter in `cmd/ruler` that satisfies
+it, and the adapter exists precisely so neither side learns the other's
+vocabulary. One signature carries the whole cost family, which is the argument for
+doing duration and the counters together rather than adding `source` to one now
+and to the other when the first chargeback question arrives.
+
+**How far apart one alert's runs are.** Per alert this cannot be answered and
+will not be. Scheduling is per group: one goroutine per group, and the rules
+inside it evaluated concurrently on one tick (6.11). The spacing of an alert's
+runs is the spacing of its group's ticks, and an operator asking about a single
+alert is asking about its group whether they know it or not. Answering in the
+group's terms is the accurate answer; anything per rule would be a number we
+invented.
+
+**This is not a divergence from Prometheus, and that is worth having checked.**
+Read against `rules/group.go` and `rules/manager.go` upstream, the cadence model
+is the same one in every part an operator can observe. There is no per-rule
+interval there either: every rule in a group shares the group's single
+`interval`. The stagger is the same construction, an offset of
+`hash(name, file) mod interval`, which is what ours computes from the same two
+fields. An overrun skips the boundaries that passed and counts them rather than
+running them late, under a metric whose suffix we already carry. The interval
+gauge proposed below is `prometheus_rule_group_interval_seconds` by another
+prefix, labelled by the same group key, so it is a name that carries over rather
+than one we coined (8.2).
+
+One thing does differ, and it runs the other way from a divergence an operator
+would have to learn. Upstream evaluates a group's rules sequentially unless the
+`concurrent-rule-eval` feature flag is set, because a recording rule can feed the
+next rule in the file and the order is part of the contract. We evaluate them
+concurrently always (6.11), and we can because there are no recording rules here:
+an alerting rule has no dependents, so there is no order to preserve. The
+observable effect is that a group's tick costs its slowest rule rather than the
+sum of all of them, which makes our missed iterations rarer than the same
+configuration would produce upstream. Cadence expressions carried over from a
+Prometheus ruler therefore read correctly here, and read better.
+
+`docs/operations.md` says the per-group part in a sentence next to the cadence
+expressions, because the question arrives as "why was my alert late" rather than
+as a question about groups, and somebody who has to infer the scheduling unit
+from a label name will infer it wrong.
+
+The group's spacing is nearly reported already. A group advances an absolute
+schedule rather than sleeping for its interval, so an observed gap is the
+interval or an exact multiple of it, and the multiples are counted by
+`clickhouse_ruler_rule_group_iterations_missed_total`. Two things sit between
+that counter and the question as asked.
+
+The configured interval is not a series, so nothing can express how far from it a
+run landed. 8.6 records this as a dashboard omission and declines it there as a
+metric whose only consumer is a panel. That reasoning does not survive this
+section. The interval is what every cadence expression here is read against, and
+without it an operator hardcodes a number that the rule file is free to change
+under them.
+
+Delay inside an interval is not measured at all. A tick can fire exactly on
+schedule and start late: the goroutine is woken by the clock, then the evaluation
+waits on the ruler-wide concurrency cap or on the source's own (6.11). The
+scheduler's wrapper holds both the scheduled tick time and the actual start, and
+observes the difference nowhere. This is the signal that catches a ruler running
+late without ever overrunning an interval, which is the case
+`clickhouse_ruler_rule_group_iterations_missed_total` reads as healthy.
+
+So, two more series per group:
+
+| Metric | Type | Labels |
+| --- | --- | --- |
+| `clickhouse_ruler_rule_group_interval_seconds` | gauge | `rule_group` |
+| `clickhouse_ruler_rule_group_tick_delay_seconds` | histogram | `rule_group` |
+
+Both are removed with their group like everything else labelled `rule_group`
+(8.2), and the gauge is set from the configuration on every load, so a group
+whose interval changed reports the interval it is now running rather than the one
+it started on.
+
+**Whether any of this can carry a promise.** Not end to end, and the reason is
+worth stating exactly, because "no latency SLO" and "no promise about anything"
+are different answers.
+
+The delay from a condition becoming true in ClickHouse to a notification leaving
+the ruler is a sum, and its terms do not share an owner:
+
+```text
+delivery lag  =  evaluation_delay        the operator's configuration (6.8)
+              +  0..interval             scheduling granularity
+              +  tick delay              ours
+              +  queue wait              ours (6.11)
+              +  query duration          the rule's SQL, and the cluster
+              +  for                     the rule author's configuration
+              +  notification latency    ours, and the operator's Alertmanager
+```
+
+Three terms are ours. The rest are the operator's cluster, the operator's
+configuration and the author's SQL, and a single figure covering those would be a
+promise about somebody else's hardware. An end to end latency target from us
+would be that figure, which is why there is not one.
+
+What ships instead is the formula and a metric for every term, so the operator
+sets the number for their own deployment and can see which term spent the budget.
+That is the same posture as 8.2 on routing `clickhouse_ruler_problem`: the
+mechanism and the reading are ours, the threshold is theirs, and leading a horse
+to water is the whole of the offer.
+
+The three terms that are ours are the ones a claim could later be made about.
+Tick delay stays near zero while a group's evaluation fits inside its interval.
+Queue wait is zero unless the source sets `max_concurrent_queries`, so a
+non-empty histogram means a limit exists and is being reached. Notification
+latency is one send to an Alertmanager the operator runs. Naming them is not
+targeting them: a target needs a deployment somebody has operated, and nobody has
+operated this one, so the numbers wait for evidence rather than being chosen here.
+
+**The expressions.** These are what the section is for, because a formula an
+operator has to translate into PromQL is a formula they will not use. The two
+that need only the cost labels are on the operations page and on the dashboard,
+which is 8.7's first item. The cadence ones wait on the two group metrics above:
+a panel querying a metric nobody exposes renders an empty graph, which looks
+exactly like a healthy system (8.6), so they live here until that lands.
+
+How long a cluster's queries take, which is the question that started this
+section:
+
+```promql
+histogram_quantile(0.99, sum by (source, le) (
+  rate(clickhouse_ruler_query_duration_seconds_bucket[5m])
+))
+```
+
+Swap `source` for `rule`, `rule_group` or `team` for the same reading by alert,
+by group or by owner. Add the wait for a slot to get what the rule actually
+waited, which is the number the operator feels rather than the one the database
+reports:
+
+```promql
+histogram_quantile(0.99, sum by (source, le) (
+  rate(clickhouse_ruler_query_duration_seconds_bucket[5m])
+))
++ histogram_quantile(0.99, sum by (source, le) (
+  rate(clickhouse_ruler_query_queue_wait_seconds_bucket[5m])
+))
+```
+
+That addition is why `source` is the label queue wait already carries and the
+one duration cannot do without: the two join on it and on nothing else.
+
+What a team read, and from which cluster, which is the chargeback the counters
+exist for:
+
+```promql
+sum by (team, source) (rate(clickhouse_ruler_query_read_bytes_total[1h]))
+```
+
+An empty `team` is a rule nobody has claimed rather than a rule owned by the empty
+string, and it is left visible for the reason 8.2 gives: chargeback that hides
+what is unattributed is chargeback nobody can reconcile.
+
+A group's query latency against its own interval, as a fraction, so one
+expression covers a fleet whose groups run on different intervals:
+
+```promql
+histogram_quantile(0.99, sum by (rule_group, le) (
+  rate(clickhouse_ruler_query_duration_seconds_bucket[5m])
+))
+/ max by (rule_group) (clickhouse_ruler_rule_group_interval_seconds)
+```
+
+Approaching 1 is a group about to miss iterations. This is the panel 8.6 says
+draws its duration against nothing today.
+
+How far apart a group's runs actually were, against how far apart they were
+configured to be, which is the ask in 2 stated as it was asked:
+
+```promql
+3600 / increase(clickhouse_ruler_rule_group_iterations_total[1h])
+- max by (rule_group) (clickhouse_ruler_rule_group_interval_seconds)
+```
+
+Zero means the group ran on its interval for the hour. A positive number is the
+mean seconds of spacing above the configured interval, and it can only be
+positive: an absolute schedule cannot run early. Where the time went is the next
+two expressions, and they are different faults. Whole intervals lost:
+
+```promql
+increase(clickhouse_ruler_rule_group_iterations_missed_total[1h]) > 0
+```
+
+Lateness inside an interval, which the counter above reads as healthy:
+
+```promql
+histogram_quantile(0.99, sum by (rule_group, le) (
+  rate(clickhouse_ruler_rule_group_tick_delay_seconds_bucket[1h])
+))
+```
+
+And the budget itself, per group, as far as series can carry it:
+
+```promql
+  max by (rule_group) (clickhouse_ruler_rule_group_interval_seconds)
++ histogram_quantile(0.99, sum by (rule_group, le) (
+    rate(clickhouse_ruler_rule_group_tick_delay_seconds_bucket[1h])
+  ))
++ histogram_quantile(0.99, sum by (rule_group, le) (
+    rate(clickhouse_ruler_query_duration_seconds_bucket[1h])
+  ))
++ histogram_quantile(0.99, sum by (le) (
+    rate(clickhouse_ruler_notification_latency_seconds_bucket[1h])
+  ))
+```
+
+**It is a floor, and saying so is the point.** Two terms of the budget are
+configuration rather than measurement: `evaluation_delay` on the source (6.8) and
+`for` on the rule. Neither is a series, and neither should become one to make this
+expression tidier, because an operator reads both out of the files they wrote.
+The expression answers what the ruler contributed, they add their own two numbers,
+and the sum is their alerting delay. An expression that quietly omitted the two
+largest terms in many deployments and called itself the lag would be worse than
+no expression.
+
+**What we do with it is nothing, deliberately.** The same stance as
+`clickhouse_ruler_problem` in 8.2: what ships is the expression, what it means and
+which term to go after, and nothing that writes into somebody's Alertmanager. An
+operator who wants an alert when their budget is spent has the query, and an
+operator who does not want one is not carrying a rule they never asked for. We
+can recommend it and we cannot impose it, and a threshold we picked for a cluster
+we have never seen is one they would silence anyway.
 
 ---
 
