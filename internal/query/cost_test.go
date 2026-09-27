@@ -75,12 +75,12 @@ func TestEstimatedRows(t *testing.T) {
 // The rate is what the ceiling is really about: the same query is cheap
 // hourly and ruinous every fifteen seconds.
 func TestRowsPerSecond(t *testing.T) {
-	if got := rowsPerSecond(120000, 30*time.Second); got != 4000 {
+	if got := RowsPerSecond(120000, 30*time.Second); got != 4000 {
 		t.Errorf("rate = %v, want 4000", got)
 	}
 	// No interval is a rule whose group did not set one. Nothing to divide
 	// by, so the rate ceiling does not apply rather than dividing by zero.
-	if got := rowsPerSecond(120000, 0); got != 0 {
+	if got := RowsPerSecond(120000, 0); got != 0 {
 		t.Errorf("rate = %v, want 0 when no interval is known", got)
 	}
 }

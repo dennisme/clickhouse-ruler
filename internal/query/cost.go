@@ -11,6 +11,7 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2"
 
 	"github.com/dennisme/clickhouse-ruler/internal/lint"
+	"github.com/dennisme/clickhouse-ruler/internal/policy"
 )
 
 // Estimate is what ClickHouse predicts one table will contribute to a query.
@@ -162,10 +163,48 @@ func estimatedRows(est []Estimate) uint64 {
 	return total
 }
 
-// rowsPerSecond is what an evaluation costs against the clock. Zero when no
+// CostFromPolicy resolves the ceilings rule/cost counts against, and returns
+// nil when the check is off or nobody configured one.
+//
+// A ceiling the resolved policy left out keeps its shipped default rather than
+// becoming zero, which would report every rule an operator never said anything
+// about (spec 7.3, 7.7).
+func CostFromPolicy(p *policy.Policy) *Cost {
+	setting := p.For(lint.CheckRuleCost)
+	if setting.Severity == lint.SeverityOff {
+		return nil
+	}
+
+	rows, hasRows := setting.Limit(lint.LimitRowsRead)
+	rate, hasRate := setting.Limit(lint.LimitRowsPerSecond)
+	if !hasRows && !hasRate {
+		return nil
+	}
+
+	d := policy.Defaults().For(lint.CheckRuleCost)
+	if !hasRows {
+		rows, _ = d.Limit(lint.LimitRowsRead)
+	}
+	if !hasRate {
+		rate, _ = d.Limit(lint.LimitRowsPerSecond)
+	}
+	// Both are non-negative by construction: Setting.Limit refuses a ceiling
+	// that is not a whole number at or above zero. The guard is here so the
+	// conversion is provably safe to a reader and to the linter, not because a
+	// negative can arrive.
+	if rows < 0 {
+		rows = 0
+	}
+	if rate < 0 {
+		rate = 0
+	}
+	return &Cost{MaxRows: uint64(rows), MaxRowsPerSecond: float64(rate)}
+}
+
+// RowsPerSecond is what an evaluation costs against the clock. Zero when no
 // interval is known, which is a rule whose group did not set one: there is
 // nothing to divide by, so the rate ceiling does not apply.
-func rowsPerSecond(rows uint64, interval time.Duration) float64 {
+func RowsPerSecond(rows uint64, interval time.Duration) float64 {
 	if interval <= 0 {
 		return 0
 	}
@@ -179,7 +218,7 @@ func overCost(est []Estimate, limit *Cost, interval time.Duration) string {
 		return ""
 	}
 	rows := estimatedRows(est)
-	rate := rowsPerSecond(rows, interval)
+	rate := RowsPerSecond(rows, interval)
 
 	var over []string
 	if rows > limit.MaxRows {

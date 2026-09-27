@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/dennisme/clickhouse-ruler/internal/alert"
+	"github.com/dennisme/clickhouse-ruler/internal/lint"
 	"github.com/dennisme/clickhouse-ruler/internal/notify"
 	"github.com/dennisme/clickhouse-ruler/internal/query"
 	"github.com/dennisme/clickhouse-ruler/internal/rule"
@@ -20,7 +21,7 @@ import (
 // Querier runs one rule and returns a sample per matched row. query.Querier
 // satisfies this; the interface exists so a test can stand in for ClickHouse.
 type Querier interface {
-	Run(ctx context.Context, r rule.Rule, who query.Attribution, now time.Time) ([]alert.Sample, error)
+	Run(ctx context.Context, r rule.Rule, who query.Attribution, now time.Time) (query.Evaluation, error)
 }
 
 // Reasons a source produced no samples that are not the query's own error.
@@ -89,6 +90,23 @@ type Result struct {
 	// a delivery problem, not an evaluation problem (spec 6.5).
 	SendError error
 
+	// Problems holds what comparing this evaluation against the previous one
+	// found: a rule the schema moved under, sources that stopped agreeing, or
+	// a query whose measured cost crossed its ceilings (spec 6.3.2). They are
+	// reported and never acted on, so a rule appearing here has kept its alert
+	// state and is still paging.
+	//
+	// Empty means nothing was found, but only when Compared says the
+	// comparison ran at all.
+	Problems []lint.Problem
+
+	// Compared says at least one source answered, so Problems is this rule's
+	// current answer and the gauge built from it can be rebuilt. False is a
+	// pass that could not ask: blanking the gauge then would resolve every
+	// finding at once and read as a schema somebody fixed, so the previous
+	// answer is left standing (spec 8.2).
+	Compared bool
+
 	// Pending and Firing are counts of currently tracked instances across
 	// every matched source, for the clickhouse_ruler_alerts_active gauge. Counts only:
 	// labelling that gauge by alert instance would turn the ruler into the
@@ -108,6 +126,10 @@ type RuleEval struct {
 	cadence  *notify.Cadence
 	states   map[string]*alert.State
 
+	// drift compares each evaluation against the last one. Per rule, and per
+	// source inside it, which is the grain the comparison is at (spec 6.3.2).
+	drift *drift
+
 	// limits bound how many of this rule's sources are queried at once,
 	// shared with every other rule so the ruler-wide cap is the ruler's and
 	// each source's cap is that cluster's, not one rule's.
@@ -124,7 +146,14 @@ func NewRuleEval(r ruleset.Rule, queriers map[string]Querier, cadence *notify.Ca
 	for _, src := range r.Sources {
 		states[src.Name] = alert.New(r.Rule, r.Labels, src, resolvedRetention)
 	}
-	return &RuleEval{rule: r, queriers: queriers, cadence: cadence, states: states, limits: limits}
+	return &RuleEval{
+		rule:     r,
+		queriers: queriers,
+		cadence:  cadence,
+		states:   states,
+		limits:   limits,
+		drift:    newDrift(r),
+	}
 }
 
 // attribution is what this rule's queries are recorded against: its group,
@@ -158,6 +187,11 @@ func (e *RuleEval) Evaluate(ctx context.Context, now time.Time) Result {
 		err         error
 		annotations []alert.AnnotationError
 
+		// shape and usage are what the drift comparison reads out of an
+		// evaluation that succeeded (spec 6.3.2).
+		shape []query.Column
+		usage query.Usage
+
 		// acquired says the query got its source slot, so wait is a real
 		// measurement rather than the zero value of a query that never ran.
 		acquired bool
@@ -186,18 +220,19 @@ func (e *RuleEval) Evaluate(ctx context.Context, now time.Time) Result {
 				return
 			}
 			results[i].acquired, results[i].wait = true, wait
-			samples, err := q.Run(ctx, e.rule.Rule, e.attribution(), now)
+			evaluation, err := q.Run(ctx, e.rule.Rule, e.attribution(), now)
 			release()
 
 			if err != nil {
 				results[i].err = err
 				return
 			}
+			results[i].shape, results[i].usage = evaluation.Shape, evaluation.Usage
 			// State.Eval returns every instance still tracked, pending and
 			// firing, plus anything that resolved this tick. It fails when two
 			// rows reached one identity, which leaves its state untouched and
 			// so reports exactly like a failed query (spec 6.3).
-			alerts, annotations, err := e.states[name].Eval(now, samples)
+			alerts, annotations, err := e.states[name].Eval(now, evaluation.Samples)
 			if err != nil {
 				results[i].err = err
 				return
@@ -209,6 +244,12 @@ func (e *RuleEval) Evaluate(ctx context.Context, now time.Time) Result {
 		}(i, src.Name, q)
 	}
 	wg.Wait()
+
+	// Only the sources that answered, in source order: a cluster the query
+	// failed against has not drifted, and leaving its baseline standing means
+	// the next successful evaluation is compared against the last real result
+	// rather than against nothing.
+	var answered []evaluated
 
 	var current []alert.Alert
 	for i, r := range results {
@@ -224,7 +265,17 @@ func (e *RuleEval) Evaluate(ctx context.Context, now time.Time) Result {
 			res.SourceErrors = append(res.SourceErrors, SourceError{Source: name, Err: r.err})
 			continue
 		}
+		answered = append(answered, evaluated{
+			source: e.rule.Sources[i],
+			shape:  r.shape,
+			usage:  r.usage,
+		})
 		current = append(current, r.alerts...)
+	}
+
+	if len(answered) > 0 {
+		res.Compared = true
+		res.Problems = e.drift.inspect(answered, now)
 	}
 
 	for _, a := range current {

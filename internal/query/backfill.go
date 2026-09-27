@@ -145,7 +145,11 @@ type sequentialReplay struct {
 }
 
 func (s sequentialReplay) evaluate(ctx context.Context, at time.Time) ([]alert.Sample, error) {
-	return s.q.Run(ctx, s.r, s.who, at)
+	// A replay counts alerts, so it reads the samples and nothing else: what
+	// the result looked like and what it cost belong to the evaluations a
+	// running ruler compares against each other (spec 6.3.2).
+	evaluation, err := s.q.Run(ctx, s.r, s.who, at)
+	return evaluation.Samples, err
 }
 
 // Backfill replays a rule over a past range and reports how many alerts it

@@ -1,8 +1,6 @@
 package main
 
 import (
-	"fmt"
-	"sort"
 	"strings"
 
 	"github.com/dennisme/clickhouse-ruler/internal/lint"
@@ -32,10 +30,6 @@ type sourceColumns struct {
 // nothing here knows which cluster is the correct one. A source that reported
 // the same difference as another still gets its own line, since which cluster
 // disagrees is the part an operator acts on.
-//
-// Only the names and the types are compared. Column order decides nothing: an
-// alert's labels are keyed by name (spec 6.3), so two sources returning the
-// same columns in a different order produce the same alerts.
 func schemaDisagreements(answered []sourceColumns) []string {
 	// One answer cannot disagree with anything. A rule matching a single
 	// source arrives here that way, and so does a rule whose second source
@@ -47,58 +41,13 @@ func schemaDisagreements(answered []sourceColumns) []string {
 	}
 
 	reference := answered[0]
-	referenceTypes := typesByName(reference.columns)
 
 	var out []string
 	for _, other := range answered[1:] {
-		otherTypes := typesByName(other.columns)
-
-		for _, name := range union(referenceTypes, otherTypes) {
-			refType, inReference := referenceTypes[name]
-			otherType, inOther := otherTypes[name]
-
-			switch {
-			case inReference && inOther && refType != otherType:
-				out = append(out, fmt.Sprintf("source %s returns %s as %s and source %s returns it as %s",
-					reference.source, name, refType, other.source, otherType))
-			case inReference && !inOther:
-				out = append(out, fmt.Sprintf("source %s returns %s and source %s does not",
-					reference.source, name, other.source))
-			case inOther && !inReference:
-				out = append(out, fmt.Sprintf("source %s returns %s and source %s does not",
-					other.source, name, reference.source))
-			}
-		}
+		out = append(out, query.Differences(
+			reference.columns, other.columns,
+			"source "+reference.source, "source "+other.source)...)
 	}
-	return out
-}
-
-// typesByName indexes a result by column name, which is the key everything
-// downstream reads it by.
-func typesByName(cols []query.Column) map[string]string {
-	out := make(map[string]string, len(cols))
-	for _, c := range cols {
-		out[c.Name] = c.Type
-	}
-	return out
-}
-
-// union is every column name either result carries, sorted, so a finding lists
-// them the same way on every run.
-func union(a, b map[string]string) []string {
-	seen := make(map[string]bool, len(a)+len(b))
-	for name := range a {
-		seen[name] = true
-	}
-	for name := range b {
-		seen[name] = true
-	}
-
-	out := make([]string, 0, len(seen))
-	for name := range seen {
-		out = append(out, name)
-	}
-	sort.Strings(out)
 	return out
 }
 

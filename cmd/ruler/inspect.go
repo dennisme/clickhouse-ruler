@@ -302,33 +302,7 @@ func checksFromPolicy(p *policy.Policy, r ruleset.Rule, src source.Source) query
 		// a rate. A group that set none leaves it zero, and the rate ceiling
 		// then does not apply rather than dividing by zero (spec 7.3).
 		c.Interval = r.Group.Interval
-
-		rows, hasRows := cost.Limit(lint.LimitRowsRead)
-		rate, hasRate := cost.Limit(lint.LimitRowsPerSecond)
-
-		if hasRows || hasRate {
-			d := policy.Defaults().For(lint.CheckRuleCost)
-			if !hasRows {
-				rows, _ = d.Limit(lint.LimitRowsRead)
-			}
-			if !hasRate {
-				rate, _ = d.Limit(lint.LimitRowsPerSecond)
-			}
-			// Both are non-negative by construction: Setting.Limit refuses a
-			// ceiling that is not a whole number at or above zero. The guard
-			// is here so the conversion is provably safe to a reader and to
-			// the linter, not because a negative can arrive.
-			if rows < 0 {
-				rows = 0
-			}
-			if rate < 0 {
-				rate = 0
-			}
-			c.Cost = &query.Cost{
-				MaxRows:          uint64(rows),
-				MaxRowsPerSecond: float64(rate),
-			}
-		}
+		c.Cost = query.CostFromPolicy(p)
 	}
 	if cx := p.For(lint.CheckRuleComplexity); cx.Severity != lint.SeverityOff {
 		joins, hasJoins := cx.Limit(lint.LimitJoins)

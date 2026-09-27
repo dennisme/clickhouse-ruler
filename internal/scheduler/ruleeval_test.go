@@ -22,17 +22,22 @@ type fakeQuerier struct {
 	samples []alert.Sample
 	err     error
 
+	// shape and usage are what the drift comparison reads, so a test can make
+	// one evaluation differ from the next without a database.
+	shape []query.Column
+	usage query.Usage
+
 	// calls is atomic because rules in a group are evaluated concurrently and
 	// several can share one source's querier.
 	calls atomic.Int64
 }
 
-func (q *fakeQuerier) Run(context.Context, rule.Rule, query.Attribution, time.Time) ([]alert.Sample, error) {
+func (q *fakeQuerier) Run(context.Context, rule.Rule, query.Attribution, time.Time) (query.Evaluation, error) {
 	q.calls.Add(1)
 	if q.err != nil {
-		return nil, q.err
+		return query.Evaluation{}, q.err
 	}
-	return q.samples, nil
+	return query.Evaluation{Samples: q.samples, Shape: q.shape, Usage: q.usage}, nil
 }
 
 // recordingSender captures what a Cadence actually posts, without an HTTP

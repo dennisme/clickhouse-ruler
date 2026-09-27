@@ -156,10 +156,11 @@ func TestEndToEndFiringAlertReachesAlertmanager(t *testing.T) {
 		}
 		defer func() { _ = q.Close() }()
 
-		samples, err := q.Run(ctx, r.Rule, query.Attribution{Group: r.GroupID(), Team: r.Team()}, now)
+		evaluation, err := q.Run(ctx, r.Rule, query.Attribution{Group: r.GroupID(), Team: r.Team()}, now)
 		if err != nil {
 			t.Fatalf("running rule against %s: %v", src.Name, err)
 		}
+		samples := evaluation.Samples
 		if len(samples) == 0 {
 			t.Fatalf("%s returned no rows, the rule would never fire", src.Name)
 		}
