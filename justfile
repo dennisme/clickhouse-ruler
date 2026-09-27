@@ -166,5 +166,13 @@ docs-serve:
 docs-build:
     mkdocs build --strict
 
+# Build the release artifacts locally, without a tag.
+#
+# Same code path the tag workflow runs, so a broken .goreleaser.yaml fails here
+# rather than on a tag that cannot be taken back. Writes archives and
+# checksums.txt to dist/, which is gitignored.
+release-snapshot:
+    goreleaser release --snapshot --clean
+
 # Everything CI runs, in the order CI runs it.
 check: lint build test generate-check markdownlint

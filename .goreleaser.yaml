@@ -1,0 +1,57 @@
+# yaml-language-server: $schema=https://goreleaser.com/static/schema.json
+version: 2
+
+project_name: clickhouse-ruler
+
+before:
+  hooks:
+    - go mod tidy
+    - go test ./...
+
+builds:
+  - id: ruler
+    main: ./cmd/ruler
+    binary: ruler
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -trimpath
+    # Version is the only symbol worth stamping: the commit, the build time and
+    # whether the tree was dirty come from the toolchain's own vcs record, which
+    # internal/buildinfo reads back at runtime.
+    ldflags:
+      - -s -w
+      - -X github.com/dennisme/clickhouse-ruler/internal/buildinfo.Version={{ .Version }}
+
+archives:
+  - formats: [tar.gz]
+    name_template: >-
+      {{ .ProjectName }}_
+      {{- .Version }}_
+      {{- title .Os }}_
+      {{- if eq .Arch "amd64" }}x86_64
+      {{- else }}{{ .Arch }}{{ end }}
+    files:
+      - LICENSE
+      - README.md
+
+checksum:
+  name_template: checksums.txt
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"
+
+# Release notes via GitHub's generate-notes API (merged PRs with full PR URLs).
+# Required for real PR links: this repo merges with "Create a merge commit", so
+# subjects are plain "feat: …" without "(#N)". Commit-log backends cannot
+# invent PR associations; github-native can.
+#
+# Groups / format / filters are not applied with github-native.
+changelog:
+  use: github-native
