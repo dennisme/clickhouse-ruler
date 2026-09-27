@@ -31,10 +31,11 @@ const (
 	CheckRuleFor       = "rule/for"
 	CheckRuleWindow    = "rule/window"
 
-	CheckLabelsRequired      = "labels/required"
-	CheckAnnotationsRequired = "annotations/required"
-	CheckAnnotationsRunbook  = "annotations/runbook"
-	CheckAnnotationsTemplate = "annotations/template"
+	CheckLabelsRequired       = "labels/required"
+	CheckAnnotationsRequired  = "annotations/required"
+	CheckAnnotationsRunbook   = "annotations/runbook"
+	CheckAnnotationsTemplate  = "annotations/template"
+	CheckAnnotationsProtected = "annotations/protected"
 
 	CheckRuleSourceMatch    = "rule/source-match"
 	CheckRuleSourceSchema   = "rule/source-schema"
@@ -250,6 +251,18 @@ var checks = []Check{
 	{
 		Name: CheckAnnotationsTemplate, Spec: "7.6", Default: SeverityWarning,
 		Summary: "an annotation that is not a parseable template",
+	},
+
+	// Fixed for a different reason than rule/protected-label. Alertmanager
+	// matches on labels alone, so an annotation the ruler owns misroutes
+	// nothing. It is fixed because an Alertmanager template builds a
+	// PagerDuty title and a Slack message out of annotations, so the field a
+	// responder reads is the field the ruler overwrites, and it overwrites it
+	// on the evaluation whose template already failed, which is the one
+	// nobody is watching (spec 6.5).
+	{
+		Name: CheckAnnotationsProtected, Spec: "6.5", Fixed: true,
+		Summary: "a rule setting an annotation the ruler owns, which the ruler overwrites on a failed template",
 	},
 
 	// Configurable for a different reason than the rest: whether a rule can

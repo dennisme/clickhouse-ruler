@@ -173,6 +173,7 @@ with the finding so it can be silenced or grepped:
 | `annotations/runbook` | a `runbook_url` that is not an absolute http or https URL |
 | `annotations/template` | an annotation that is not a parseable Go template |
 | `rule/protected-label` | a query aliasing `team`, `alertname`, `source` or a source identity label, or a `labels` block setting `alertname` or `source` |
+| `annotations/protected` | an `annotations` block setting a key the ruler owns, any name starting with `ruler_` |
 
 `rule/source-match` and `rule/protected-label` need the sources file as well
 as the rule, so they run in the loader rather than the rule parser. They still
@@ -594,6 +595,12 @@ its job:
   scans unbounded on every evaluation.
 - `rule/for`, `rule/window`, negative values. Nonsense.
 - `rule/protected-label`. Breaks routing (6.3.1).
+- `annotations/protected`. An annotation named `ruler_*` is overwritten by the
+  ruler on a failed template, and that is the evaluation nobody is watching.
+  Alertmanager routes on labels, so nothing here misroutes, and the field is
+  still what a responder reads: `summary` and its neighbours are what an
+  Alertmanager template builds a PagerDuty title out of. Off would restore the
+  silent overwrite the check exists to stop (6.5).
 - `rule/settings`. The clause replaces the limits the ruler sends with every
   evaluation, so softening this check would soften every cost control behind
   it at once (7.3). The tier 1 checks that cannot be configured for a

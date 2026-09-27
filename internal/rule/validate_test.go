@@ -210,6 +210,41 @@ func TestValidate(t *testing.T) {
 			},
 		},
 		{
+			// NamesTheRulerDoesNotOwn must not be reported: the reserved
+			// name is the prefix ruler_, so an annotation merely mentioning
+			// the ruler is the author's own field (spec 6.5).
+			fixture: "annotations_protected.yaml",
+			want: []lint.Problem{
+				{
+					File:     "testdata/annotations_protected.yaml",
+					Line:     15,
+					Subject:  "ReservedName",
+					Check:    "annotations/protected",
+					Severity: lint.SeverityError,
+					Text: `annotation "ruler_error" uses the reserved prefix "ruler_", ` +
+						`which the ruler writes and would overwrite`,
+				},
+				{
+					File:     "testdata/annotations_protected.yaml",
+					Line:     27,
+					Subject:  "TwoReservedNames",
+					Check:    "annotations/protected",
+					Severity: lint.SeverityError,
+					Text: `annotation "ruler_error" uses the reserved prefix "ruler_", ` +
+						`which the ruler writes and would overwrite`,
+				},
+				{
+					File:     "testdata/annotations_protected.yaml",
+					Line:     26,
+					Subject:  "TwoReservedNames",
+					Check:    "annotations/protected",
+					Severity: lint.SeverityError,
+					Text: `annotation "ruler_owner" uses the reserved prefix "ruler_", ` +
+						`which the ruler writes and would overwrite`,
+				},
+			},
+		},
+		{
 			// NoFor and ExplicitZeroFor must not be reported. Firing on the
 			// first evaluation is a legitimate choice, and warning about it
 			// would fire on most rules in a repository.

@@ -453,50 +453,75 @@ fail: a `runbook_url` is often a fixed link while a `summary` interpolates
 result columns, so discarding the set on the first failure tends to lose the
 annotation a responder needed in order to keep the one that broke. Neither is
 guaranteed, since a templated runbook is legal (7.3). The annotation that failed
-carries its own error
-as its value, where a human reading the page will see it, and the failure is
-logged once per rule and source (8.4). Prometheus does the same, substituting
-`<error expanding template: ...>`, on the reasoning that a ruler which drops a
-page over a bad summary is worse than one that pages with a bad summary.
+carries a marker naming itself, where a human reading the page will see that
+something is wrong, and the failure is logged once per rule and source (8.4).
+Prometheus substitutes the whole error instead, on the reasoning that a ruler
+which drops a page over a bad summary is worse than one that pages with a bad
+summary. The reasoning is the same here and the substitution is not; the
+paragraphs below are why.
 
 Whether a broken template should have reached production at all is a check-time
 question, not a runtime one. `annotations/template` reports it at authoring
 time, and an operator who wants it to block sets that check to `error` (7.6).
 
-**Not settled: which field the error lands in, and who hears about it.** Writing
-the error into the annotation's own value makes that field dynamic, and a
-consumer may be relying on it being a known string: Alertmanager groups,
-inhibits and silences on labels alone, so nothing here can split or merge an
-incident, but `summary` is what a PagerDuty title or a Slack message is built
-from and what any downstream automation parses. Three shapes, and the third is
-the one to build:
+**Which field the error lands in.** Writing the error into the annotation's own
+value makes that field dynamic, and a consumer may be relying on it being a
+known string: Alertmanager groups, inhibits and silences on labels alone, so
+nothing here can split or merge an incident, but `summary` is what a PagerDuty
+title or a Slack message is built from and what any downstream automation
+parses. Three shapes were considered, and the third is what is built:
 
 1. Leave the failed annotation out. The cleanest model and the worst page: a
    template printing `{{ .Annotations.summary }}` prints nothing, so the alert
    looks blank, which is the failure this section exists to avoid.
-2. Keep the whole error as the value, which is what happens today and what
-   Prometheus does. Never blank, at the cost of a Go template error in the field
-   a consumer treated as stable.
-3. A short bounded marker in the failed annotation and the error beside it in one
-   the ruler owns. `summary` becomes something like `<ruler: annotation "summary"
-   failed>`, greppable and fixed in length, and the ruler's own annotation carries
-   `annotation "summary": template: summary:1:25: executing "summary" at <.p99>:
-   map has no entry for key "p99"`. A consumer wanting a known string gets a short
-   one with a fixed prefix, a responder still sees that something is wrong, and a
-   machine has one field to read.
+2. Keep the whole error as the value, which is what Prometheus does. Never
+   blank, at the cost of a Go template error in the field a consumer treated as
+   stable.
+3. A short bounded marker in the failed annotation and the error beside it in
+   one the ruler owns. `summary` becomes `<ruler: annotation "summary" failed>`,
+   greppable and fixed in length, and `ruler_error` carries `annotation
+   "summary": template: summary:1:25: executing "summary" at <.p99>: map has no
+   entry for key "p99"`. A consumer wanting a known string gets a short one with
+   a fixed prefix, a responder still sees that something is wrong, and a machine
+   has one field to read.
 
-**A ruler-owned annotation is a name collision, and the answer is a check rather
-than a warning in the docs.** `rule/protected-label` already refuses a rule whose
-result columns produce a label the ruler owns (7.3), and an annotation the ruler
-writes is the same problem one field over, so the reserved name belongs in the
-`annotations/*` family as a check of its own. Documenting it instead leaves an
-author's `ruler_error` silently overwritten on the evaluation that fails, which is
-the one evaluation nobody is watching.
+A rule with more than one failed annotation gets one marker in each and one
+`ruler_error` holding every error, in annotation name order, joined with a
+semicolon and a space.
+One field rather than one per failure, because a consumer reading the errors has
+one name to know, and the value is bounded by how many annotations the rule has
+rather than by how many rows it returned.
 
-**And the owner has to hear about it, which is what the shape above is for.** A
-failed template is the rule author's defect, found only while running because a
-check never sees real data. Today it reaches three places and none of them is the
-author: the annotation reaches whoever is paged, who is often not the author and
+Built.
+
+**A ruler-owned annotation is a name collision, and the answer is a check.**
+`rule/protected-label` already refuses a rule whose result columns produce a
+label the ruler owns (7.3), and an annotation the ruler writes is the same
+problem one field over. The reserved name is `ruler_`, a prefix rather than the
+single name `ruler_error`, so the next field the ruler owns needs no second
+reserved name and no second line in the docs. Prometheus reserves `__` for the
+same reason. `annotations/protected` refuses a rule whose `annotations` block
+sets any key starting with `ruler_`.
+
+It is tier 0 and fixed at `error`, and the reason is not
+`rule/protected-label`'s reason. A label collision breaks routing;
+Alertmanager matches on labels alone, so this one cannot. It is fixed because
+annotations are what a human reads: an Alertmanager template builds the
+PagerDuty title and the Slack message out of them, so the field a responder
+reads is the field the ruler overwrites, and it overwrites it on the
+evaluation that already failed, which is the one nobody is watching.
+Documenting the name instead leaves that overwrite silent.
+
+The check is configurable in neither severity nor name, which is deliberate:
+`severity: off` would restore exactly the silent overwrite the check exists to
+stop, and a configurable reserved name is a second escape hatch for one
+collision. An author already emitting `ruler_*` from a tool they are migrating
+off can be answered by renaming the ruler's own field, which is a change here
+rather than a knob, and nobody has asked for it.
+
+**Not settled: who hears about it.** A failed template is the rule author's
+defect, found only while running because a check never sees real data. Today it
+reaches three places and none of them is the author: the annotation reaches whoever is paged, who is often not the author and
 cannot fix it mid-incident; the log line names the group, the rule, the source and
 the annotation but carries no team and no file; and
 `clickhouse_ruler_annotation_failures_total` carries neither either, and counts
@@ -512,6 +537,13 @@ shipped somewhere the annotation on that alert can point at. An operator who shi
 no logs gets the team, the file and which annotation broke, and not the error
 itself. The finding is deliberately not a second copy of the Go error, which is
 already on the page and in the log.
+
+What that needs and this half does not have: the alert state holds a rule's
+labels and its source and not the file it was read from, so raising a finding
+that names a file means carrying the rule's origin into evaluation, and the
+finding has to clear on the first evaluation that renders clean or it becomes a
+gauge nobody trusts. Both are a slice of their own, and the field half above is
+useful without them.
 
 Templates are compiled once per rule rather than per evaluation, because they
 are fixed for the rule's lifetime and a rule returning a thousand rows would

@@ -358,7 +358,11 @@ func TestEvalGroupLogsABrokenAnnotationWithoutFailingTheSend(t *testing.T) {
 	if sent.Annotations["runbook_url"] != "https://runbooks.internal/broken-summary" {
 		t.Errorf("runbook_url = %q, want it delivered", sent.Annotations["runbook_url"])
 	}
-	if !strings.Contains(sent.Annotations["summary"], "error expanding template") {
-		t.Errorf("summary = %q, want the failure carried in the annotation", sent.Annotations["summary"])
+	if want := `<ruler: annotation "summary" failed>`; sent.Annotations["summary"] != want {
+		t.Errorf("summary = %q, want %q", sent.Annotations["summary"], want)
+	}
+	if !strings.Contains(sent.Annotations[rule.ErrorAnnotation], "NoSuchColumn") {
+		t.Errorf("%s = %q, want the error itself", rule.ErrorAnnotation,
+			sent.Annotations[rule.ErrorAnnotation])
 	}
 }

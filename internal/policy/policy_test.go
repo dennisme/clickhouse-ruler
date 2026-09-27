@@ -43,6 +43,29 @@ func TestParseReadsSeverityAndKeys(t *testing.T) {
 	}
 }
 
+// The reserved annotation prefix is enforced by a check an operator cannot
+// turn down, so a policy file naming it is refused like any other correctness
+// check: off would restore the silent overwrite the check exists to stop
+// (spec 6.5).
+func TestParseRejectsConfiguringAnnotationsProtected(t *testing.T) {
+	_, problems := Parse("testdata/annotations_protected.yaml",
+		readFixture(t, "annotations_protected.yaml"))
+
+	if len(problems) != 1 {
+		t.Fatalf("got %d problems, want 1: %v", len(problems), problems)
+	}
+	got := problems[0]
+	if got.Check != lint.CheckPolicyFixed {
+		t.Errorf("check = %q, want %q", got.Check, lint.CheckPolicyFixed)
+	}
+	if got.Severity != lint.SeverityError {
+		t.Errorf("severity = %v, want error", got.Severity)
+	}
+	if got.Line != 2 {
+		t.Errorf("line = %d, want 2", got.Line)
+	}
+}
+
 // Naming a correctness check in the config has to fail loudly. Accepting it
 // silently would leave an operator believing they had softened a check that
 // still errors, which is worse than refusing.
