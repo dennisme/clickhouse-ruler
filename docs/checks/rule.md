@@ -350,10 +350,10 @@ annotations:
 
 An annotation that is not a parseable template.
 
-The alert still fires and still pages: the failure lands in the annotation
-text rather than stopping the notification. An operator who would rather a
-broken template never reach a pager raises this to `error`, which refuses the
-file instead. Whether a variable names a column the query actually returns is
+The alert still fires and still pages: the annotation carries a marker naming
+itself, `ruler_error` carries the error, and the notification goes out. An
+operator who would rather a broken template never reach a pager raises this to
+`error`, which refuses the file instead. Whether a variable names a column the query actually returns is
 a different question, answered against the query's real output columns rather
 than its text.
 

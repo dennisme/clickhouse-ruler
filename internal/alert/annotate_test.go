@@ -41,8 +41,11 @@ func TestEvalKeepsTheAnnotationsThatRendered(t *testing.T) {
 	if got["description"] != "p99 is 1200ms" {
 		t.Errorf("description = %q, want it rendered", got["description"])
 	}
-	if !strings.Contains(got["summary"], "error expanding template") {
-		t.Errorf("summary = %q, want the failure visible in the annotation", got["summary"])
+	if want := `<ruler: annotation "summary" failed>`; got["summary"] != want {
+		t.Errorf("summary = %q, want %q", got["summary"], want)
+	}
+	if !strings.Contains(got[rule.ErrorAnnotation], "NoSuchColumn") {
+		t.Errorf("%s = %q, want the error itself", rule.ErrorAnnotation, got[rule.ErrorAnnotation])
 	}
 
 	// The failure still has to be reported, or an author never learns the

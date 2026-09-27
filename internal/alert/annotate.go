@@ -6,6 +6,8 @@ import (
 	"strconv"
 	"strings"
 	"text/template"
+
+	"github.com/dennisme/clickhouse-ruler/internal/rule"
 )
 
 // valueKey is how a template reaches the alert's value. Lower case because it
@@ -33,13 +35,14 @@ type AnnotationError struct {
 // column that is not there would take the useful annotations down with the
 // broken one.
 //
-// A failed annotation carries its failure as its value, so the page still goes
-// out and a human reading it can see which annotation is broken. A missing key
-// is a failure rather than an empty string for the same reason: a page reading
+// A failed annotation carries a short fixed marker, so the page still goes out
+// and a human reading it can see which annotation is broken. A missing key is a
+// failure rather than an empty string for the same reason: a page reading
 // "  p99 is  ms" costs the responder their first minutes, and the failure would
-// be invisible until someone is already awake. Prometheus does the same, on the
-// grounds that a ruler which drops a page over a bad summary is worse than one
-// that pages with a bad summary.
+// be invisible until someone is already awake. Prometheus writes the whole error
+// into the field instead; the marker is short and the same every time because
+// summary is what a PagerDuty title is built from and what automation parses,
+// and the error an author needs goes in ErrorAnnotation beside it (spec 6.5).
 func annotate(annotations map[string]*template.Template, parseErrs map[string]error, a Alert) (map[string]string, []AnnotationError) {
 	if len(annotations) == 0 && len(parseErrs) == 0 {
 		return nil, nil
@@ -66,6 +69,7 @@ func annotate(annotations map[string]*template.Template, parseErrs map[string]er
 
 	out := make(map[string]string, len(names))
 	var failures []AnnotationError
+	var errors []string
 
 	for _, name := range names {
 		err := parseErrs[name]
@@ -77,8 +81,17 @@ func annotate(annotations map[string]*template.Template, parseErrs map[string]er
 				continue
 			}
 		}
-		out[name] = fmt.Sprintf("<error expanding template: %s>", err)
+		out[name] = fmt.Sprintf("<ruler: annotation %q failed>", name)
+		errors = append(errors, err.Error())
 		failures = append(failures, AnnotationError{Annotation: name, Err: err})
+	}
+
+	// One field rather than one per failure: a consumer reading the errors has
+	// one name to know, and the value is bounded by how many annotations the
+	// rule has rather than by how many rows it returned. Absent when everything
+	// rendered, so a template testing for it is testing for a real failure.
+	if len(errors) > 0 {
+		out[rule.ErrorAnnotation] = strings.Join(errors, "; ")
 	}
 	return out, failures
 }

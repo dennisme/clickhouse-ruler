@@ -25,9 +25,15 @@ var timeBoundVars = []struct {
 	{"{{ .To }}", regexp.MustCompile(`\{\{-?\s*\.To\s*-?\}\}`), "upper time bound"},
 }
 
-// reservedAnnotationPrefix is the annotation namespace the ruler writes into,
-// carrying the error from an annotation whose template failed (spec 6.5).
-const reservedAnnotationPrefix = "ruler_"
+// ReservedAnnotationPrefix is the annotation namespace the ruler writes into,
+// and ErrorAnnotation is the field in it that carries the error from an
+// annotation whose template failed (spec 6.5). A rule setting either is refused
+// by annotations/protected, so the ruler can write them without losing an
+// author's value.
+const (
+	ReservedAnnotationPrefix = "ruler_"
+	ErrorAnnotation          = ReservedAnnotationPrefix + "error"
+)
 
 // Validate runs every offline check against a parsed rule file and returns all
 // findings. It never stops at the first, because a tool that surfaces one
@@ -235,12 +241,12 @@ func sortedNames(block map[string]string) []string {
 // the ruler owns needs no second reserved name.
 func (v *validator) annotationsProtected(r Rule) {
 	for _, name := range sortedNames(r.Annotations) {
-		if !strings.HasPrefix(name, reservedAnnotationPrefix) {
+		if !strings.HasPrefix(name, ReservedAnnotationPrefix) {
 			continue
 		}
 		v.add(r, r.LineOf("annotations."+name, "annotations"), lint.CheckAnnotationsProtected,
 			"annotation %q uses the reserved prefix %q, which the ruler writes and would overwrite",
-			name, reservedAnnotationPrefix)
+			name, ReservedAnnotationPrefix)
 	}
 }
 
