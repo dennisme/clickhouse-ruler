@@ -192,9 +192,10 @@ That is the property we are copying. Everything else follows from it.
    thousands of engineers page off means high availability, missed evaluation
    handling, clock skew, ClickHouse restarts mid window, and backfill after an
    outage. Revisit before anyone depends on it in production.
-3. **Sharded clusters.** `skip_unavailable_shards` is now pinned to `0`, so a
-   dead shard fails the evaluation rather than silently resolving alerts. The
-   rest of 6.9 is outstanding: `address` takes a single node, the cost caps
+3. **Sharded clusters.** `skip_unavailable_shards` is pinned to `0`, and a
+   two node stack with an unreachable shard proves it: the evaluation fails
+   rather than silently resolving the alerts that shard held. The rest of 6.9
+   is outstanding: `address` takes a single node, the cost caps
    are per shard rather than per query, and `evaluation_delay` has to cover
    the slowest shard. Proving any of it needs a second ClickHouse node in the
    compose stack, since one node cannot reproduce the failure. What `table:`

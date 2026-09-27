@@ -410,7 +410,7 @@ stubbed collector.
 `compose.yaml`, all image versions pinned. Items 1 and 4 exist today; the rest
 arrive with the scheduler.
 
-1. **ClickHouse**, single node today. Schema in `deploy/clickhouse/init`, the
+1. **ClickHouse**, two nodes. Schema in `deploy/clickhouse/init`, the
    OpenTelemetry Collector ClickHouse exporter trace table reproduced verbatim
    from `exporter/clickhouseexporter` in `opentelemetry-collector-contrib`:
    same columns, types, codecs, skip indexes, `PARTITION BY` and `ORDER BY`.
@@ -418,7 +418,12 @@ arrive with the scheduler.
    works against real collector output, and it keeps `ResourceAttributes`
    available, which is where `deployment.environment`, `service.namespace` and
    the `k8s.*` keys live. Only the engine and the TTL differ, and both are
-   local-development concerns. A second node arrives with 6.9.
+   local-development concerns. Both nodes run the same image and the same init,
+   so the ruler's user and its one table exist on each, and the clusters in
+   `deploy/clickhouse/cluster.xml` put a `Distributed` table over them: one over
+   both shards and one whose second shard never answers. That second cluster is
+   the only way to find out what an evaluation does when part of a cluster is
+   gone, which is what 6.9 needed the node for.
 2. **OpenTelemetry collector**, ClickHouse exporter, batch timeout set low so
    data lands in seconds rather than tens of seconds.
 3. **Telemetry generators.** Two of them, see 9.2.

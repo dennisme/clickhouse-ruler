@@ -1,0 +1,72 @@
+<?xml version="1.0"?>
+<!-- The cluster definitions the sharded tests read, mounted on both nodes.
+
+     A distributed query is the one part of this tool that cannot be tested on
+     a single node. ClickHouse answers a query whose shard is unreachable in
+     one of two ways depending on skip_unavailable_shards: it fails, or it
+     returns the rows the surviving shards held and reports success. The second
+     answer is the dangerous one, because missing rows look exactly like a
+     recovered condition, so alerts resolve during the outage that should have
+     paged someone. The ruler pins the setting to 0 and the reference profile
+     pins it CONST, and both of those claims need a real shard to be missing
+     before they mean anything (spec 6.9).
+
+     Two clusters, because the tests need a working fanout and a broken one.
+
+     The dead shard points at an address nothing answers on rather than at a
+     container the test stops. Stopping a container is slow, it needs docker
+     control from inside a test, and it leaves the stack changed for whatever
+     runs next: `just integration` runs one package at a time, so the next
+     package would inherit a cluster missing a node. An address that never
+     answers is the same failure to a distributed query, and it is the same
+     failure every time.
+
+     The address is 192.0.2.1, from the range RFC 5737 reserves for
+     documentation, so it is unroutable everywhere and belongs to nobody. A
+     hostname that does not resolve fails too, but slowly: ClickHouse retries a
+     failed DNS lookup with a backoff and the evaluation takes twenty five
+     seconds to give up. An unroutable address fails on connect instead, which
+     is a couple of seconds.
+
+     The inter-node user is the restricted one from 02-ruler-user.sql, which is
+     what a real cluster looks like: the ruler's user exists on every node and
+     reads one table there. Nothing here needs an administrator. -->
+<clickhouse>
+    <remote_servers>
+        <!-- Two shards, both reachable. -->
+        <ruler_shards>
+            <shard>
+                <replica>
+                    <host>clickhouse</host>
+                    <port>9000</port>
+                    <user>ruler_payments</user>
+                </replica>
+            </shard>
+            <shard>
+                <replica>
+                    <host>clickhouse2</host>
+                    <port>9000</port>
+                    <user>ruler_payments</user>
+                </replica>
+            </shard>
+        </ruler_shards>
+
+        <!-- One reachable shard and one that never resolves. -->
+        <ruler_dead_shard>
+            <shard>
+                <replica>
+                    <host>clickhouse</host>
+                    <port>9000</port>
+                    <user>ruler_payments</user>
+                </replica>
+            </shard>
+            <shard>
+                <replica>
+                    <host>192.0.2.1</host>
+                    <port>9000</port>
+                    <user>ruler_payments</user>
+                </replica>
+            </shard>
+        </ruler_dead_shard>
+    </remote_servers>
+</clickhouse>

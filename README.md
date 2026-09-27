@@ -191,8 +191,10 @@ Working:
 - `SIGHUP` re-reads the rules, sources and policy files and replaces what is
   running, keeping the `for` timer of every alert already pending and refusing
   a version that fails a correctness check.
-- A ClickHouse and Alertmanager compose stack, with an end to end test taking
-  a rule from a file all the way to a delivered notification.
+- A two node ClickHouse and Alertmanager compose stack, with an end to end test
+  taking a rule from a file all the way to a delivered notification, and a
+  `Distributed` table over a cluster with a dead shard so the evaluation is
+  proven to fail rather than to resolve the alerts that shard held.
 - A rule that broke while running, reported to whoever owns it: every
   evaluation is compared against the one before it, so a column dropped or
   retyped under the query, two clusters that stopped agreeing on what a rule
@@ -219,9 +221,13 @@ Known gaps that will change:
   [operations](https://dennisme.github.io/clickhouse-ruler/operations/#what-a-restart-loses).
 
 - Sharded clusters are only partly handled. `skip_unavailable_shards` is
-  pinned to `0`, so a dead shard fails the evaluation rather than silently
-  resolving alerts, but `address` still takes a single node and the cost caps
-  are per shard. See spec 6.9.
+  pinned to `0`, and a two node stack with an unreachable shard proves what
+  that buys: the evaluation fails rather than returning half the cluster's rows
+  and resolving the alerts the missing shard held. Still outstanding is the
+  rest: `address` takes a single node rather than a list, the cost caps are
+  enforced per shard rather than per query, `evaluation_delay` has to cover the
+  slowest shard, and what `table:` names on a sharded cluster is undecided. See
+  spec 6.9.
 
 ## Development
 

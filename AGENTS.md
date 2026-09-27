@@ -66,6 +66,12 @@ just integration
 just compose-down
 ```
 
+The stack runs two ClickHouse nodes. The second one is a shard: the clusters in
+`deploy/clickhouse/cluster.xml` put a `Distributed` table over both, and one of
+them has a shard that never answers, which is how the sharded tests find out
+what an evaluation does when part of a cluster is gone (spec 6.9). Tests reach
+it through `RULER_CLICKHOUSE_ADDR_2`, and only to seed it.
+
 `CLICKHOUSE_IMAGE` points the stack at another server, which is how the readers
 that parse `EXPLAIN` output are checked against a version they were not written
 for. CI runs the pinned version as a required job and the newest release as an
