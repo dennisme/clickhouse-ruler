@@ -4,10 +4,14 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
+
 	"github.com/dennisme/clickhouse-ruler/internal/lint"
 	"github.com/dennisme/clickhouse-ruler/internal/policy"
 	"github.com/dennisme/clickhouse-ruler/internal/query"
 	"github.com/dennisme/clickhouse-ruler/internal/ruleset"
+	"github.com/dennisme/clickhouse-ruler/internal/scheduler"
 	"github.com/dennisme/clickhouse-ruler/internal/source"
 )
 
@@ -133,4 +137,43 @@ func TestPrivilegesSkippedWhenOff(t *testing.T) {
 	if privilegesEnabled(setting) {
 		t.Error("privilegesEnabled = true with no assertions required, want false")
 	}
+}
+
+// A source failing the contract is visible on clickhouse_ruler_problem while the
+// ruler runs, not only on the stream it started on (spec 8.2, 6.7.3).
+func TestPublishContractProblems(t *testing.T) {
+	reg := prometheus.NewPedanticRegistry()
+	m := scheduler.NewMetrics(reg)
+
+	problems := []lint.Problem{
+		lint.NewProblem("sources.yaml", 12, lint.CheckSourcePrivileges, lint.SeverityWarning,
+			"clusters-readable: cannot count the cluster's shards"),
+	}
+	problems[0].Subject = "payments_shards"
+
+	publishContractProblems(m, problems)
+
+	if got := contractGauge(t, m, "sources.yaml", "payments_shards", lint.SeverityWarning); got != 1 {
+		t.Errorf("gauge = %v, want the failing source raised", got)
+	}
+
+	// Rebuilt rather than incremented, so a grant an operator added stops being
+	// a series on the next reload instead of alerting forever.
+	publishContractProblems(m, nil)
+	if got := contractGauge(t, m, "sources.yaml", "payments_shards", lint.SeverityWarning); got != 0 {
+		t.Errorf("gauge = %v, want the finding cleared once the contract holds", got)
+	}
+}
+
+// contractGauge is what the operator's gauge carries for one source failing the
+// contract, which names the user and carries no rule (spec 8.2).
+func contractGauge(t *testing.T, m *scheduler.Metrics, file, src string, severity lint.Severity) float64 {
+	t.Helper()
+
+	g, err := m.SourceProblem.GetMetricWithLabelValues(
+		src, lint.CheckSourcePrivileges, severity.String(), file)
+	if err != nil {
+		t.Fatalf("reading the gauge: %v", err)
+	}
+	return testutil.ToFloat64(g)
 }

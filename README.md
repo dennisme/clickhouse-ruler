@@ -211,16 +211,21 @@ Not planned: generating your Alertmanager route tree. That file is yours and
 already under your own review policy, so writing into it is not this tool's
 job. The rest of the non-goals are in [spec 5](spec.md#5-non-goals).
 
-Known gaps that will change:
+Limits to know about, accepted rather than waiting on work:
 
-- A restart loses pending alert state. `ActiveAt` is held in memory, so every
-  alert part way through its `for` starts again, and one whose condition clears
-  inside that second `for` never pages. Firing alerts survive, because
-  Alertmanager holds them until the expiry on the last send. Reloading keeps
-  pending alerts; restarting does not. See
-  [operations](https://dennisme.github.io/clickhouse-ruler/operations/#what-a-restart-loses).
+- A restart loses pending alert state, and that is the answer rather than a
+  gap. `ActiveAt` is held in memory, so every alert part way through its `for`
+  starts again, and one whose condition clears inside that second `for` never
+  pages. Firing alerts survive, because Alertmanager holds them until the expiry
+  on the last send. Keeping the state means granting the ruler somewhere to write
+  and owning a schema and a retention policy for it, to buy back one `for` of
+  latency on a restart, and Prometheus behaves the same way when its own state
+  series is unavailable. So reload rather than restart: `SIGHUP` keeps pending
+  alerts. See
+  [operations](https://dennisme.github.io/clickhouse-ruler/operations/#what-a-restart-loses)
+  and spec 11.
 
-- Sharded clusters are handled, with two limits to know about.
+- Sharded clusters are handled, with two limits of their own.
   `skip_unavailable_shards` is pinned to `0`, and a two node stack with an
   unreachable shard proves what that buys: the evaluation fails rather than
   returning half the cluster's rows and resolving the alerts the missing shard

@@ -12,9 +12,12 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/prometheus/client_golang/prometheus"
+
 	"github.com/dennisme/clickhouse-ruler/internal/lint"
 	"github.com/dennisme/clickhouse-ruler/internal/policy"
 	"github.com/dennisme/clickhouse-ruler/internal/ruleset"
+	"github.com/dennisme/clickhouse-ruler/internal/scheduler"
 )
 
 // writeSources writes a sources file naming one ClickHouse user, so a test
@@ -180,9 +183,18 @@ func TestRunRefusesASourceFailingTheContract(t *testing.T) {
 	var stderr bytes.Buffer
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 
-	refused := refusedSources(context.Background(), path, set, root, &stderr, log)
+	m := scheduler.NewMetrics(prometheus.NewPedanticRegistry())
+
+	refused := refusedSources(context.Background(), path, set, root, m, &stderr, log)
 	if !refused["otel_traces"] {
 		t.Fatalf("refused = %v, want the over-privileged source: %s", refused, stderr.String())
+	}
+
+	// The same finding on the gauge, against a real cluster: an operator reads
+	// this while the ruler runs rather than only on the stream it started on
+	// (spec 8.2).
+	if got := contractGauge(t, m, path, "otel_traces", lint.SeverityError); got != 1 {
+		t.Errorf("gauge = %v, want the refused source raised", got)
 	}
 
 	refuseSources(set, refused)

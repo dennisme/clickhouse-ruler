@@ -7,10 +7,13 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+
 	"github.com/dennisme/clickhouse-ruler/internal/lint"
 	"github.com/dennisme/clickhouse-ruler/internal/policy"
 	"github.com/dennisme/clickhouse-ruler/internal/query"
 	"github.com/dennisme/clickhouse-ruler/internal/ruleset"
+	"github.com/dennisme/clickhouse-ruler/internal/scheduler"
 	"github.com/dennisme/clickhouse-ruler/internal/source"
 )
 
@@ -120,10 +123,12 @@ func refusedSources(
 	file string,
 	set *ruleset.Set,
 	root *policy.Policy,
+	m *scheduler.Metrics,
 	stderr io.Writer,
 	log *slog.Logger,
 ) map[string]bool {
 	problems := checkPrivileges(ctx, file, matchedSources(set), root)
+	publishContractProblems(m, problems)
 	if len(problems) == 0 {
 		return nil
 	}
@@ -140,6 +145,27 @@ func refusedSources(
 		}
 	}
 	return refused
+}
+
+// publishContractProblems puts what the contract check found on
+// clickhouse_ruler_source_problem, so a source failing it is visible while the
+// ruler runs rather than only on the stream it was started on.
+//
+// Its own gauge rather than clickhouse_ruler_problem, which reports rules to
+// whoever owns them: a missing grant is the operator's to add, so the two are
+// alerted on by different people and neither expression has any business
+// matching the other's findings (spec 8.2).
+//
+// Rebuilt rather than incremented, the way the rule feeds are: a grant an
+// operator added has to stop being a series on the next load, or the alert
+// outlives the fix. Scoped to this check rather than resetting the gauge, so a
+// later source-level feed cannot be blanked by this one.
+func publishContractProblems(m *scheduler.Metrics, problems []lint.Problem) {
+	m.SourceProblem.DeletePartialMatch(prometheus.Labels{"check": lint.CheckSourcePrivileges})
+
+	for _, p := range problems {
+		m.SourceProblem.WithLabelValues(p.Subject, p.Check, p.Severity.String(), p.File).Set(1)
+	}
 }
 
 // matchedSources lists every source a loaded rule matched, once each.

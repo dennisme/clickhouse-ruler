@@ -37,6 +37,7 @@ type Metrics struct {
 
 	RulesUnmatched *prometheus.GaugeVec
 	Problem        *prometheus.GaugeVec
+	SourceProblem  *prometheus.GaugeVec
 
 	BuildInfo *prometheus.GaugeVec
 
@@ -178,6 +179,28 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 			Name: "clickhouse_ruler_problem",
 			Help: "Rules that broke while running, by check. Fixed by whoever owns the rule, not by the operator.",
 		}, []string{"rule", "check", "severity", "team", "file"}),
+
+		// The same idea for the other audience, and a second gauge rather than
+		// a label on the one above.
+		//
+		// A source whose user does not meet the contract in 6.7.2 is the
+		// operator's to fix, where everything on Problem is the rule owner's, so
+		// the two are routed to different people and an alert on one has no
+		// business matching the other. They also carry different labels, keep
+		// different lifecycles, and the union would give every series of both
+		// two permanently empty dimensions: a rule finding names the source
+		// inside its own text, and a contract finding has no rule to name
+		// because nothing about a rule is broken by a missing grant.
+		//
+		// Cardinality is sources times contract assertions, bounded by the
+		// sources file, and it is rebuilt on each load rather than incremented,
+		// for the reason Problem is: a grant an operator added has to stop being
+		// a series or the alert outlives the fix (spec 8.2, 6.7.3).
+		SourceProblem: f.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "clickhouse_ruler_source_problem",
+			Help: "Sources whose ClickHouse user does not meet the contract the checks rely on, by check. " +
+				"Fixed by the operator.",
+		}, []string{"source", "check", "severity", "file"}),
 
 		// What the two reload gauges say, and deliberately not the same thing.
 		//

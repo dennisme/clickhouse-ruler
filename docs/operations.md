@@ -295,6 +295,8 @@ clickhouse_ruler_problem > 0
 addressed to whoever operates the ruler. A rule can pass every check, merge,
 run correctly for months, and then the schema moves under it. Nothing in the
 file changed, so CI has nothing to run and a reload has nothing to re-read.
+Its sibling below, [a source that does not meet the
+contract](#a-source-that-does-not-meet-the-contract), is the one that is yours.
 
 Two things feed it, on two clocks. Every evaluation of a rule is compared
 against the one before it, which costs no query and answers within one group
@@ -354,6 +356,40 @@ Each feed clears only its own checks, so an evaluation cannot blank the
 re-check pass's answer and the pass cannot blank an evaluation's. That also means
 a `rule/attribute-key` finding outlives a fix by up to one `--recheck-interval`:
 nothing re-asks until the pass runs again.
+
+### A source that does not meet the contract
+
+```promql
+clickhouse_ruler_source_problem > 0
+```
+
+**Yours to fix, unlike the gauge above it.** The contract check runs against
+every source at startup and on every reload, and what it finds is raised here as
+well as printed on the stream the ruler was started on, so a ruler that has been
+up for a month still reports it.
+
+| Label | What it says |
+| --- | --- |
+| `source` | Which source's ClickHouse user does not meet the contract. |
+| `file` | The sources file to edit. |
+| `check` | Always `source/privileges`, and the name of the page that explains it: [the check pages](checks/index.md). |
+| `severity` | What the same finding would do in CI. |
+
+Which assertion failed is in the finding's text and in the log line beside it,
+rather than in a label, because the text carries the grant to add and a label
+would carry only its name.
+
+Nothing is refused unless the check is set to `error` severity, in which case
+that source is not connected to at all and the rules that matched it evaluate
+nowhere. At the default warning it is the quiet case: every rule evaluates, and a
+guarantee the other checks lean on is simply not there. The `clusters-readable`
+assertion is the one where nothing else looks different at all, because a shard
+count nobody can read leaves [`rule/cost`](checks/rule.md#rule-cost) applying no
+ceiling.
+
+It is rebuilt on each load rather than incremented, so a grant you added stops
+being a series the next time the files are read. `SIGHUP` is how you ask for that
+without a restart.
 
 ### A reload the ruler refused
 

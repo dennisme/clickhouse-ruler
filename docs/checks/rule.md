@@ -883,9 +883,18 @@ multiplies it by the shard count from `system.clusters` before comparing it
 against either ceiling, and says so in the finding, because the product assumes
 the shards hold roughly the same amount rather than measuring them.
 
+Shards are often not even: a hot sharding key, a shard added later that
+ClickHouse never rebalanced into, a different retention on one node, or writes
+sent straight to a local table all leave one shard holding more than another. The
+error runs both ways, so treat a scaled number as the order of magnitude it is
+good for. What measures a cluster read rather than predicting it is an
+evaluation, and the rows and bytes each rule really reads are already recorded
+per rule and per team once it runs.
+
 That needs one grant the user contract asks for, `SELECT(cluster, shard_num) ON
-system.clusters`. Without it the cost is reported as not estimated and no ceiling
-is applied: a shard's number compared against a cluster's ceiling would pass a
+system.clusters`, and `source/privileges` reports a source that is missing it as
+`clusters-readable`, once per source rather than once per rule. Without it the
+cost is reported as not estimated and no ceiling is applied: a shard's number compared against a cluster's ceiling would pass a
 rule reading several times what an operator allowed, and would do it silently.
 The cost table on a pull request carries the same answer per rule, whether it
 breached a ceiling or not.

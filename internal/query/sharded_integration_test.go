@@ -562,3 +562,53 @@ func estimatedCost(t *testing.T, q *Querier, r rule.Rule) CostEstimate {
 	}
 	return *got.Cost
 }
+
+// The grant behind the shard count, reported by the contract check rather than
+// left to the silence a fallback would otherwise be.
+//
+// Three sources, three answers, which is the whole of the assertion: the
+// reference user counts its cluster, a user missing the one grant fails and is
+// told which grant to add, and a single node source passes without being asked
+// because nothing requests a shard count for one shard (spec 6.7.2, 6.9).
+func TestClustersReadableAssertsTheShardCountGrant(t *testing.T) {
+	uncounted := shardedSource(t, "otel_traces_shards")
+	uncounted.Username = "ruler_uncounted_shards"
+
+	local := testSource(t)
+	local.Username = "ruler_uncounted_shards"
+
+	cases := []struct {
+		name string
+		src  source.Source
+		want Status
+	}{
+		{name: "the reference user", src: shardedSource(t, "otel_traces_shards"), want: StatusPass},
+		{name: "a user that cannot count the cluster", src: uncounted, want: StatusFail},
+		{name: "a single node source is never asked", src: local, want: StatusPass},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			q := openQuerier(t, c.src)
+
+			got := q.Privileges(context.Background(), []string{lint.AssertionClustersReadable})
+
+			if len(got) != 1 {
+				t.Fatalf("assertions = %v, want one", got)
+			}
+			if got[0].Status != c.want {
+				t.Fatalf("status = %s (%s), want %s", got[0].Status, got[0].Detail, c.want)
+			}
+			if c.want != StatusFail {
+				return
+			}
+			// The finding is what an operator acts on, so it carries the grant
+			// rather than only the refusal.
+			for _, want := range []string{"system.clusters", "shard_num", "no ceiling"} {
+				if !strings.Contains(got[0].Detail, want) {
+					t.Errorf("detail = %q, want it to carry %q", got[0].Detail, want)
+				}
+			}
+		})
+	}
+}
