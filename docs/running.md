@@ -129,11 +129,14 @@ series per rule.
 | `clickhouse_ruler_rules_unmatched` | gauge | `rule_group` |
 | `clickhouse_ruler_config_last_reload_successful` | gauge | none |
 | `clickhouse_ruler_config_last_reload_timestamp_seconds` | gauge | none |
-| `clickhouse_ruler_query_read_rows_total` | counter | `rule`, `team` |
-| `clickhouse_ruler_query_read_bytes_total` | counter | `rule`, `team` |
+| `clickhouse_ruler_query_read_rows_total` | counter | `rule`, `team`, `source` |
+| `clickhouse_ruler_query_read_bytes_total` | counter | `rule`, `team`, `source` |
 | `clickhouse_ruler_query_memory_usage_bytes` | histogram | `rule` |
-| `clickhouse_ruler_query_duration_seconds` | histogram | `rule` |
+| `clickhouse_ruler_query_duration_seconds` | histogram | `rule`, `rule_group`, `team`, `source` |
 | `clickhouse_ruler_query_queue_wait_seconds` | histogram | `source` |
+| `clickhouse_ruler_query_concurrency_wait_seconds` | histogram | `rule_group` |
+| `clickhouse_ruler_query_concurrency` | gauge | none |
+| `clickhouse_ruler_queries_in_flight` | gauge | none |
 | `clickhouse_ruler_build_info` | gauge | `version`, `revision`, `goversion` |
 
 `clickhouse_ruler_build_info` is always 1 and exists for its labels: it says
@@ -157,10 +160,23 @@ succeeded, because a rule that trips a cap is the one worth finding. `team`
 is read from the rule's labels and is empty when the author set none, which
 is a rule nobody has claimed rather than one owned by nobody in particular.
 
-`clickhouse_ruler_query_queue_wait_seconds` is how long a query waited for a
-slot against its source's `max_concurrent_queries` limit. Only sources that
-set that limit appear, so a series here means the limit exists and is being
-hit; a p99 climbing toward the group interval means it is set too low.
+`source` says which cluster a rule read from, because a rule evaluates against
+every source its selector matches: without it one histogram folds every cluster
+together and a team's bill cannot name the cluster it came from.
+
+There are two concurrency limits and a metric for each.
+`clickhouse_ruler_query_queue_wait_seconds` is the wait for a slot against a
+source's own `max_concurrent_queries`. Only sources that set that limit appear,
+so a series here means the limit exists and is being hit; a p99 climbing toward
+the group interval means it is set too low.
+`clickhouse_ruler_query_concurrency_wait_seconds` is the wait against
+`--query-concurrency`, which every query passes through, labelled by group
+because a group's rules all fire on one tick and a group with more rules than
+there are slots queues against itself. Read it against
+`clickhouse_ruler_query_concurrency`, the number of slots, and
+`clickhouse_ruler_queries_in_flight`, how many queries are running or waiting
+right now. Those two are `prometheus_engine_queries_concurrent_max` and
+`prometheus_engine_queries` under another prefix.
 
 `clickhouse_ruler_annotation_failures_total` is separate from the evaluation failures on
 purpose: an annotation that will not render still pages, carrying the template

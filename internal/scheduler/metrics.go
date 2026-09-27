@@ -51,6 +51,7 @@ type Metrics struct {
 
 	QueryConcurrencyWait *prometheus.HistogramVec
 	QueryConcurrency     prometheus.Gauge
+	QueriesInFlight      prometheus.Gauge
 }
 
 // NewMetrics registers every scheduler metric against reg. A nil reg uses
@@ -296,6 +297,17 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 		QueryConcurrency: f.NewGauge(prometheus.GaugeOpts{
 			Name: "clickhouse_ruler_query_concurrency",
 			Help: "How many rule queries this ruler allows in flight at once across every group. Zero means unbounded.",
+		}),
+
+		// Read against the cap above, which is saturation without waiting for
+		// the wait histogram to fill. Counts queries waiting for a slot as
+		// well as running ones, because a query the ruler is trying to send is
+		// load whether or not it got through. The pair is
+		// prometheus_engine_queries and prometheus_engine_queries_concurrent_max
+		// by another prefix, so the reading carries over (spec 8.8).
+		QueriesInFlight: f.NewGauge(prometheus.GaugeOpts{
+			Name: "clickhouse_ruler_queries_in_flight",
+			Help: "Rule queries currently running or waiting for a slot.",
 		}),
 	}
 }

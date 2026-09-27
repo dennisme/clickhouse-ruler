@@ -56,6 +56,7 @@ func TestMetricsAreNamespacedToThisRuler(t *testing.T) {
 	m.QueryDuration.WithLabelValues("R", "f.yaml:g1", "payments", "prod_eu").Observe(1)
 	m.QueryConcurrencyWait.WithLabelValues("f.yaml:g1").Observe(1)
 	m.QueryConcurrency.Set(8)
+	m.QueriesInFlight.Set(0)
 
 	body := serveMetrics(t, reg)
 
@@ -79,6 +80,7 @@ func TestMetricsAreNamespacedToThisRuler(t *testing.T) {
 		"clickhouse_ruler_query_duration_seconds",
 		"clickhouse_ruler_query_concurrency_wait_seconds",
 		"clickhouse_ruler_query_concurrency",
+		"clickhouse_ruler_queries_in_flight",
 	} {
 		if !strings.Contains(body, name+"{") && !strings.Contains(body, name+" ") {
 			t.Errorf("%s is not exposed on /metrics", name)

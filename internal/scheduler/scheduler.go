@@ -211,7 +211,7 @@ func (s *Scheduler) Reload(set *ruleset.Set, queriers map[string]Querier) {
 func (s *Scheduler) build(set *ruleset.Set, queriers map[string]Querier, prev map[ruleKey]*RuleEval) ([]GroupSpec, map[ruleKey]*RuleEval, *GroupSpec) {
 	type groupKey struct{ file, name string }
 
-	limits := newQueryLimits(s.concurrency, matchedSources(set))
+	limits := newQueryLimits(s.concurrency, matchedSources(set), s.metrics)
 
 	var order []groupKey
 	rulesByGroup := map[groupKey][]ruleset.Rule{}

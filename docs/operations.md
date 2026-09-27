@@ -256,13 +256,16 @@ cap of eight and a two second query make a fourteen second tick out of nothing
 but the cap, and the per-cluster expressions above all read healthy while it
 happens.
 
-How many slots it was queueing for:
+How many slots it was queueing for, and how many queries are using them:
 
 ```promql
-clickhouse_ruler_query_concurrency
+clickhouse_ruler_queries_in_flight / clickhouse_ruler_query_concurrency
 ```
 
-Zero means the cap is off and nothing queues at it. A wait here with room left on
+**Trouble sustained near 1.** In-flight counts queries running or waiting, so
+this is saturation read directly rather than after the histogram above fills. A
+cap of zero means the cap is off, nothing queues at it, and this expression
+divides by zero. A wait here with room left on
 the cluster is a cap set too low for the rules loaded; a wait here alongside
 climbing query duration is the cluster, and raising the cap makes it worse. The
 other fixes are the interval and splitting the group, both under missed

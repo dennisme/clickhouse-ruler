@@ -129,6 +129,7 @@ what make the guard rails in 6.7 observable rather than theoretical:
 | `clickhouse_ruler_query_queue_wait_seconds` | histogram | `source` |
 | `clickhouse_ruler_query_concurrency_wait_seconds` | histogram | `rule_group` |
 | `clickhouse_ruler_query_concurrency` | gauge | none |
+| `clickhouse_ruler_queries_in_flight` | gauge | none |
 
 Source these from the ClickHouse Go driver's progress callbacks rather than
 from `system.query_log`. The driver reports rows and bytes read during the
@@ -153,8 +154,12 @@ here means a limit exists and is being hit.
 is labelled by group because that is who pays for it: a group's rules all fire
 on one tick, so a group holding more rules than the cap has slots queues against
 itself. `clickhouse_ruler_query_concurrency` is the cap that wait is read
-against, because the wait alone does not say how many slots it was queueing for.
-8.8 is why both exist.
+against, because the wait alone does not say how many slots it was queueing for,
+and `clickhouse_ruler_queries_in_flight` is what it is being read against right
+now, counting queries running or waiting. The last two are
+`prometheus_engine_queries_concurrent_max` and `prometheus_engine_queries` by
+another prefix, so both the names and the reading carry over. 8.8 is why the
+three exist.
 
 Validation and config:
 
@@ -515,6 +520,30 @@ gauge below ships with the cadence work: nine seconds of queueing says nothing
 without the number of slots it queued for, and an operator who hardcodes the cap
 reads every expression against a flag somebody else can change. One series per
 process, zero meaning unbounded, as the flag does.
+`clickhouse_ruler_queries_in_flight` is the other half of that reading, counting
+queries running or waiting so saturation is visible now rather than after a
+histogram fills. Waiting queries are counted, because a query this ruler is
+trying to send is load whether or not it got through a gate.
+
+**Neither ruler upstream reports this, and the check is worth recording.** The
+Prometheus ruler's own rule concurrency gate does not queue at all: it is
+`sema.TryAcquire` in `rules/manager.go`, and a rule that cannot get a slot is
+evaluated inline in `rules/group.go` instead of waiting. There is no wait there
+to measure, which is why there is no metric. What it offers for the same question
+is `prometheus_rule_group_last_rule_duration_sum_seconds`, the sum of each rule's
+duration regardless of concurrency, read against the group's duration to see how
+much concurrency the group actually got: two series and a division, answering
+"was I parallel" rather than "what did I wait". vmalert blocks the way we do, on
+a buffered channel per group, and exposes nothing about the wait either.
+
+One layer down, Prometheus does measure exactly this. The PromQL engine gates on
+`--query.max-concurrency` and times the gate, reported as
+`prometheus_engine_query_duration_seconds{slice="queue_time"}` with
+`prometheus_engine_queries` and `prometheus_engine_queries_concurrent_max`
+beside it. That is the shape we are copying, including both gauges. What it
+cannot do is attribute: one gate serves API queries and rule evaluations, the
+histogram is labelled by `slice` and nothing else, so an operator cannot ask
+which group paid. Carrying `rule_group` is the one thing here that is ours.
 
 What an operator does about it is three things in order, and the order matters
 because the obvious one is wrong here. Lengthen the group's interval. Raise the

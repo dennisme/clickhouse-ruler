@@ -4,6 +4,8 @@ import (
 	"context"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+
 	"github.com/dennisme/clickhouse-ruler/internal/source"
 )
 
@@ -64,13 +66,21 @@ type waits struct {
 type queryLimits struct {
 	global   semaphore
 	bySource map[string]semaphore
+
+	// inFlight counts queries executing or waiting for a slot, which is what
+	// the cap is read against without waiting for a histogram to fill
+	// (spec 8.8). Nil when nothing is collecting.
+	inFlight prometheus.Gauge
 }
 
 // newQueryLimits builds the limits from the ruler-wide cap and whatever the
 // sources ask for. Semaphores are per source rather than per rule, because
 // the cluster sees every rule's query on the same connection pool.
-func newQueryLimits(global int, sources []source.Source) *queryLimits {
+func newQueryLimits(global int, sources []source.Source, m *Metrics) *queryLimits {
 	l := &queryLimits{global: newSemaphore(global)}
+	if m != nil {
+		l.inFlight = m.QueriesInFlight
+	}
 	for _, s := range sources {
 		if s.MaxConcurrentQueries <= 0 {
 			continue
@@ -113,9 +123,15 @@ func (l *queryLimits) boundsRuler() bool {
 // up past it. Both gates abandon on ctx, so shutdown drops a query that is
 // still queued rather than running it after the ruler has stopped.
 func (l *queryLimits) acquire(ctx context.Context, name string) (release func(), w waits, ok bool) {
+	// Counted from here rather than from the far side of the gates, so the
+	// gauge reads as queries this ruler is trying to run: a query waiting for
+	// a slot is load the operator is carrying.
+	l.trackIn()
+
 	start := time.Now()
 	releaseGlobal, ok := l.global.acquire(ctx)
 	if !ok {
+		l.trackOut()
 		return func() {}, waits{}, false
 	}
 	w.ruler = time.Since(start)
@@ -124,6 +140,7 @@ func (l *queryLimits) acquire(ctx context.Context, name string) (release func(),
 	releaseSource, ok := l.bySource[name].acquire(ctx)
 	if !ok {
 		releaseGlobal()
+		l.trackOut()
 		return func() {}, waits{}, false
 	}
 	w.source = time.Since(start)
@@ -131,5 +148,18 @@ func (l *queryLimits) acquire(ctx context.Context, name string) (release func(),
 	return func() {
 		releaseSource()
 		releaseGlobal()
+		l.trackOut()
 	}, w, true
+}
+
+func (l *queryLimits) trackIn() {
+	if l.inFlight != nil {
+		l.inFlight.Inc()
+	}
+}
+
+func (l *queryLimits) trackOut() {
+	if l.inFlight != nil {
+		l.inFlight.Dec()
+	}
 }
