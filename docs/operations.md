@@ -25,9 +25,21 @@ alerts in it are silently late. Nothing else reports this: every rule in the
 group still evaluates, still succeeds, and still fires, just not when you
 think.
 
-Fix it by making the query cheaper or the interval longer. `ruler check
+Three things fix it, in this order. Make the query cheaper: `ruler check
 --online` reports what a rule is predicted to read per evaluation, and the
-`system.query_log` queries below say what it actually read.
+`system.query_log` queries below say what it actually read. Make the interval
+longer, which is one line in the rule file. Raise `--query-concurrency` if the
+queries are already as fast as they get and the cluster has headroom, which the
+queue wait expressions below tell you.
+
+Splitting the group into two is the last one, and it works differently here than
+on a Prometheus ruler. Every rule in a group is evaluated concurrently, so a
+group's tick costs its slowest rule rather than the sum of its rules. A split
+divides the burst of queries, not the tick: it helps a group of many cheap rules
+queueing behind the ruler's own cap, and does nothing for a group held up by one
+expensive rule. Each half also gets its own start offset, so the two bursts land
+at different points in the interval. Splitting renames the group, so alerts and
+panels keyed on `rule_group` need updating with it.
 
 ### Evaluation failures
 
@@ -228,6 +240,33 @@ cluster.
 
 Only sources that set `max_concurrent_queries` appear here. A source that sets
 nothing is bounded by `--query-concurrency` alone and never queues per source.
+
+### Queries queueing behind the ruler's own cap
+
+```promql
+histogram_quantile(0.99, sum by (rule_group, le) (rate(clickhouse_ruler_query_concurrency_wait_seconds_bucket[5m])))
+```
+
+**Trouble when the wait is a noticeable fraction of the group's interval.** This
+is the one signal that catches a group running late while every cluster it reads
+is fast. `--query-concurrency` bounds how many queries this ruler sends at once
+across every group, default 8, and a group's rules all fire on one tick, so a
+group with more rules than there are slots queues against itself. Fifty rules, a
+cap of eight and a two second query make a fourteen second tick out of nothing
+but the cap, and the per-cluster expressions above all read healthy while it
+happens.
+
+How many slots it was queueing for:
+
+```promql
+clickhouse_ruler_query_concurrency
+```
+
+Zero means the cap is off and nothing queues at it. A wait here with room left on
+the cluster is a cap set too low for the rules loaded; a wait here alongside
+climbing query duration is the cluster, and raising the cap makes it worse. The
+other fixes are the interval and splitting the group, both under missed
+iterations above.
 
 ### Rules that will never run
 

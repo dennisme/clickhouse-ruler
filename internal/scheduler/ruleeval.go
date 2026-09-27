@@ -88,6 +88,14 @@ type Result struct {
 	// without it the knob cannot be sized (spec 6.11).
 	QueueWaits []SourceWait
 
+	// ConcurrencyWaits holds one entry per query this evaluation sent, with
+	// the time it spent queued at the ruler-wide cap. Empty when that cap is
+	// off. Zeros are kept, because the cap is on unless it is turned off and a
+	// query that found a slot waiting is the reading that says so: this is the
+	// term that makes a group late while every cluster it reads is fast, which
+	// nothing else reports (spec 8.8).
+	ConcurrencyWaits []time.Duration
+
 	// SendError is set when Cadence failed to reach Alertmanager. The alert
 	// state has already been advanced regardless: a notification failure is
 	// a delivery problem, not an evaluation problem (spec 6.5).
@@ -209,10 +217,10 @@ func (e *RuleEval) Evaluate(ctx context.Context, now time.Time) Result {
 		// of them says the rule's query stopped running.
 		queryErr error
 
-		// acquired says the query got its source slot, so wait is a real
-		// measurement rather than the zero value of a query that never ran.
+		// acquired says the query got through both gates, so wait holds real
+		// measurements rather than the zero values of a query that never ran.
 		acquired bool
-		wait     time.Duration
+		wait     waits
 	}
 	results := make([]sourceResult, len(e.rule.Sources))
 
@@ -228,7 +236,7 @@ func (e *RuleEval) Evaluate(ctx context.Context, now time.Time) Result {
 		go func(i int, name string, q Querier) {
 			defer wg.Done()
 
-			release, wait, ok := e.limits.acquire(ctx, name)
+			release, w, ok := e.limits.acquire(ctx, name)
 			if !ok {
 				// Shutdown arrived while this query was still queued behind
 				// the limit. Leaving state untouched is the same outcome as
@@ -236,7 +244,7 @@ func (e *RuleEval) Evaluate(ctx context.Context, now time.Time) Result {
 				results[i].err = errQueueAbandoned
 				return
 			}
-			results[i].acquired, results[i].wait = true, wait
+			results[i].acquired, results[i].wait = true, w
 			evaluation, err := q.Run(ctx, e.rule.Rule, e.attribution(), now)
 			release()
 
@@ -278,7 +286,10 @@ func (e *RuleEval) Evaluate(ctx context.Context, now time.Time) Result {
 	for i, r := range results {
 		name := e.rule.Sources[i].Name
 		if r.acquired && e.limits.boundsSource(name) {
-			res.QueueWaits = append(res.QueueWaits, SourceWait{Source: name, Wait: r.wait})
+			res.QueueWaits = append(res.QueueWaits, SourceWait{Source: name, Wait: r.wait.source})
+		}
+		if r.acquired && e.limits.boundsRuler() {
+			res.ConcurrencyWaits = append(res.ConcurrencyWaits, r.wait.ruler)
 		}
 		for _, a := range r.annotations {
 			res.AnnotationErrors = append(res.AnnotationErrors,

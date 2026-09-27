@@ -319,3 +319,69 @@ func TestNoQueueWaitForAnUnboundedSource(t *testing.T) {
 		t.Errorf("QueueWaits = %v, want none", res.QueueWaits)
 	}
 }
+
+// The ruler-wide cap is the term that makes a group late while every cluster
+// reads fast, so the wait against it has to be reported the way the per-source
+// wait is (spec 8.8).
+func TestConcurrencyWaitIsReportedForTheRulerCap(t *testing.T) {
+	limits := newQueryLimits(1, nil)
+
+	q := newBarrierQuerier(1)
+	queriers := map[string]Querier{"s1": q}
+	cadence := notify.NewCadence(&recordingSender{}, time.Minute, notify.DefaultResendTolerance)
+
+	holder := NewRuleEval(multiSourceRule("s1"), queriers, cadence, limits, testRetention)
+	done := make(chan Result, 1)
+	go func() { done <- holder.Evaluate(context.Background(), time.Now()) }()
+	if !q.waitAllStarted() {
+		t.Fatal("the first query never took the slot")
+	}
+
+	queued := make(chan Result, 1)
+	go func() {
+		queued <- NewRuleEval(multiSourceRule("s1"), queriers, cadence, limits, testRetention).
+			Evaluate(context.Background(), time.Now())
+	}()
+
+	time.Sleep(100 * time.Millisecond)
+	close(q.release)
+
+	res := <-queued
+	<-done
+	if len(res.ConcurrencyWaits) != 1 {
+		t.Fatalf("ConcurrencyWaits = %v, want one entry", res.ConcurrencyWaits)
+	}
+	if res.ConcurrencyWaits[0] < 50*time.Millisecond {
+		t.Errorf("wait = %v, want the time spent queued", res.ConcurrencyWaits[0])
+	}
+}
+
+// Unlike the per-source wait, a zero is worth reporting: the ruler-wide cap is
+// on unless it is turned off, so the shape of the histogram is what says how
+// close to saturated it runs (spec 8.8).
+func TestConcurrencyWaitReportsAQueryThatQueuedForNothing(t *testing.T) {
+	limits := newQueryLimits(DefaultQueryConcurrency, nil)
+
+	eval := NewRuleEval(multiSourceRule("s1"), map[string]Querier{"s1": &fakeQuerier{samples: oneSample()}},
+		notify.NewCadence(&recordingSender{}, time.Minute, notify.DefaultResendTolerance),
+		limits, testRetention)
+
+	res := eval.Evaluate(context.Background(), time.Now())
+	if len(res.ConcurrencyWaits) != 1 {
+		t.Fatalf("ConcurrencyWaits = %v, want one entry per query", res.ConcurrencyWaits)
+	}
+}
+
+// A ruler running unbounded has no cap to queue at, and a zero wait against a
+// limit that does not exist reads as a limit doing something.
+func TestNoConcurrencyWaitWhenTheRulerCapIsOff(t *testing.T) {
+	limits := newQueryLimits(0, nil)
+
+	eval := NewRuleEval(multiSourceRule("s1"), map[string]Querier{"s1": &fakeQuerier{samples: oneSample()}},
+		notify.NewCadence(&recordingSender{}, time.Minute, notify.DefaultResendTolerance),
+		limits, testRetention)
+
+	if res := eval.Evaluate(context.Background(), time.Now()); len(res.ConcurrencyWaits) != 0 {
+		t.Errorf("ConcurrencyWaits = %v, want none", res.ConcurrencyWaits)
+	}
+}

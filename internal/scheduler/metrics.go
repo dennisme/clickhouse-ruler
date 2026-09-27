@@ -48,6 +48,9 @@ type Metrics struct {
 	QueryMemoryUsage    *prometheus.HistogramVec
 	QueryDuration       *prometheus.HistogramVec
 	QueryQueueWait      *prometheus.HistogramVec
+
+	QueryConcurrencyWait *prometheus.HistogramVec
+	QueryConcurrency     prometheus.Gauge
 }
 
 // NewMetrics registers every scheduler metric against reg. A nil reg uses
@@ -265,6 +268,35 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 			Help:    "Time a query waited for a slot against its source's concurrent query limit.",
 			Buckets: prometheus.DefBuckets,
 		}, []string{"source"}),
+
+		// The other gate, and the one that makes a group late while every
+		// cluster it reads is fast: a group's rules all fire at once, so a
+		// group with more rules than the ruler-wide cap has slots queues
+		// against itself and nothing per query reports it. Labelled by
+		// rule_group because the question arrives as "why was my group late",
+		// and not by source as well, because that is the reading queue wait
+		// already gives and a histogram pays the fanout on every bucket
+		// (spec 8.8).
+		//
+		// Zeros belong here, unlike on queue wait: this cap is on unless it is
+		// turned off, so a query that found a slot waiting is the reading that
+		// says the ruler is running below it.
+		QueryConcurrencyWait: f.NewHistogramVec(prometheus.HistogramOpts{
+			Name:    "clickhouse_ruler_query_concurrency_wait_seconds",
+			Help:    "Time a query waited for a slot against the ruler-wide query concurrency cap.",
+			Buckets: prometheus.DefBuckets,
+		}, []string{"rule_group"}),
+
+		// The cap the wait above is read against. Configuration rather than
+		// measurement, exposed for the same reason the wait is: nine seconds of
+		// queueing says nothing without the number of slots it queued for, and
+		// an operator who has to hardcode it reads every expression against a
+		// flag somebody else can change. Zero means unbounded, as the flag
+		// does (spec 8.8).
+		QueryConcurrency: f.NewGauge(prometheus.GaugeOpts{
+			Name: "clickhouse_ruler_query_concurrency",
+			Help: "How many rule queries this ruler allows in flight at once across every group. Zero means unbounded.",
+		}),
 	}
 }
 
@@ -285,11 +317,12 @@ func (m *Metrics) deleteGroup(group string) {
 	m.AlertsActive.DeletePartialMatch(labels)
 	m.RulesUnmatched.DeletePartialMatch(labels)
 
-	// Query duration carries the group too, so it goes with the group like
-	// everything else labelled rule_group (spec 8.2). The other cost series
-	// carry the rule alone and wait for deleteRuleName, because an alert name
-	// may repeat across groups (spec 7.6).
+	// Query duration and the concurrency wait carry the group too, so they go
+	// with the group like everything else labelled rule_group (spec 8.2). The
+	// other cost series carry the rule alone and wait for deleteRuleName,
+	// because an alert name may repeat across groups (spec 7.6).
 	m.QueryDuration.DeletePartialMatch(labels)
+	m.QueryConcurrencyWait.DeletePartialMatch(labels)
 }
 
 // deleteRule removes the series of one rule inside a group that is still

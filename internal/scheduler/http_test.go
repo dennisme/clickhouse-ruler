@@ -54,6 +54,8 @@ func TestMetricsAreNamespacedToThisRuler(t *testing.T) {
 	m.QueryReadBytesTotal.WithLabelValues("R", "payments", "prod_eu").Add(1)
 	m.QueryMemoryUsage.WithLabelValues("R").Observe(1)
 	m.QueryDuration.WithLabelValues("R", "f.yaml:g1", "payments", "prod_eu").Observe(1)
+	m.QueryConcurrencyWait.WithLabelValues("f.yaml:g1").Observe(1)
+	m.QueryConcurrency.Set(8)
 
 	body := serveMetrics(t, reg)
 
@@ -75,6 +77,8 @@ func TestMetricsAreNamespacedToThisRuler(t *testing.T) {
 		"clickhouse_ruler_query_read_bytes_total",
 		"clickhouse_ruler_query_memory_usage_bytes",
 		"clickhouse_ruler_query_duration_seconds",
+		"clickhouse_ruler_query_concurrency_wait_seconds",
+		"clickhouse_ruler_query_concurrency",
 	} {
 		if !strings.Contains(body, name+"{") && !strings.Contains(body, name+" ") {
 			t.Errorf("%s is not exposed on /metrics", name)

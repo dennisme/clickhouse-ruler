@@ -170,3 +170,32 @@ func labelValues(t *testing.T, reg *prometheus.Registry, metric, label string) m
 	}
 	return values
 }
+
+// The cap the concurrency wait is read against is configuration, and an
+// operator reading nine seconds of wait cannot tell how many slots that was
+// against without it (spec 8.8).
+func TestQueryConcurrencyReportsTheCap(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	m := NewMetrics(reg)
+	m.QueryConcurrency.Set(float64(DefaultQueryConcurrency))
+
+	if got := testutil.ToFloat64(m.QueryConcurrency); got != float64(DefaultQueryConcurrency) {
+		t.Errorf("clickhouse_ruler_query_concurrency = %v, want %d", got, DefaultQueryConcurrency)
+	}
+}
+
+// The concurrency wait carries rule_group, so it goes with its group like
+// everything else labelled that way (spec 8.2).
+func TestDeleteGroupClearsTheConcurrencyWait(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	m := NewMetrics(reg)
+
+	m.QueryConcurrencyWait.WithLabelValues("f.yaml:g1").Observe(1)
+	m.QueryConcurrencyWait.WithLabelValues("f.yaml:g2").Observe(1)
+
+	m.deleteGroup("f.yaml:g1")
+
+	if got := testutil.CollectAndCount(m.QueryConcurrencyWait); got != 1 {
+		t.Errorf("series = %d, want only the group still loaded", got)
+	}
+}

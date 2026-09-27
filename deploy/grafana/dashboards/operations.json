@@ -396,8 +396,8 @@
       ]
     },
     {
-      "title": "Source queue wait",
-      "description": "How long a query waited for a slot against its source's max_concurrent_queries limit. Only sources that set one appear. A small steady wait is the limit doing its job; a wait approaching the group interval is a limit set too low, or a cluster gone slow with the limit containing it.",
+      "title": "Queue wait, by cap",
+      "description": "What queries waited for a slot, at both caps. Per source is the cluster's own max_concurrent_queries, and only sources that set one appear: a small steady wait is the limit doing its job, a growing one is a limit set too low or a cluster gone slow with the limit containing it. Per group is the ruler-wide --query-concurrency cap, and it is the term that reads as a late group with fast clusters, because a group's rules all fire on one tick and a group with more rules than slots queues against itself. Read against clickhouse_ruler_query_concurrency, which is how many slots there were (spec 8.8).",
       "type": "timeseries",
       "datasource": {
         "type": "prometheus",
@@ -424,6 +424,24 @@
           },
           "expr": "histogram_quantile(0.99, sum by (source, le) (rate(clickhouse_ruler_query_queue_wait_seconds_bucket[$__rate_interval])))",
           "legendFormat": "{{source}} p99 queue wait"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "histogram_quantile(0.99, sum by (rule_group, le) (rate(clickhouse_ruler_query_concurrency_wait_seconds_bucket[$__rate_interval])))",
+          "legendFormat": "{{rule_group}} p99 ruler cap wait"
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "clickhouse_ruler_query_concurrency",
+          "legendFormat": "query concurrency cap (slots)"
         }
       ]
     }

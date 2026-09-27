@@ -127,6 +127,8 @@ what make the guard rails in 6.7 observable rather than theoretical:
 | `clickhouse_ruler_query_memory_usage_bytes` | histogram | `rule` |
 | `clickhouse_ruler_query_duration_seconds` | histogram | `rule`, `rule_group`, `team`, `source` |
 | `clickhouse_ruler_query_queue_wait_seconds` | histogram | `source` |
+| `clickhouse_ruler_query_concurrency_wait_seconds` | histogram | `rule_group` |
+| `clickhouse_ruler_query_concurrency` | gauge | none |
 
 Source these from the ClickHouse Go driver's progress callbacks rather than
 from `system.query_log`. The driver reports rows and bytes read during the
@@ -137,13 +139,22 @@ These enable two things worth having: alerting on expensive alert rules, and
 per team chargeback, both per cluster. 8.8 is why `source` is on them and what
 each label costs.
 
-`clickhouse_ruler_query_queue_wait_seconds` is the exception to the `rule` and
-`team` labelling above, because it measures the per-source concurrency limit
-in 6.11 rather than what a rule cost. Queueing is a property of the cluster
-the limit protects: every rule against a saturated source waits, and which
-rule happened to wait says nothing about what to change. Only sources that set
-`max_concurrent_queries` reach it, so a series here means a limit exists and
-is being hit.
+The last three are the exception to the `rule` and `team` labelling above,
+because they measure the concurrency limits in 6.11 rather than what a rule
+cost. There are two limits and they are read differently.
+
+`clickhouse_ruler_query_queue_wait_seconds` is the per-source one. Queueing
+there is a property of the cluster the limit protects: every rule against a
+saturated source waits, and which rule happened to wait says nothing about what
+to change. Only sources that set `max_concurrent_queries` reach it, so a series
+here means a limit exists and is being hit.
+
+`clickhouse_ruler_query_concurrency_wait_seconds` is the ruler-wide one, and it
+is labelled by group because that is who pays for it: a group's rules all fire
+on one tick, so a group holding more rules than the cap has slots queues against
+itself. `clickhouse_ruler_query_concurrency` is the cap that wait is read
+against, because the wait alone does not say how many slots it was queueing for.
+8.8 is why both exist.
 
 Validation and config:
 
@@ -408,8 +419,8 @@ the check page, it does not re-explain `rule/attribute-key`.
 
 ### 8.8 Query latency, cadence and the lag budget
 
-Three questions an operator asks during an incident that 8.2 does not answer.
-All three are metric shape rather than mechanism, so they are named here rather
+Four questions an operator asks during an incident that 8.2 does not answer.
+All four are metric shape rather than mechanism, so they are named here rather
 than discovered against a dashboard that renders an empty graph (8.6).
 
 **How long a given cluster's queries take.**
@@ -478,6 +489,42 @@ it, and the adapter exists precisely so neither side learns the other's
 vocabulary. One signature carries the whole cost family, which is the argument for
 doing duration and the counters together rather than adding `source` to one now
 and to the other when the first chargeback question arrives.
+
+**Why a group is late when every cluster it reads is fast.** The answer is the
+ruler's own cap, `--query-concurrency`, and until it is measured it is the one
+term of the budget below that is ours and invisible. A group's rules are
+evaluated concurrently on one tick (6.11), so a group holding more rules than
+the cap has slots queues against itself: fifty rules against a cap of eight and
+a two second query make a fourteen second tick out of nothing but the cap, while
+every per-query metric reads healthy. Query duration is timed around the query
+alone, and `clickhouse_ruler_query_queue_wait_seconds` times the per-source gate
+only, so today this shows up as evaluation duration and then as a missed
+iteration with no term to blame.
+
+It is a histogram labelled `rule_group`, because the question arrives as "why
+was my group late" and the group is who paid. Not labelled by source as well:
+that is the reading queue wait already gives, and a histogram pays the label on
+every bucket. Zeros are recorded, which is the opposite of the rule for queue
+wait, and for a reason: a source cap is absent unless configured, so a zero
+there would read as a limit doing something, while the ruler cap is on unless
+turned off and a query that found a slot waiting is exactly the reading that says
+the ruler runs below it. A ruler started with the cap off records nothing.
+
+`clickhouse_ruler_query_concurrency` ships with it, for the reason the interval
+gauge below ships with the cadence work: nine seconds of queueing says nothing
+without the number of slots it queued for, and an operator who hardcodes the cap
+reads every expression against a flag somebody else can change. One series per
+process, zero meaning unbounded, as the flag does.
+
+What an operator does about it is three things in order, and the order matters
+because the obvious one is wrong here. Lengthen the group's interval. Raise the
+cap, if the cluster has headroom. Split the group, last, and knowing that
+splitting divides the burst rather than the tick: a group's tick costs its
+slowest rule, not the sum of its rules, so a split helps a group of many cheap
+rules and does nothing for a group held up by one expensive one. What it buys is
+that each half gets its own stagger offset, so the queue is shorter and arrives
+at a different point in the interval. `docs/operations.md` says this next to the
+missed iterations expression, because that is where the question starts.
 
 **How far apart one alert's runs are.** Per alert this cannot be answered and
 will not be. Scheduling is per group: one goroutine per group, and the rules
@@ -559,13 +606,14 @@ the ruler is a sum, and its terms do not share an owner:
 delivery lag  =  evaluation_delay        the operator's configuration (6.8)
               +  0..interval             scheduling granularity
               +  tick delay              ours
-              +  queue wait              ours (6.11)
+              +  concurrency wait        ours, the ruler-wide cap (6.11)
+              +  queue wait              ours, the source's cap (6.11)
               +  query duration          the rule's SQL, and the cluster
               +  for                     the rule author's configuration
               +  notification latency    ours, and the operator's Alertmanager
 ```
 
-Three terms are ours. The rest are the operator's cluster, the operator's
+Four terms are ours. The rest are the operator's cluster, the operator's
 configuration and the author's SQL, and a single figure covering those would be a
 promise about somebody else's hardware. An end to end latency target from us
 would be that figure, which is why there is not one.
@@ -576,18 +624,20 @@ That is the same posture as 8.2 on routing `clickhouse_ruler_problem`: the
 mechanism and the reading are ours, the threshold is theirs, and leading a horse
 to water is the whole of the offer.
 
-The three terms that are ours are the ones a claim could later be made about.
+The terms that are ours are the ones a claim could later be made about.
 Tick delay stays near zero while a group's evaluation fits inside its interval.
 Queue wait is zero unless the source sets `max_concurrent_queries`, so a
-non-empty histogram means a limit exists and is being reached. Notification
-latency is one send to an Alertmanager the operator runs. Naming them is not
+non-empty histogram means a limit exists and is being reached. Concurrency wait
+is zero while no group asks for more slots at once than the cap holds, so it is
+the term a growing rule file moves first. Notification latency is one send to an
+Alertmanager the operator runs. Naming them is not
 targeting them: a target needs a deployment somebody has operated, and nobody has
 operated this one, so the numbers wait for evidence rather than being chosen here.
 
 **The expressions.** These are what the section is for, because a formula an
-operator has to translate into PromQL is a formula they will not use. The two
-that need only the cost labels are on the operations page and on the dashboard,
-which is 8.7's first item. The cadence ones wait on the two group metrics above:
+operator has to translate into PromQL is a formula they will not use. The three
+that need only the cost labels and the concurrency wait are on the operations
+page and on the dashboard, which is 8.7's first item. The cadence ones wait on the two group metrics above:
 a panel querying a metric nobody exposes renders an empty graph, which looks
 exactly like a healthy system (8.6), so they live here until that lands.
 
@@ -616,6 +666,19 @@ histogram_quantile(0.99, sum by (source, le) (
 
 That addition is why `source` is the label queue wait already carries and the
 one duration cannot do without: the two join on it and on nothing else.
+
+What a group spent waiting for a slot at the ruler's own cap, which is the term
+that reads as a slow group and a fast cluster:
+
+```promql
+histogram_quantile(0.99, sum by (rule_group, le) (
+  rate(clickhouse_ruler_query_concurrency_wait_seconds_bucket[5m])
+))
+```
+
+Read against `clickhouse_ruler_query_concurrency`, which says how many slots
+that was queueing for, and against the group's interval, which says whether it
+matters.
 
 What a team read, and from which cluster, which is the chargeback the counters
 exist for:
@@ -674,6 +737,9 @@ And the budget itself, per group, as far as series can carry it:
     rate(clickhouse_ruler_rule_group_tick_delay_seconds_bucket[1h])
   ))
 + histogram_quantile(0.99, sum by (rule_group, le) (
+    rate(clickhouse_ruler_query_concurrency_wait_seconds_bucket[1h])
+  ))
++ histogram_quantile(0.99, sum by (rule_group, le) (
     rate(clickhouse_ruler_query_duration_seconds_bucket[1h])
   ))
 + histogram_quantile(0.99, sum by (le) (
@@ -681,9 +747,11 @@ And the budget itself, per group, as far as series can carry it:
   ))
 ```
 
-**It is a floor, and saying so is the point.** Two terms of the budget are
-configuration rather than measurement: `evaluation_delay` on the source (6.8) and
-`for` on the rule. Neither is a series, and neither should become one to make this
+**It is a floor, and saying so is the point.** The source's own queue wait is
+absent, because it is labelled by cluster and this expression is per group, so
+the two join on nothing: a group reading a capped source adds that histogram
+itself. Two more terms are configuration rather than measurement:
+`evaluation_delay` on the source (6.8) and `for` on the rule. Neither is a series, and neither should become one to make this
 expression tidier, because an operator reads both out of the files they wrote.
 The expression answers what the ruler contributed, they add their own two numbers,
 and the sum is their alerting delay. An expression that quietly omitted the two

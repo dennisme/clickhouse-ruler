@@ -40,6 +40,15 @@ func (s semaphore) acquire(ctx context.Context) (release func(), ok bool) {
 	}
 }
 
+// waits is how long one query spent queued at each gate before it ran. The two
+// are separate because they say different things and are fixed by different
+// people: the ruler-wide one is the operator's cap, the source one is the
+// cluster's (spec 8.8).
+type waits struct {
+	ruler  time.Duration
+	source time.Duration
+}
+
 // queryLimits is the two level bound on queries in flight: the ruler-wide cap
 // every query passes through, and inside it an optional cap per source.
 //
@@ -85,29 +94,42 @@ func (l *queryLimits) boundsSource(name string) bool {
 	return ok
 }
 
+// boundsRuler reports whether a ruler-wide cap is set at all. Unlike a source
+// cap this one is on unless it is turned off, so a zero wait against it is a
+// reading rather than the absence of one: it says the query found a slot
+// waiting, which is what a ruler running well below its cap looks like.
+func (l *queryLimits) boundsRuler() bool {
+	return l.global != nil
+}
+
 // acquire takes the global slot and then the source's, and returns a release
-// that gives both back. wait is how long the source's slot alone took, which
-// is the number that says a per-source cap is set too low.
+// that gives both back, with how long each gate took. The source wait is the
+// number that says a per-source cap is set too low; the ruler wait is the one
+// that says a group is late while every cluster it reads is fast, which no
+// other metric can show (spec 8.8).
 //
 // The order is global first so the ruler-wide cap stays the ceiling: a source
 // slot held while waiting for the global one would let the sources' caps add
 // up past it. Both gates abandon on ctx, so shutdown drops a query that is
 // still queued rather than running it after the ruler has stopped.
-func (l *queryLimits) acquire(ctx context.Context, name string) (release func(), wait time.Duration, ok bool) {
+func (l *queryLimits) acquire(ctx context.Context, name string) (release func(), w waits, ok bool) {
+	start := time.Now()
 	releaseGlobal, ok := l.global.acquire(ctx)
 	if !ok {
-		return func() {}, 0, false
+		return func() {}, waits{}, false
 	}
+	w.ruler = time.Since(start)
 
-	start := time.Now()
+	start = time.Now()
 	releaseSource, ok := l.bySource[name].acquire(ctx)
 	if !ok {
 		releaseGlobal()
-		return func() {}, 0, false
+		return func() {}, waits{}, false
 	}
+	w.source = time.Since(start)
 
 	return func() {
 		releaseSource()
 		releaseGlobal()
-	}, time.Since(start), true
+	}, w, true
 }
