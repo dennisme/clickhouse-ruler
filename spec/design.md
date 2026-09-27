@@ -453,11 +453,12 @@ fail: a `runbook_url` is often a fixed link while a `summary` interpolates
 result columns, so discarding the set on the first failure tends to lose the
 annotation a responder needed in order to keep the one that broke. Neither is
 guaranteed, since a templated runbook is legal (7.3). The annotation that failed
-carries its own error
-as its value, where a human reading the page will see it, and the failure is
-logged once per rule and source (8.4). Prometheus does the same, substituting
-`<error expanding template: ...>`, on the reasoning that a ruler which drops a
-page over a bad summary is worse than one that pages with a bad summary.
+carries a marker naming itself, where a human reading the page will see that
+something is wrong, and the failure is logged once per rule and source (8.4).
+Prometheus substitutes the whole error instead, on the reasoning that a ruler
+which drops a page over a bad summary is worse than one that pages with a bad
+summary. The reasoning is the same here and the substitution is not; the
+paragraphs below are why.
 
 Whether a broken template should have reached production at all is a check-time
 question, not a runtime one. `annotations/template` reports it at authoring
