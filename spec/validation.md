@@ -225,6 +225,16 @@ Tier 1, metadata only, reads no table data:
   cheap hourly and ruinous every fifteen seconds. A rule on a 30s interval
   reading 400GB is arithmetic.
 
+  **On a sharded cluster the estimate is one shard's.** `EXPLAIN ESTIMATE` over
+  a Distributed table answers from the coordinator's own parts and names the
+  local table in the row it returns, so the ceiling is compared against roughly
+  `1/N` of what the cluster reads on `N` shards. This is the one part of 6.9 that
+  reading `table:` as the Distributed table does not fix, and it is outstanding
+  rather than accepted: 6.9 carries the plan, which is to scale by the shard
+  count and to report the cost unestimated on a source where that count cannot
+  be read. A caveat alone cannot carry it, because a cost reported too low
+  exceeds no ceiling and so produces no finding for a caveat to attach to.
+
   **The window the check renders is the window it estimates.** A check
   substitutes literal timestamps for `{{ .From }}` and `{{ .To }}`, and those
   bounds are what the optimiser prunes on, so an arbitrary instant estimates

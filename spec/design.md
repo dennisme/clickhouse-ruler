@@ -935,6 +935,47 @@ ceiling is per shard, not per query. 6.2 and 6.7 describe them as a cluster
 cap, which is loose. Fanout also means the coordinator merges results, so
 `max_result_rows` is the only cap applying to the query as a whole.
 
+**The predicted cost is one shard's, and this is the next slice.** Measured on
+the two node stack: `EXPLAIN ESTIMATE` over a Distributed table answers from the
+coordinator's own parts alone, and the row it returns names the local table
+rather than the source's. So the number is roughly `1/N` of what the cluster
+reads on `N` shards, and it is reported under a table name the source never
+mentions.
+
+A caveat on the finding does not fix it, and that is the part worth stating
+before anyone builds one. Caveats hang off findings, and `rule/cost` reports only
+when a ceiling is exceeded, so an underreported cost produces no finding and
+there is nowhere for the caveat to go. It is the same silence the retention
+caveat had before it resolved through: nothing looks exactly like a pass. Where a
+marker does belong is the summary table in 7.10, because every rule has a row
+there whether it breached or not.
+
+What the ceiling needs is a cluster number, and the grant decides how it gets
+one. Two paths, and the second is the fallback for the first:
+
+1. **Scale by the shard count.** The count is in `system.clusters`, which the
+   contract in 6.7.2 does not grant: measured as `497 ACCESS_DENIED` naming
+   `SELECT(cluster, shard_num) ON system.clusters`. So this costs one more system
+   table in the contract, in the same family as the `system.settings` read the
+   constraints assertion already depends on. The alternative source is
+   `uniq(_shard_num)` off the Distributed table itself, which needs no grant and
+   reads rows, so it would drop this check out of tier 1 and is not taken.
+   Scaling assumes the shards hold roughly the same amount, which is a real
+   reservation and inside the accuracy this check already claims: 7.3 warns
+   rather than blocks precisely because the optimiser can be out by an order of
+   magnitude on a skewed key. The caveat then says what the number is, the
+   coordinator's parts times the shard count, rather than implying a measurement.
+2. **Report it unestimated when the count cannot be read.** No grant, no
+   guessing: the cost is reported as refused for that source, saying the estimate
+   covers the coordinator's parts only and no ceiling was applied. It is honest
+   and it turns the check off on exactly the clusters where cost matters most,
+   which is why it is the fallback rather than the answer.
+
+The fallback is chosen per source at check time rather than configured. An
+operator who wants the ceiling enforced on a sharded cluster grants the one
+system table, and one who will not is told the check could not answer instead of
+being shown a shard's number as a cluster's.
+
 **`evaluation_delay` must cover the slowest shard.** Insert lag is per shard,
 and the delay has to clear the worst one, not the average. This is a larger
 number rather than new configuration.

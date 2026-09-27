@@ -194,16 +194,20 @@ That is the property we are copying. Everything else follows from it.
    outage. Revisit before anyone depends on it in production.
 3. **Sharded clusters.** `skip_unavailable_shards` is pinned to `0`, and a
    two node stack with an unreachable shard proves it: the evaluation fails
-   rather than silently resolving the alerts that shard held. The rest of 6.9
-   is outstanding: the cost caps are per shard rather than per query, and
-   `evaluation_delay` has to cover the slowest shard. `address` stays one
-   endpoint, which is decided rather than outstanding, see `decisions.md`. The
-   compose stack carries the second node the proof needed, so what is left is
-   arithmetic and naming rather than topology. What `table:`
-   means on a sharded cluster is no longer a blocker for tier 1: under 6.7.1
-   it carries no security meaning, so a wrong answer is a wrong finding rather
-   than a tenancy hole. It is still a correctness question for the checks that
-   read it.
+   rather than silently resolving the alerts that shard held. What `table:`
+   means is decided: it is the table a rule reads, so the Distributed one, and
+   the checks that read it act on that, see `decisions.md`. `address` stays one
+   endpoint, also decided rather than outstanding. What is left in 6.9 is the
+   cost caps, which are per shard rather than per query, and `evaluation_delay`,
+   which has to cover the slowest shard. The cost half has a shape and no code:
+   `EXPLAIN ESTIMATE` over a Distributed table answers for the coordinator's own
+   parts, so the ceiling is compared against roughly `1/N` of what the cluster
+   reads. 6.9 has the plan, which is to scale by the shard count out of
+   `system.clusters` and to report the cost unestimated where that grant is
+   absent, because a caveat cannot cover the case that hurts: an underreported
+   cost raises no finding for a caveat to attach to. The compose stack carries
+   the second node every proof needs, so what is left is arithmetic and a grant
+   rather than topology.
 
 ---
 
