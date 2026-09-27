@@ -24,6 +24,8 @@ door and carries the status; everything longer than a screen lives here.
 - **[How it works](how-it-works.md)** — the two kinds of file, who owns
   which, how a rule reaches a cluster, and which half of the guarantee is the
   database's job rather than a check's.
+- **[Install](install.md)** — a release archive, the container image, or
+  `go install`, and how to tell which build you ended up with.
 - **[Running it](running.md)** — every flag, and the metrics and logs it
   exposes.
 - **[Operations](operations.md)** — what to watch with the number that means

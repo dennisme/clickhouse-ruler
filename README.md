@@ -97,6 +97,27 @@ and `--backfill` replays each rule over a past range and implies `--online`
 too. Neither of the two that read rows implies the other.
 An error-severity finding refuses to start the ruler.
 
+## Install
+
+A release archive, the container image, or `go install`. Every release carries
+a `tar.gz` per platform and a `checksums.txt` covering all of them:
+
+```bash
+curl -sSLO https://github.com/dennisme/clickhouse-ruler/releases/download/v0.1.0/clickhouse-ruler_0.1.0_Linux_x86_64.tar.gz
+tar -xzf clickhouse-ruler_0.1.0_Linux_x86_64.tar.gz
+./ruler version
+```
+
+```bash
+docker pull ghcr.io/dennisme/clickhouse-ruler:v0.1.0
+go install github.com/dennisme/clickhouse-ruler/cmd/ruler@v0.1.0
+```
+
+Verifying the checksum, the bind mount the container needs, the unprivileged
+user it runs as, and why a `go install` build reports its version as `dev` are
+all on
+[Install](https://dennisme.github.io/clickhouse-ruler/install/).
+
 ## Documentation
 
 The manual is at
@@ -105,6 +126,8 @@ The manual is at
 - [How it works](https://dennisme.github.io/clickhouse-ruler/how-it-works/):
   the two kinds of file, who owns which, and which half of the guarantee is
   the database's job.
+- [Install](https://dennisme.github.io/clickhouse-ruler/install/): the three
+  ways in, and how to tell which build you are running.
 - [Running it](https://dennisme.github.io/clickhouse-ruler/running/): every
   flag, and the metrics and logs it exposes.
 - [Operations](https://dennisme.github.io/clickhouse-ruler/operations/): what
