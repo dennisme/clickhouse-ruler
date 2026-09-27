@@ -28,6 +28,7 @@ just lint               # golangci-lint, formatting checked via `fmt --diff`
 just fix                # apply every fix golangci-lint can make
 just build              # go build ./... plus a vet of the integration-tagged tests
 just integration-clean  # start the stack, run integration tests, tear it down
+just coverage           # unit-test coverage, no container needed
 just markdownlint       # markdownlint-cli2 over the docs
 just generate           # rewrite the generated parts of docs/checks
 just docs-serve         # preview the documentation site locally
@@ -69,6 +70,15 @@ CLICKHOUSE_IMAGE=clickhouse/clickhouse-server:latest-alpine just integration-cle
 
 Three things that bite:
 
+- Coverage is reported from the integration job, via
+  `just coverage-integration-clean`. The checks in `internal/query` and most of
+  `cmd/ruler` are proven against a real ClickHouse, so an untagged run credits
+  none of it. `just coverage` is the fast local version and reports a lower
+  number for that reason.
+- The pull request comment comes from `octocov`, configured in `.octocov.yml`.
+  It carries the delta against `main`, read back from the report the default
+  branch's own run stored. A fork pull request gets a job summary instead: its
+  workflow token cannot comment.
 - `just integration` uses `-p 1`. Several integration tests bind a webhook
   sink to the fixed port in `deploy/alertmanager/alertmanager.yml`, so parallel
   packages fight over it. Do not remove that flag.
