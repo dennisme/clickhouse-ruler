@@ -46,7 +46,12 @@ go run ./cmd/ruler check --online --sources rules/sources.yaml rules/
 go run ./cmd/ruler check --sample --sources rules/sources.yaml rules/
 go run ./cmd/ruler run --rules ./rules --sources ./rules/sources.yaml \
   --alertmanager http://localhost:9093
+go run ./cmd/ruler version
 ```
+
+`version` prints the release tag, the commit and whether the tree was dirty.
+The tag comes from `-ldflags "-X .../internal/buildinfo.Version=<tag>"` at
+release time and reads `dev` otherwise; the rest comes from the toolchain.
 
 ### Integration tests
 
