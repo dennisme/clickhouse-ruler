@@ -33,6 +33,7 @@ just markdownlint       # markdownlint-cli2 over the docs
 just generate           # rewrite the generated parts of docs/checks
 just docs-serve         # preview the documentation site locally
 just init               # mise tool versions and pre-commit hooks
+just image              # build the container image from this checkout
 just release-snapshot   # build release archives and checksums locally, no tag needed
 ```
 

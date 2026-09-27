@@ -1,0 +1,8 @@
+# The build needs go.mod, go.sum, cmd/ and internal/ and nothing else. Keeping
+# the rest out matters most for dist/, which holds release archives and is
+# large enough to slow every build that follows a snapshot.
+*
+!go.mod
+!go.sum
+!cmd
+!internal

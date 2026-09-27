@@ -166,6 +166,15 @@ docs-serve:
 docs-build:
     mkdocs build --strict
 
+# Build the container image from this checkout.
+#
+# The release image comes from Dockerfile.goreleaser, which packages a binary
+# goreleaser already built. This one compiles from source, so `ruler version`
+# in it reports an unknown commit: a build context carries no .git for the
+# toolchain to read.
+image:
+    docker build --build-arg VERSION=dev -t clickhouse-ruler:dev .
+
 # Build the release artifacts locally, without a tag.
 #
 # Same code path the tag workflow runs, so a broken .goreleaser.yaml fails here
