@@ -957,6 +957,13 @@ checks:
     keys: [require-rows]
 ```
 
+**On a sharded cluster it samples the `Distributed` table.** A source's `table:`
+names the table a rule reads, which on a sharded cluster is the `Distributed`
+one, so the sample fans out and sees every shard. Pointing `table:` at the local
+`MergeTree` instead would sample one shard, and a key written only by rows that
+live on another shard would be reported as a key nothing writes: a false finding
+on a rule that works.
+
 **A clean result is not a statement about the table, and this is the part worth
 reading before raising the severity.** The sample runs as the source's own
 ClickHouse user, under `readonly = 2` with that user's row policies applied. So
@@ -1100,6 +1107,15 @@ two problems.
 `system.tables`, which the ClickHouse user contract leaves readable, and a
 range longer than it means the oldest windows read rows the table has already
 deleted. The count then under reports and says so.
+
+On a sharded cluster the retention is not on the table the source names: a
+`Distributed` table has no `TTL` in its engine clause and no parts of its own, so
+both caveats here read the local table behind it, found from the `Distributed`
+engine's own arguments. That is the copy on the node the ruler connects to, so
+the caveat names the table it read and says that a shard whose retention differs
+is not covered. A coordinator that carries no local copy is reported as
+unanswerable, because a caveat that stopped appearing reads as a replay with
+nothing to qualify.
 
 **A column added inside the range.** A column added by `ALTER TABLE ADD COLUMN`
 is absent from every part written before the alter, so the windows before it

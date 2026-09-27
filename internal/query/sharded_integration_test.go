@@ -12,6 +12,7 @@ import (
 
 	"github.com/ClickHouse/clickhouse-go/v2"
 
+	"github.com/dennisme/clickhouse-ruler/internal/lint"
 	"github.com/dennisme/clickhouse-ruler/internal/rule"
 	"github.com/dennisme/clickhouse-ruler/internal/source"
 )
@@ -79,11 +80,54 @@ WHERE Timestamp >= {{ .From }} AND Timestamp < {{ .To }}
 GROUP BY ServiceName
 ORDER BY ServiceName`
 
+// shardedKeyRule reads one map key, which is what the sample check probes for.
+const shardedKeyExpr = `
+SELECT ServiceName, count() AS value
+FROM otel.%s
+WHERE Timestamp >= {{ .From }} AND Timestamp < {{ .To }}
+AND SpanAttributes['%s'] != ''
+GROUP BY ServiceName`
+
+func shardedKeyRule(table, key string) rule.Rule {
+	return rule.Rule{
+		Alert:  "KeyPresent",
+		Expr:   fmt.Sprintf(shardedKeyExpr, table, key),
+		Window: time.Hour,
+	}
+}
+
 func shardedRule(table string) rule.Rule {
 	return rule.Rule{
 		Alert:  "MaxLatency",
 		Expr:   fmt.Sprintf(shardedLatencyExpr, table),
 		Window: 5 * time.Minute,
+	}
+}
+
+// seedKeyAt writes one row to one node carrying one map key, so a key exists on
+// that shard and nowhere else.
+//
+// seedAt cannot express this: it writes the same attribute names to every row it
+// is given, and what the sample check asks about is a key name rather than a
+// value. Which shard a key lives on is the whole question here, so the rows are
+// written shard by shard for the reason seedAt itself is: a Distributed table is
+// what a rule reads, not what a test writes through.
+func seedKeyAt(t *testing.T, address, service, key string) {
+	t.Helper()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	conn := adminConn(t, address)
+	if err := conn.Exec(ctx, "TRUNCATE TABLE otel.otel_traces"); err != nil {
+		t.Fatalf("truncate: %v", err)
+	}
+	err := conn.Exec(ctx,
+		"INSERT INTO otel.otel_traces (Timestamp, ServiceName, SpanName, Duration, SpanAttributes) "+
+			"VALUES (?, ?, 'GET /', 1, map(?, '1'))",
+		anchor.Add(-time.Minute), service, key)
+	if err != nil {
+		t.Fatalf("seeding %s on %s: %v", key, address, err)
 	}
 }
 
@@ -197,5 +241,154 @@ func TestRaisedSkipUnavailableShardsHidesTheDeadShard(t *testing.T) {
 
 	if len(services) != 1 || services[0] != "shard-one" {
 		t.Fatalf("got %v, want only the surviving shard's row, which is the silent failure this reproduces", services)
+	}
+}
+
+// What `table:` names on a sharded cluster, proven against both tables of that
+// name.
+//
+// `table:` is the table a rule reads, so it is the Distributed one (spec 6.9).
+// The tests below are the argument for that answer and for what it costs: the
+// sample sees every shard where the local table sees one, the grant assertion
+// reaches every node, and the two questions only a local MergeTree can answer
+// resolve through the Distributed engine's own arguments.
+
+// The local table behind a Distributed one, read off the server rather than
+// written down, because the caveats that read parts metadata ask about it.
+func TestStorageTableResolvesTheLocalTable(t *testing.T) {
+	q := openQuerier(t, shardedSource(t, "otel_traces_shards"))
+
+	got := q.storageTable(context.Background())
+
+	if !got.Distributed {
+		t.Errorf("storageTable = %+v, want it to know the source's table is Distributed", got)
+	}
+	want := tableRef{Database: "otel", Table: "otel_traces"}
+	if got.Local != want {
+		t.Errorf("local table = %+v, want %+v", got.Local, want)
+	}
+	if got.Unanswerable != "" {
+		t.Errorf("unanswerable = %q, want the local table resolved", got.Unanswerable)
+	}
+}
+
+// A local table is its own storage, so nothing resolves through on a single
+// node and the caveats read the table the source names.
+func TestStorageTableLeavesALocalTableAlone(t *testing.T) {
+	q := openQuerier(t, testSource(t))
+
+	got := q.storageTable(context.Background())
+
+	if got.Distributed {
+		t.Errorf("storageTable = %+v, want a MergeTree source to resolve to itself", got)
+	}
+	if want := (tableRef{Database: "otel", Table: "otel_traces"}); got.Local != want {
+		t.Errorf("local table = %+v, want %+v", got.Local, want)
+	}
+}
+
+// The key check against both readings of `table:`, which is the whole decision
+// in one test.
+//
+// The key is written only by the rows on the second shard. Read through the
+// Distributed table the sample sees it and says nothing; read through the
+// coordinator's local table it sees one shard, calls a live attribute missing,
+// and reports a rule that works as a rule that reads a key nothing writes.
+func TestSampleReadsEveryShard(t *testing.T) {
+	const onSecondShard = "shard_two_only"
+
+	seedKeyAt(t, testSource(t).Address, "shard-one", "shard_one_only")
+	seedKeyAt(t, shardTwoAddress(t), "shard-two", onSecondShard)
+
+	sharded := openQuerier(t, shardedSource(t, "otel_traces_shards"))
+	got, err := sharded.Sample(context.Background(),
+		shardedKeyRule("otel_traces_shards", onSecondShard), testGroup, SampleChecks{}, anchor)
+	if err != nil {
+		t.Fatalf("Sample through the Distributed table: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("findings = %v, want none: the key is in the second shard's rows", got)
+	}
+
+	// The same key, the same cluster, asked of the table a rule does not read.
+	local := openQuerier(t, testSource(t))
+	got, err = local.Sample(context.Background(),
+		shardedKeyRule("otel_traces", onSecondShard), testGroup, SampleChecks{}, anchor)
+	if err != nil {
+		t.Fatalf("Sample through the local table: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("findings = %v, want the false absence this decision avoids", got)
+	}
+	if !strings.Contains(got[0].Detail, "is in none of") {
+		t.Errorf("detail = %q, want the key reported absent", got[0].Detail)
+	}
+}
+
+// The grant assertion fans out, which is more than it does on one node: a read
+// of a Distributed table contacts every shard even at LIMIT 0, so the assertion
+// covers the grant on each node rather than one row on the coordinator.
+func TestTableReadableReachesEveryShard(t *testing.T) {
+	q := openQuerier(t, shardedSource(t, "otel_traces_shards"))
+
+	got := q.Privileges(context.Background(), []string{lint.AssertionTableReadable})
+
+	if len(got) != 1 {
+		t.Fatalf("assertions = %v, want one", got)
+	}
+	if got[0].Status != StatusPass {
+		t.Errorf("status = %s (%s), want pass: the user is granted the Distributed table",
+			got[0].Status, got[0].Detail)
+	}
+}
+
+// A shard that cannot be reached leaves the question open rather than answered.
+// Reporting a missing grant would send an operator to fix an access problem
+// that is an outage, and reporting a pass would claim a table was readable on a
+// node nothing could reach.
+func TestTableReadableIsInconclusiveWhenAShardIsUnreachable(t *testing.T) {
+	q := openQuerier(t, shardedSource(t, "otel_traces_dead_shard"))
+
+	got := q.Privileges(context.Background(), []string{lint.AssertionTableReadable})
+
+	if len(got) != 1 {
+		t.Fatalf("assertions = %v, want one", got)
+	}
+	if got[0].Status != StatusInconclusive {
+		t.Errorf("status = %s (%s), want inconclusive", got[0].Status, got[0].Detail)
+	}
+	if !strings.Contains(got[0].Detail, deadShardHost) {
+		t.Errorf("detail = %q, want it to name the unreachable shard %q", got[0].Detail, deadShardHost)
+	}
+}
+
+// The retention caveat on a sharded cluster, which is the question a Distributed
+// table has no answer to: its engine clause carries no TTL, so asked naively the
+// caveat disappears and a replay reaching past the retention reads as clean.
+func TestBackfillTTLCaveatResolvesTheLocalTable(t *testing.T) {
+	src := shardedSource(t, "otel_traces_shards")
+	q := openQuerier(t, src)
+
+	seedAt(t, src.Address, []span{{at: anchor.Add(-time.Minute), service: "checkout", duration: 1}})
+	seedAt(t, shardTwoAddress(t), []span{{at: anchor.Add(-time.Minute), service: "other", duration: 2}})
+
+	// The schema in deploy/clickhouse/init TTLs at three days, on the local
+	// table, which is the one the caveat has to find.
+	_, findings := backfill(t, q, shardedRule("otel_traces_shards"), BackfillChecks{
+		Range: 96 * time.Hour,
+		Step:  48 * time.Hour,
+	})
+
+	if len(findings) != 1 {
+		t.Fatalf("findings = %v, want the TTL reported", findings)
+	}
+	for _, want := range []string{
+		"TTL on otel.otel_traces",
+		"the local table behind the Distributed otel.otel_traces_shards",
+		"a shard whose retention differs is not covered",
+	} {
+		if !strings.Contains(findings[0].Detail, want) {
+			t.Errorf("detail = %q, missing %q", findings[0].Detail, want)
+		}
 	}
 }

@@ -225,6 +225,16 @@ Tier 1, metadata only, reads no table data:
   cheap hourly and ruinous every fifteen seconds. A rule on a 30s interval
   reading 400GB is arithmetic.
 
+  **On a sharded cluster the estimate is one shard's.** `EXPLAIN ESTIMATE` over
+  a Distributed table answers from the coordinator's own parts and names the
+  local table in the row it returns, so the ceiling is compared against roughly
+  `1/N` of what the cluster reads on `N` shards. This is the one part of 6.9 that
+  reading `table:` as the Distributed table does not fix, and it is outstanding
+  rather than accepted: 6.9 carries the plan, which is to scale by the shard
+  count and to report the cost unestimated on a source where that count cannot
+  be read. A caveat alone cannot carry it, because a cost reported too low
+  exceeds no ceiling and so produces no finding for a caveat to attach to.
+
   **The window the check renders is the window it estimates.** A check
   substitutes literal timestamps for `{{ .From }}` and `{{ .To }}`, and those
   bounds are what the optimiser prunes on, so an arbitrary instant estimates
@@ -272,7 +282,10 @@ Tier 1, metadata only, reads no table data:
   source's own. Also early feedback: the grants are what stop it (6.7.1),
   which is why this check may read `table:` naively without that being a
   tenancy question (6.9). An unqualified name resolves to the connection's
-  database, which is the source's own, so it is not foreign.
+  database, which is the source's own, so it is not foreign. It reads the
+  source's database rather than its table, so nothing here changes on a sharded
+  cluster; every check below that does read `table:` reads it as the Distributed
+  table, which is the decision 6.9 points at.
 - `source/privileges`, the source's own user against the contract in 6.7.2.
   Not a check on the rule at all: it asserts that the guarantees the other
   checks are allowed to stop making are actually in place. Probes for the
@@ -359,6 +372,14 @@ so tier 2 is where the ruler starts reading rows and needs its own opt in
   arrives once there is data to find it in. An operator who would rather an
   unverifiable rule block adds `require-rows` to the check's keys, which
   turns an empty sample into a finding of its own.
+
+  **On a sharded cluster it samples the Distributed table.** `table:` names the
+  table a rule reads, which on a sharded cluster is the Distributed one (6.9),
+  so the sample fans out and sees every shard's rows and `DESCRIBE TABLE`
+  answers from the structure the Distributed table carries. Sampling the local
+  `MergeTree` instead would read one shard, and a key written only by rows that
+  hash to another shard would be reported as a key nothing writes: a false
+  finding on a working rule, which is the one thing this check cannot afford.
 
   **A clean result is not a statement about the table.** The sample runs as
   the source's own user, `readonly = 2` with row policies applied (6.7.2), so
@@ -491,7 +512,14 @@ with a caveat is one answer with a reservation and not two problems:
 
 - TTL. If the table TTLs at 3 days, a 7 day backfill quietly under reports.
   The TTL is read from `system.tables`, which the user contract in 6.7.2 leaves
-  readable, and a range longer than it is reported.
+  readable, and a range longer than it is reported. A Distributed table, which
+  is what `table:` names on a sharded cluster (6.9), has no `TTL` in its engine
+  clause and no parts of its own, so this caveat and the next one read the local
+  table out of the Distributed engine's arguments and ask about that. It is the
+  coordinator's own copy, so both are one shard's answer and the caveat names the
+  table it read; a coordinator holding no copy is reported as unanswerable rather
+  than passed over, because a caveat that stopped appearing reads as a replay
+  with nothing to qualify.
 - Schema drift inside the range. A column added 6 hours ago makes a 24 hour
   backfill read that column's default for the older windows and report a rule
   that never fired. A column added by `ALTER TABLE ADD COLUMN` is absent from

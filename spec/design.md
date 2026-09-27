@@ -704,11 +704,14 @@ between one team and another team's data. 6.6 should be read with that
 correction. Its claim holds because of the grants, and it held in the probe
 with no checker running at all.
 
-**This is what unblocks tier 1.** 6.9 asks what `table:` means on a sharded
-cluster before tier 1 can use it, on the assumption that getting it wrong is a
+**This is what unblocks tier 1.** 6.9 asked what `table:` means on a sharded
+cluster before tier 1 could use it, on the assumption that getting it wrong is a
 tenancy hole. Under the line above it is not: `table:` carries no security
-meaning, so a wrong answer produces a wrong lint finding and nothing more.
-Tier 1 proceeds on the single-node reading and 6.9 stays open.
+meaning, so a wrong answer produces a wrong lint finding and nothing more. That
+is what let tier 1 proceed, and the answer is now decided rather than deferred:
+`table:` is the table a rule reads, so on a sharded cluster it is the
+Distributed one. See the entry in `decisions.md`, which has the argument, and
+6.9 below for what each check does with it.
 
 ### 6.7.2 The ClickHouse user contract
 
@@ -751,7 +754,13 @@ because a probe there would mean sending a query designed to exceed a limit.
 says nothing about whether the source can read its own table. `SELECT 1 FROM
 <table> LIMIT 0` on the same round trip proves the grant that has to be there,
 so an under-granted user is a finding in CI rather than an `ACCESS_DENIED` on
-the first evaluation at three in the morning.
+the first evaluation at three in the morning. On a sharded cluster the same
+statement proves more than it looks like it does: `table:` is the Distributed
+table (6.9), and a read of one contacts every shard even at `LIMIT 0`, so the
+assertion covers the fanout and the grant on each node rather than one row in
+the coordinator's `system.tables`. A shard that cannot be reached fails it with
+a connection error, which is inconclusive rather than a missing grant, and that
+is the honest answer to the question while part of the cluster is gone.
 
 **Assert on the error code, not the message.** `497 ACCESS_DENIED` is a pass.
 Any other error is inconclusive and reports as inconclusive, because a probe
@@ -841,8 +850,9 @@ deterministic.
 
 ### 6.9 Sharded clusters
 
-Partly addressed. The silent correctness bug is closed and proven; the
-connection and the caps are still gaps, listed below.
+Partly addressed. The silent correctness bug is closed and proven, and what
+`table:` names is decided; the connection and the caps are still gaps, listed
+below.
 
 The query path itself needs no change. The author writes their own `FROM`, so
 on a sharded cluster they name the Distributed table and the ruler never has
@@ -925,15 +935,63 @@ ceiling is per shard, not per query. 6.2 and 6.7 describe them as a cluster
 cap, which is loose. Fanout also means the coordinator merges results, so
 `max_result_rows` is the only cap applying to the query as a whole.
 
+**The predicted cost is one shard's, and this is the next slice.** Measured on
+the two node stack: `EXPLAIN ESTIMATE` over a Distributed table answers from the
+coordinator's own parts alone, and the row it returns names the local table
+rather than the source's. So the number is roughly `1/N` of what the cluster
+reads on `N` shards, and it is reported under a table name the source never
+mentions.
+
+A caveat on the finding does not fix it, and that is the part worth stating
+before anyone builds one. Caveats hang off findings, and `rule/cost` reports only
+when a ceiling is exceeded, so an underreported cost produces no finding and
+there is nowhere for the caveat to go. It is the same silence the retention
+caveat had before it resolved through: nothing looks exactly like a pass. Where a
+marker does belong is the summary table in 7.10, because every rule has a row
+there whether it breached or not.
+
+What the ceiling needs is a cluster number, and the grant decides how it gets
+one. Two paths, and the second is the fallback for the first:
+
+1. **Scale by the shard count.** The count is in `system.clusters`, which the
+   contract in 6.7.2 does not grant: measured as `497 ACCESS_DENIED` naming
+   `SELECT(cluster, shard_num) ON system.clusters`. So this costs one more system
+   table in the contract, in the same family as the `system.settings` read the
+   constraints assertion already depends on. The alternative source is
+   `uniq(_shard_num)` off the Distributed table itself, which needs no grant and
+   reads rows, so it would drop this check out of tier 1 and is not taken.
+   Scaling assumes the shards hold roughly the same amount, which is a real
+   reservation and inside the accuracy this check already claims: 7.3 warns
+   rather than blocks precisely because the optimiser can be out by an order of
+   magnitude on a skewed key. The caveat then says what the number is, the
+   coordinator's parts times the shard count, rather than implying a measurement.
+2. **Report it unestimated when the count cannot be read.** No grant, no
+   guessing: the cost is reported as refused for that source, saying the estimate
+   covers the coordinator's parts only and no ceiling was applied. It is honest
+   and it turns the check off on exactly the clusters where cost matters most,
+   which is why it is the fallback rather than the answer.
+
+The fallback is chosen per source at check time rather than configured. An
+operator who wants the ceiling enforced on a sharded cluster grants the one
+system table, and one who will not is told the check could not answer instead of
+being shown a shard's number as a cluster's.
+
 **`evaluation_delay` must cover the slowest shard.** Insert lag is per shard,
 and the delay has to clear the worst one, not the average. This is a larger
 number rather than new configuration.
 
-**What `table:` refers to becomes ambiguous.** It is parsed and validated but
-never read by the querier today; it exists for the tier 1 checks in 7.3. On a
-sharded cluster it could mean the local table or the Distributed one, and
-those have different rows in `system.tables`. Decide this before tier 1 uses
-it, not after.
+**`table:` is the Distributed table.** It is never read by the querier; it
+exists for the checks in 7.3 and 7.4, which use it to ask the cluster about the
+table a rule reads. A rule reads the Distributed table, for the reason the query
+path paragraph above gives, so that is what `table:` names and the local table
+stays out of the rules repository entirely. The decision and what it is worth
+are in `decisions.md`; what it costs is two questions a Distributed table cannot
+answer, the retention and the column history behind the backfill caveats in 7.4,
+and both resolve through the Distributed engine's own arguments to the local
+table on the connected node and say in the caveat that that is what they read.
+The cost caps below are the part this leaves wrong: `EXPLAIN ESTIMATE` over a
+Distributed table answers for the coordinator's own parts alone, so a prediction
+on a sharded cluster is out by the fanout.
 
 ---
 

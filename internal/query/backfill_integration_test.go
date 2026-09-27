@@ -178,7 +178,7 @@ func TestBackfillWarnsWhenTheRangeExceedsTheTTL(t *testing.T) {
 func TestTableTTLReadsTheSchema(t *testing.T) {
 	q := openQuerier(t, testSource(t))
 
-	got, ok := q.tableTTL(context.Background())
+	got, ok := q.tableTTL(context.Background(), q.storageTable(context.Background()).Local)
 	if !ok {
 		t.Fatal("tableTTL answered nothing, but the schema sets one")
 	}
@@ -200,7 +200,8 @@ func TestColumnsAddedIsSilentWithoutTheGrant(t *testing.T) {
 		t.Fatalf("renderForCheck: %v", err)
 	}
 
-	if got := q.columnsAdded(context.Background(), sql, anchor.Add(-time.Hour)); len(got) != 0 {
+	local := q.storageTable(context.Background()).Local
+	if got := q.columnsAdded(context.Background(), sql, anchor.Add(-time.Hour), local); len(got) != 0 {
 		t.Errorf("columns = %v, want none: this user cannot read system.parts_columns", got)
 	}
 }
