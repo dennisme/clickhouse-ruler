@@ -165,6 +165,49 @@ not the evaluation succeeded. A query ClickHouse refused outright reports a
 duration and no rows, which is the one case where the counters undercount
 what a rule is costing. `system.query_log` has the full account, below.
 
+### A cluster whose queries are slow
+
+```promql
+histogram_quantile(0.99, sum by (source, le) (rate(clickhouse_ruler_query_duration_seconds_bucket[5m])))
+```
+
+**Trouble when p99 approaches the interval of the groups reading that cluster.**
+A rule evaluates against every cluster its source selector matches, so this is
+the query that says which of them is slow rather than that something is. Past
+the group interval the evaluation cannot finish in time and the missed
+iterations above follow.
+
+Swap `source` for `rule`, `rule_group` or `team` for the same reading by alert,
+by group or by owner. Add the wait for a slot to get what the rule actually
+waited, which is the number an operator feels rather than the one the database
+reports:
+
+```promql
+histogram_quantile(0.99, sum by (source, le) (rate(clickhouse_ruler_query_duration_seconds_bucket[5m])))
++ histogram_quantile(0.99, sum by (source, le) (rate(clickhouse_ruler_query_queue_wait_seconds_bucket[5m])))
+```
+
+One cluster slow and the rest flat is that cluster, and every cluster slow at
+once is the rule's SQL or a table that grew. `system.query_log` below says which,
+and `ruler check --online` says what the rule is predicted to read.
+
+### What a team read, and from which cluster
+
+```promql
+sum by (team, source) (rate(clickhouse_ruler_query_read_bytes_total[1h]))
+```
+
+**This is the chargeback number, so there is no threshold on it.** It says
+bytes per second read per owner per cluster, which is what an operator bills
+from and what they negotiate about: a team whose rules span a shared cluster and
+a cluster of their own reads from both, and only the shared one costs anybody
+else anything.
+
+An empty `team` is a rule nobody has claimed rather than a rule owned by the
+empty string, and it is left visible on purpose: chargeback that hides what is
+unattributed is chargeback nobody can reconcile. Fix it by adding a `team` label
+to the rule, not by filtering it out here.
+
 ### Queries queueing behind a source limit
 
 ```promql

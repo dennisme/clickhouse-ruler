@@ -355,6 +355,47 @@
       ]
     },
     {
+      "title": "Query latency by source",
+      "description": "How long queries took against each cluster, which is the question asked first when alerts arrive late: a rule evaluates against every cluster its selector matches, so duration by rule alone cannot say which one is slow. One cluster above the rest is that cluster; all of them together is the rule's SQL or a table that grew. The second series adds the wait for a slot, which is what the rule actually waited (spec 8.8).",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 41
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "histogram_quantile(0.99, sum by (source, le) (rate(clickhouse_ruler_query_duration_seconds_bucket[$__rate_interval])))",
+          "legendFormat": "{{source}} p99 duration"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "histogram_quantile(0.99, sum by (source, le) (rate(clickhouse_ruler_query_duration_seconds_bucket[$__rate_interval]))) + histogram_quantile(0.99, sum by (source, le) (rate(clickhouse_ruler_query_queue_wait_seconds_bucket[$__rate_interval])))",
+          "legendFormat": "{{source}} p99 duration + queue wait"
+        }
+      ]
+    },
+    {
       "title": "Source queue wait",
       "description": "How long a query waited for a slot against its source's max_concurrent_queries limit. Only sources that set one appear. A small steady wait is the limit doing its job; a wait approaching the group interval is a limit set too low, or a cluster gone slow with the limit containing it.",
       "type": "timeseries",
@@ -366,7 +407,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 41
+        "y": 49
       },
       "fieldConfig": {
         "defaults": {

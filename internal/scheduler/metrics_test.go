@@ -70,3 +70,103 @@ func TestBuildInfoStaysOneSeries(t *testing.T) {
 		t.Errorf("series = %d, want 1", got)
 	}
 }
+
+// The question the cost labels exist for is which cluster is slow (spec 8.8),
+// and a rule spanning two clusters can only answer it if each source gets its
+// own series rather than both folding into one.
+func TestQueryDurationKeepsOneSeriesPerSource(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	m := NewMetrics(reg)
+
+	m.QueryDuration.WithLabelValues("HighLatency", "api", "payments", "prod_eu").Observe(1)
+	m.QueryDuration.WithLabelValues("HighLatency", "api", "payments", "prod_us").Observe(2)
+
+	if got := testutil.CollectAndCount(m.QueryDuration); got != 2 {
+		t.Errorf("series = %d, want one per source", got)
+	}
+	if got := labelValues(t, reg, "clickhouse_ruler_query_duration_seconds", "source"); len(got) != 2 {
+		t.Errorf("source values = %v, want two", got)
+	}
+}
+
+// A source that left the configuration takes its cost series with it, or they
+// read as a cluster this ruler still bills for and still measures (spec 8.8).
+func TestDeleteSourceClearsCostSeries(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	m := NewMetrics(reg)
+
+	for _, src := range []string{"prod_eu", "prod_us"} {
+		m.QueryReadRowsTotal.WithLabelValues("HighLatency", "payments", src).Add(1)
+		m.QueryReadBytesTotal.WithLabelValues("HighLatency", "payments", src).Add(1)
+		m.QueryDuration.WithLabelValues("HighLatency", "api", "payments", src).Observe(1)
+		m.QueryQueueWait.WithLabelValues(src).Observe(1)
+	}
+
+	m.deleteSource("prod_eu")
+
+	for _, c := range []prometheus.Collector{
+		m.QueryReadRowsTotal, m.QueryReadBytesTotal, m.QueryDuration, m.QueryQueueWait,
+	} {
+		if got := testutil.CollectAndCount(c); got != 1 {
+			t.Errorf("series = %d, want only the source still configured", got)
+		}
+	}
+	if got := labelValues(t, reg, "clickhouse_ruler_query_duration_seconds", "source"); len(got) != 1 || !got["prod_us"] {
+		t.Errorf("source values = %v, want prod_us alone", got)
+	}
+}
+
+// Deleting a rule's cost series still has to reach every source it evaluated
+// against, which is what the partial match on `rule` alone buys (spec 8.2).
+func TestDeleteRuleNameClearsCostSeriesAcrossSources(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	m := NewMetrics(reg)
+
+	for _, src := range []string{"prod_eu", "prod_us"} {
+		m.QueryReadRowsTotal.WithLabelValues("HighLatency", "payments", src).Add(1)
+		m.QueryReadBytesTotal.WithLabelValues("HighLatency", "payments", src).Add(1)
+		m.QueryDuration.WithLabelValues("HighLatency", "api", "payments", src).Observe(1)
+	}
+	m.QueryReadRowsTotal.WithLabelValues("SlowWrites", "storage", "prod_eu").Add(1)
+	m.QueryDuration.WithLabelValues("SlowWrites", "storage-group", "storage", "prod_eu").Observe(1)
+	m.QueryMemoryUsage.WithLabelValues("HighLatency").Observe(1 << 20)
+
+	m.deleteRuleName("HighLatency")
+
+	if got := testutil.CollectAndCount(m.QueryReadRowsTotal); got != 1 {
+		t.Errorf("rows series = %d, want only the other rule", got)
+	}
+	if got := testutil.CollectAndCount(m.QueryReadBytesTotal); got != 0 {
+		t.Errorf("bytes series = %d, want none", got)
+	}
+	if got := testutil.CollectAndCount(m.QueryDuration); got != 1 {
+		t.Errorf("duration series = %d, want only the other rule", got)
+	}
+	if got := testutil.CollectAndCount(m.QueryMemoryUsage); got != 0 {
+		t.Errorf("memory series = %d, want none", got)
+	}
+}
+
+// labelValues is the set of values one label takes across a metric family.
+func labelValues(t *testing.T, reg *prometheus.Registry, metric, label string) map[string]bool {
+	t.Helper()
+
+	families, err := reg.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	values := map[string]bool{}
+	for _, f := range families {
+		if f.GetName() != metric {
+			continue
+		}
+		for _, m := range f.GetMetric() {
+			for _, p := range m.GetLabel() {
+				if p.GetName() == label {
+					values[p.GetValue()] = true
+				}
+			}
+		}
+	}
+	return values
+}

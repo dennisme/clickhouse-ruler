@@ -32,13 +32,15 @@ type Usage struct {
 	Duration time.Duration
 }
 
-// Recorder is told what a rule's query cost, once per evaluation.
+// Recorder is told what a rule's query cost, once per evaluation, and against
+// which source it ran: cost is per cluster as much as per rule, because a rule
+// evaluates against every source its selector matches (spec 8.8).
 //
 // An interface declared here and satisfied by the caller, because
 // internal/query has no business knowing about a metrics registry and the
 // registry has no business knowing about a driver callback.
 type Recorder interface {
-	QueryCost(rule, team string, u Usage)
+	QueryCost(rule string, who Attribution, source string, u Usage)
 }
 
 // usage accumulates one query's callbacks.

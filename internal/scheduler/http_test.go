@@ -50,10 +50,10 @@ func TestMetricsAreNamespacedToThisRuler(t *testing.T) {
 	m.AlertsSendFailures.WithLabelValues("am").Inc()
 	m.NotificationLatency.Observe(1)
 	m.RulesUnmatched.WithLabelValues("f.yaml:g1").Set(0)
-	m.QueryReadRowsTotal.WithLabelValues("R", "payments").Add(1)
-	m.QueryReadBytesTotal.WithLabelValues("R", "payments").Add(1)
+	m.QueryReadRowsTotal.WithLabelValues("R", "payments", "prod_eu").Add(1)
+	m.QueryReadBytesTotal.WithLabelValues("R", "payments", "prod_eu").Add(1)
 	m.QueryMemoryUsage.WithLabelValues("R").Observe(1)
-	m.QueryDuration.WithLabelValues("R").Observe(1)
+	m.QueryDuration.WithLabelValues("R", "f.yaml:g1", "payments", "prod_eu").Observe(1)
 
 	body := serveMetrics(t, reg)
 

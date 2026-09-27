@@ -136,7 +136,7 @@ func (q *Querier) Run(ctx context.Context, r rule.Rule, who Attribution, now tim
 	// the server reported before the failure, which is nothing at all when
 	// it refused the query outright.
 	started := time.Now()
-	defer func() { q.record(r.Alert, who.Team, &m, time.Since(started)) }()
+	defer func() { q.record(r.Alert, who, &m, time.Since(started)) }()
 
 	rows, err := q.conn.Query(ctx, sql)
 	if err != nil {
@@ -176,11 +176,11 @@ func (q *Querier) Run(ctx context.Context, r rule.Rule, who Attribution, now tim
 }
 
 // record hands one evaluation's cost to whoever is collecting it.
-func (q *Querier) record(rule, team string, m *meter, waited time.Duration) {
+func (q *Querier) record(rule string, who Attribution, m *meter, waited time.Duration) {
 	if q.recorder == nil {
 		return
 	}
 	usage := m.read()
 	usage.Duration = waited
-	q.recorder.QueryCost(rule, team, usage)
+	q.recorder.QueryCost(rule, who, q.src.Name, usage)
 }

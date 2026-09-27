@@ -214,28 +214,42 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 		// unattributed.
 		QueryReadRowsTotal: f.NewCounterVec(prometheus.CounterOpts{
 			Name: "clickhouse_ruler_query_read_rows_total",
-			Help: "Total rows ClickHouse read evaluating a rule. Empty team means the rule carries no team label.",
-		}, []string{"rule", "team"}),
+			Help: "Total rows ClickHouse read evaluating a rule, by the cluster it read from. Empty team means the rule carries no team label.",
+		}, []string{"rule", "team", "source"}),
 
 		QueryReadBytesTotal: f.NewCounterVec(prometheus.CounterOpts{
 			Name: "clickhouse_ruler_query_read_bytes_total",
-			Help: "Total bytes ClickHouse read evaluating a rule. Empty team means the rule carries no team label.",
-		}, []string{"rule", "team"}),
+			Help: "Total bytes ClickHouse read evaluating a rule, by the cluster it read from. Empty team means the rule carries no team label.",
+		}, []string{"rule", "team", "source"}),
 
 		// Bucketed in powers of eight from a megabyte, because the cap this
 		// is read against is measured in gigabytes and a linear scale over
 		// that range says nothing about the rules below it.
+		//
+		// The one cost metric that stays on `rule` alone: peak memory is a
+		// property of the query rather than of the cluster it ran on, and the
+		// cap it is read against is the same wherever the rule evaluates
+		// (spec 8.8).
 		QueryMemoryUsage: f.NewHistogramVec(prometheus.HistogramOpts{
 			Name:    "clickhouse_ruler_query_memory_usage_bytes",
 			Help:    "Peak memory one evaluation's query reached on the server.",
 			Buckets: prometheus.ExponentialBuckets(1<<20, 8, 6),
 		}, []string{"rule"}),
 
+		// Carries `source` because a rule evaluates against every cluster its
+		// selector matches, so without it one histogram folds them all together
+		// and cannot say which cluster is slow. It joins to queue wait on that
+		// label and on nothing else. `rule_group` because the group is the
+		// scheduling unit, so its query latency against its interval is the
+		// arithmetic behind a missed iteration, and `team` so chargeback can say
+		// what an owner made a cluster spend time on and not only what they
+		// read. Neither adds series: a rule belongs to one group and carries one
+		// team, so both are determined by `rule` (spec 8.8).
 		QueryDuration: f.NewHistogramVec(prometheus.HistogramOpts{
 			Name:    "clickhouse_ruler_query_duration_seconds",
 			Help:    "Time one evaluation's query took, measured by the ruler from sending it to the last row arriving.",
 			Buckets: prometheus.DefBuckets,
-		}, []string{"rule"}),
+		}, []string{"rule", "rule_group", "team", "source"}),
 
 		// How long queries wait for a slot against the source's own
 		// concurrency limit (spec 6.11), which is what says a limit is set
@@ -270,6 +284,12 @@ func (m *Metrics) deleteGroup(group string) {
 	m.LastDuration.DeletePartialMatch(labels)
 	m.AlertsActive.DeletePartialMatch(labels)
 	m.RulesUnmatched.DeletePartialMatch(labels)
+
+	// Query duration carries the group too, so it goes with the group like
+	// everything else labelled rule_group (spec 8.2). The other cost series
+	// carry the rule alone and wait for deleteRuleName, because an alert name
+	// may repeat across groups (spec 7.6).
+	m.QueryDuration.DeletePartialMatch(labels)
 }
 
 // deleteRule removes the series of one rule inside a group that is still
@@ -299,9 +319,15 @@ func (m *Metrics) deleteRuleName(rule string) {
 	m.QueryDuration.DeletePartialMatch(labels)
 }
 
-// deleteSource removes the queue wait series of a source no rule reaches any
-// more. Left behind, a histogram of waits against a source this ruler no longer
-// connects to reads as a concurrency limit that is still being hit.
+// deleteSource removes the series of a source no rule reaches any more. Left
+// behind, a histogram of waits against a source this ruler no longer connects
+// to reads as a concurrency limit that is still being hit, and the cost series
+// read as a cluster this ruler still bills for and still measures (spec 8.8).
 func (m *Metrics) deleteSource(source string) {
-	m.QueryQueueWait.DeletePartialMatch(prometheus.Labels{"source": source})
+	labels := prometheus.Labels{"source": source}
+
+	m.QueryQueueWait.DeletePartialMatch(labels)
+	m.QueryReadRowsTotal.DeletePartialMatch(labels)
+	m.QueryReadBytesTotal.DeletePartialMatch(labels)
+	m.QueryDuration.DeletePartialMatch(labels)
 }

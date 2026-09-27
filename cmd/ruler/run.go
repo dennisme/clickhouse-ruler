@@ -187,10 +187,10 @@ func runRun(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 // is. It is the wiring, so it lives where the wiring is.
 type queryCost struct{ metrics *scheduler.Metrics }
 
-func (c queryCost) QueryCost(rule, team string, u query.Usage) {
-	c.metrics.QueryReadRowsTotal.WithLabelValues(rule, team).Add(float64(u.ReadRows))
-	c.metrics.QueryReadBytesTotal.WithLabelValues(rule, team).Add(float64(u.ReadBytes))
-	c.metrics.QueryDuration.WithLabelValues(rule).Observe(u.Duration.Seconds())
+func (c queryCost) QueryCost(rule string, who query.Attribution, source string, u query.Usage) {
+	c.metrics.QueryReadRowsTotal.WithLabelValues(rule, who.Team, source).Add(float64(u.ReadRows))
+	c.metrics.QueryReadBytesTotal.WithLabelValues(rule, who.Team, source).Add(float64(u.ReadBytes))
+	c.metrics.QueryDuration.WithLabelValues(rule, who.Group, who.Team, source).Observe(u.Duration.Seconds())
 
 	// A query the server reported no memory for is one that never ran, such
 	// as a connection that failed. Observing a zero would pull the histogram
