@@ -195,10 +195,11 @@ That is the property we are copying. Everything else follows from it.
 3. **Sharded clusters.** `skip_unavailable_shards` is pinned to `0`, and a
    two node stack with an unreachable shard proves it: the evaluation fails
    rather than silently resolving the alerts that shard held. The rest of 6.9
-   is outstanding: `address` takes a single node, the cost caps
-   are per shard rather than per query, and `evaluation_delay` has to cover
-   the slowest shard. Proving any of it needs a second ClickHouse node in the
-   compose stack, since one node cannot reproduce the failure. What `table:`
+   is outstanding: the cost caps are per shard rather than per query, and
+   `evaluation_delay` has to cover the slowest shard. `address` stays one
+   endpoint, which is decided rather than outstanding, see `decisions.md`. The
+   compose stack carries the second node the proof needed, so what is left is
+   arithmetic and naming rather than topology. What `table:`
    means on a sharded cluster is no longer a blocker for tier 1: under 6.7.1
    it carries no security meaning, so a wrong answer is a wrong finding rather
    than a tenancy hole. It is still a correctness question for the checks that

@@ -4,7 +4,11 @@ Two kinds of file, owned by different people.
 
 **Sources** are operator owned. What a cluster is, where to connect, which
 ClickHouse user to connect as, how far behind live data to evaluate, and the
-cost caps.
+cost caps. `address` is one endpoint, so put whatever already makes your
+cluster reachable there: a managed service's hostname, a load balancer, or a
+DNS name covering several nodes. A node's own address works and ties the rules
+repository to your cluster's topology, which is a change you then make in two
+places.
 
 ```yaml
 # rules/sources.yaml
