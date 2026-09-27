@@ -468,14 +468,24 @@ and are what the code comments cite.
   Distributed engine's own first argument rather than anything a source states,
   which keeps topology out of the sources file the same way `table:` does.
   **Scaling rather than measuring, and said out loud.** Multiplying assumes the
-  shards hold roughly the same amount, and a skewed sharding key breaks that. It
-  is inside what this check already claims: 7.3 warns rather than blocks because
+  shards hold roughly the same amount, and several ordinary things break that: a
+  sharding key on a hot low cardinality column, a shard added later, since
+  ClickHouse does not rebalance the rows already written, a different retention on
+  one shard, and writes sent to a local table rather than through the Distributed
+  one. The error goes both ways, so this is not a ceiling that can be called
+  conservative: a coordinator holding more than its share overstates the cluster
+  and one holding less understates it. It is inside what this check already
+  claims: 7.3 warns rather than blocks because
   the optimiser's own estimate can be out by an order of magnitude on a skewed
   primary key, and a rule that is wrong by the shard skew was already wrong by
   more than that. What is not affordable is letting the number read as a
   measurement, so the finding says it is the coordinator's parts times the shard
   count and the summary table carries the same marker for every rule that raised
-  no finding.
+  no finding. What measures the real cluster read is an evaluation: the rows and
+  bytes a query actually read arrive on the driver's progress callback and are
+  already recorded per rule and per team (8.2). That is tier 2 and it is what an
+  operator watching a cost should read; this check exists to catch the rule before
+  it runs at all.
   **A count that cannot be read turns the ceiling off rather than guessing.**
   Comparing a shard's number against a cluster's ceiling is the failure this
   entry exists to remove, so a source whose user cannot read `system.clusters`
@@ -484,5 +494,14 @@ and are what the code comments cite.
   ESTIMATE` reports, because a user who cannot read the rule's table and a user
   who cannot count the cluster behind it are different facts and have different
   fixes. It turns the check off on exactly the clusters where cost matters most,
-  which is why it is the fallback and the grant is the answer. See 6.9, 6.7.2,
-  7.3, 7.10.
+  which is why it is the fallback and the grant is the answer.
+  **The missing grant is reported by the contract check, not by the cost check.**
+  A fallback nobody is told about is the silence this whole entry is against: an
+  unscaled cost breaches no ceiling, so the cost check has no finding to carry it
+  and the summary table only exists when somebody asked for one. So it is the
+  `clusters-readable` assertion in 6.7.2, which reports once per source in CI, at
+  startup and on a reload, is droppable on its own by an operator who cannot grant
+  it, and is asked only where the source's table is Distributed. Per source rather
+  than per rule because one grant on one user is not a fact about a rule, and the
+  alternative reports the same sentence once for every rule that matched the
+  cluster. See 6.9, 6.7.2, 7.3, 7.10.

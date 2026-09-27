@@ -234,7 +234,10 @@ Tier 1, metadata only, reads no table data:
   parts times the shard count, not a measurement of the cluster. Where the
   source's user cannot read that count, the cost is reported unestimated and no
   ceiling is applied, because a cost left at a shard's exceeds nothing and so
-  produces no finding for a caveat to attach to. 6.9 has the argument for both,
+  produces no finding for a caveat to attach to. The missing grant itself is
+  reported by `source/privileges` as its `clusters-readable` assertion, once per
+  source, so the fallback is something an operator is told about rather than a
+  ceiling that quietly stopped applying. 6.9 has the argument for both,
   and the summary table in 7.10 carries the marker for the rules that raise no
   finding at all.
 

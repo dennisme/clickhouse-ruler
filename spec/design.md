@@ -463,6 +463,56 @@ Whether a broken template should have reached production at all is a check-time
 question, not a runtime one. `annotations/template` reports it at authoring
 time, and an operator who wants it to block sets that check to `error` (7.6).
 
+**Not settled: which field the error lands in, and who hears about it.** Writing
+the error into the annotation's own value makes that field dynamic, and a
+consumer may be relying on it being a known string: Alertmanager groups,
+inhibits and silences on labels alone, so nothing here can split or merge an
+incident, but `summary` is what a PagerDuty title or a Slack message is built
+from and what any downstream automation parses. Three shapes, and the third is
+the one to build:
+
+1. Leave the failed annotation out. The cleanest model and the worst page: a
+   template printing `{{ .Annotations.summary }}` prints nothing, so the alert
+   looks blank, which is the failure this section exists to avoid.
+2. Keep the whole error as the value, which is what happens today and what
+   Prometheus does. Never blank, at the cost of a Go template error in the field
+   a consumer treated as stable.
+3. A short bounded marker in the failed annotation and the error beside it in one
+   the ruler owns. `summary` becomes something like `<ruler: annotation "summary"
+   failed>`, greppable and fixed in length, and the ruler's own annotation carries
+   `annotation "summary": template: summary:1:25: executing "summary" at <.p99>:
+   map has no entry for key "p99"`. A consumer wanting a known string gets a short
+   one with a fixed prefix, a responder still sees that something is wrong, and a
+   machine has one field to read.
+
+**A ruler-owned annotation is a name collision, and the answer is a check rather
+than a warning in the docs.** `rule/protected-label` already refuses a rule whose
+result columns produce a label the ruler owns (7.3), and an annotation the ruler
+writes is the same problem one field over, so the reserved name belongs in the
+`annotations/*` family as a check of its own. Documenting it instead leaves an
+author's `ruler_error` silently overwritten on the evaluation that fails, which is
+the one evaluation nobody is watching.
+
+**And the owner has to hear about it, which is what the shape above is for.** A
+failed template is the rule author's defect, found only while running because a
+check never sees real data. Today it reaches three places and none of them is the
+author: the annotation reaches whoever is paged, who is often not the author and
+cannot fix it mid-incident; the log line names the group, the rule, the source and
+the annotation but carries no team and no file; and
+`clickhouse_ruler_annotation_failures_total` carries neither either, and counts
+occurrences rather than saying whether it is still broken. So it should be raised
+as a finding on `clickhouse_ruler_problem` beside the other runtime findings
+(8.2, 10.4), which is the only surface that names a team and a file and clears
+when somebody fixes it.
+
+That takes an assumption worth stating rather than implying: the finding names the
+check, the annotation and the missing key, and the raw template error stays in the
+log, so an alert built on the gauge is only actionable where the ruler's logs are
+shipped somewhere the annotation on that alert can point at. An operator who ships
+no logs gets the team, the file and which annotation broke, and not the error
+itself. The finding is deliberately not a second copy of the Go error, which is
+already on the page and in the log.
+
 Templates are compiled once per rule rather than per evaluation, because they
 are fixed for the rule's lifetime and a rule returning a thousand rows would
 otherwise re-parse each annotation a thousand times every tick.
@@ -724,7 +774,8 @@ So the contract ships as a reference `CREATE USER` and profile, and is
 verified rather than assumed:
 
 - **Grants.** `SELECT` on exactly the source's table, and on `system.clusters`
-  so a sharded source's cost can be scaled to the cluster (6.9). Nothing else:
+  so a sharded source's cost can be scaled to the cluster (6.9), asserted as
+  `clusters-readable` and asked only of a source whose table is Distributed. Nothing else:
   no SOURCES privileges, no `INSERT`, no DDL, no `CREATE TEMPORARY TABLE`, which
   `remote()` needs in addition to `REMOTE`. The one system table is a count of
   shard numbers and holds no row a rule could read, which is why it is
@@ -985,6 +1036,17 @@ one. Two paths, and the second is the fallback for the first:
    answer rather than the refusal a denied `EXPLAIN ESTIMATE` already reports,
    because the two are different facts: one is a user who cannot read the rule's
    table, the other a user who can read it and cannot count the cluster.
+
+   **And the missing grant is reported, or the fallback is the silence it exists
+   to avoid.** A cost nobody could scale breaches no ceiling, so leaving it at the
+   summary table means an operator who does not pass `--summary` is told nothing
+   at all, which is the "nothing looks exactly like a pass" failure this section
+   argues against two paragraphs above. It is reported by the contract check
+   instead, as the `clusters-readable` assertion of 6.7.2: once per source rather
+   than once per rule, because one grant is one fact about one user, in CI and at
+   startup and on a reload, and droppable on its own like every other assertion by
+   an operator who cannot grant it. The assertion is asked only where the source's
+   table is Distributed, so a single node source passes it without being asked.
 
 The fallback is chosen per source at check time rather than configured. An
 operator who wants the ceiling enforced on a sharded cluster grants the one

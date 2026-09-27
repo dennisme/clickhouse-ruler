@@ -166,22 +166,49 @@ Validation and config:
 | Metric | Type | Labels |
 | --- | --- | --- |
 | `clickhouse_ruler_problem` | gauge | `rule`, `check`, `severity`, `team`, `file` |
+| `clickhouse_ruler_source_problem` | gauge | `source`, `check`, `severity`, `file` |
 | `clickhouse_ruler_rules_unmatched` | gauge | `rule_group` |
 | `clickhouse_ruler_config_last_reload_successful` | gauge | none |
 | `clickhouse_ruler_config_last_reload_timestamp_seconds` | gauge | none |
 
-`clickhouse_ruler_problem` is the `pint` analog, and it is the only metric here
-aimed at somebody other than the operator. A rule that broke under a schema
-change is fixed by whoever owns the query, so the labels have to say whose it is
-and where to edit: `team` from the rule's effective labels, empty when nobody
-claimed it for the same reason the cost metrics leave it empty (8.2), and `file`
-so the finding names a path rather than a rule somebody then has to grep for.
-`check` is what makes it actionable at all, because every check has a page and
-every finding links to it (7.8), so the annotation on an alert built from this
-gauge lands the owner on an explanation instead of on our dashboard.
+`clickhouse_ruler_problem` is the `pint` analog, and it is aimed at somebody
+other than the operator. A rule that broke under a schema change is fixed by
+whoever owns the query, so the labels have to say whose it is and where to edit:
+`team` from the rule's effective labels, empty when nobody claimed it for the same
+reason the cost metrics leave it empty (8.2), and `file` so the finding names a
+path rather than a rule somebody then has to grep for. `check` is what makes it
+actionable at all, because every check has a page and every finding links to it
+(7.8), so the annotation on an alert built from this gauge lands the owner on an
+explanation instead of on our dashboard.
 
-Cardinality is rules times checks, bounded by the rules loaded, and the gauge is
-rebuilt per pass rather than incremented: findings that went away have to stop
+`clickhouse_ruler_source_problem` is the same instrument for the other audience,
+and it is a second gauge rather than a label on the first. `source/privileges`
+reports a user that does not meet the contract in 6.7.2, which is nothing about a
+rule: no rule is broken by a missing grant, the fix is a grant, and the person
+holding the sources file is the person who can make it. Three things follow from
+that and each of them says split:
+
+- **Different receiver.** A rule finding is routed on `team` and a contract
+  finding is routed to whoever operates the ruler, so there are two alerts with
+  two receivers whichever way this is modelled. The saving of one expression was
+  the only argument for one gauge, and it was never real.
+- **Different labels, both fully populated.** A contract finding has no rule to
+  name and a rule finding names its source inside its own text, because making the
+  source a dimension there would multiply the cardinality below by the sources a
+  rule matched. One gauge means every series of both carries a permanently empty
+  dimension and a paragraph here explaining which.
+- **Different lifecycle.** The rule feeds rebuild per pass, scoped per check, on
+  the evaluation's clock and the re-check timer's. The contract rebuilds per load,
+  which is the cadence 6.7.3 already gives it. Two clearing cadences on one vector
+  is a trap for whoever adds the next feed.
+
+What they keep in common is `check`, so a finding on either still links to the
+page that explains it (7.8), and `severity`, so either still says what the same
+finding would do in CI.
+
+Cardinality is rules times checks for the first and sources times contract
+assertions for the second, bounded by the rules loaded and by the sources file,
+and both are rebuilt rather than incremented: findings that went away have to stop
 being series or the alert never clears. That makes a failed pass dangerous in
 the other direction, because blanking the gauge because the ruler could not ask
 would resolve every finding at once and read as a fix. A pass that fails leaves
@@ -200,8 +227,11 @@ Alerting on it staying raised is how the soft failure in 6.10 stops being
 ignored: the check warns at authoring time, this catches the case where nobody
 read the warning.
 
-Of these four, `clickhouse_ruler_problem` is the only one fed from somewhere
-other than the loader. It is fed from two places, and 10.4 is why: most of what
+Of these five, the two problem gauges are the ones fed from somewhere other than
+the loader. `clickhouse_ruler_source_problem` is fed by the contract check, per
+source at startup and on a reload, which is the cadence 6.7.3 already gives it, so
+publishing it costs no extra query. `clickhouse_ruler_problem` is fed from two
+places, and 10.4 is why: most of what
 it reports is drift the evaluation can see for free by comparing itself against
 the last one (6.3.2), and the rest is `rule/attribute-key`, which needs its own
 query on its own timer. Each feed rebuilds only the checks it owns, so a finding
