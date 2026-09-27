@@ -212,13 +212,13 @@ type blockingQuerier struct {
 	once    bool
 }
 
-func (q *blockingQuerier) Run(context.Context, rule.Rule, query.Attribution, time.Time) ([]alert.Sample, error) {
+func (q *blockingQuerier) Run(context.Context, rule.Rule, query.Attribution, time.Time) (query.Evaluation, error) {
 	if !q.once {
 		q.once = true
 		close(q.started)
 	}
 	<-q.release
-	return nil, nil
+	return query.Evaluation{}, nil
 }
 
 // A duplicate label set is a rule the author has to fix, so it has to reach

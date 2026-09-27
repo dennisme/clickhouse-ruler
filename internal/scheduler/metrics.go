@@ -12,10 +12,10 @@ import (
 // one metric series per rule, or the ruler becomes the cardinality problem
 // it exists to fix (spec 8.3).
 //
-// clickhouse_ruler_problem is not here: it reports rules that broke while the
-// ruler was running, which does not exist yet. The config reload pair below
-// does, because SIGHUP reloads the files this ruler is running (spec 8.2,
-// 10.4).
+// clickhouse_ruler_problem is the exception to that and the only metric here
+// aimed at somebody other than the operator: a rule that broke while running is
+// fixed by whoever owns the query, so it carries whose rule it is and where to
+// edit (spec 8.2, 10.4).
 type Metrics struct {
 	EvaluationsTotal        *prometheus.CounterVec
 	EvaluationFailuresTotal *prometheus.CounterVec
@@ -34,6 +34,7 @@ type Metrics struct {
 	NotificationLatency prometheus.Histogram
 
 	RulesUnmatched *prometheus.GaugeVec
+	Problem        *prometheus.GaugeVec
 
 	ConfigLastReloadSuccessful prometheus.Gauge
 	ConfigLastReloadTimestamp  prometheus.Gauge
@@ -134,6 +135,24 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 			Name: "clickhouse_ruler_rules_unmatched",
 			Help: "Number of loaded rules that matched no source, so this ruler will never evaluate them.",
 		}, []string{"rule_group"}),
+
+		// The one signal here addressed to a rule's owner rather than to the
+		// operator, so its labels have to say whose rule it is and where to
+		// edit it: `team` from the rule's effective labels, empty when nobody
+		// claimed it for the same reason the cost metrics leave it empty, and
+		// `file` so a finding names a path rather than a rule somebody then has
+		// to grep for. `check` is what makes it actionable at all, because
+		// every check has a page and every finding links to it (spec 7.8), so
+		// an alert built on this gauge lands its owner on an explanation rather
+		// than on our dashboard.
+		//
+		// Cardinality is rules times checks, bounded by the rules loaded, and
+		// it is rebuilt per pass rather than incremented: a finding that went
+		// away has to stop being a series or the alert never clears (spec 8.2).
+		Problem: f.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "clickhouse_ruler_problem",
+			Help: "Rules that broke while running, by check. Fixed by whoever owns the rule, not by the operator.",
+		}, []string{"rule", "check", "severity", "team", "file"}),
 
 		// What the two reload gauges say, and deliberately not the same thing.
 		//
@@ -254,6 +273,7 @@ func (m *Metrics) deleteRuleName(rule string) {
 
 	m.QueryReadRowsTotal.DeletePartialMatch(labels)
 	m.QueryReadBytesTotal.DeletePartialMatch(labels)
+	m.Problem.DeletePartialMatch(labels)
 	m.QueryMemoryUsage.DeletePartialMatch(labels)
 	m.QueryDuration.DeletePartialMatch(labels)
 }

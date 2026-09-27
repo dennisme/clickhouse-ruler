@@ -140,6 +140,17 @@ are stored.
 This is modelled on Cloudflare's `pint`, with one difference: `pint` can only
 advise, because Cloudflare does not own Prometheus. We do, so we can enforce.
 
+**Evaluation notices a rule going wrong on its own.** A rule can be correct
+when it merges and wrong months later, because the schema moved and nobody
+edited the file. Every evaluation already knows what its result looks like, so
+each one is compared against the previous one: a column dropped, renamed or
+retyped, or two clusters that stopped agreeing, raises
+`clickhouse_ruler_problem` with the team and the file to fix. It is a report
+and never a refusal, so the rule keeps evaluating and keeps paging while
+somebody fixes it. What this cannot see is a renamed OTel map key, because the
+query still parses, still returns the same columns and simply matches nothing:
+`ruler check --sample` is what answers that one.
+
 **Strictness is the operator's call.** A missing runbook does not stop a rule
 from evaluating correctly, so by default it is a warning, and a warning is the
 contributor's to act on. Raising it to an error means a repo owner has to be

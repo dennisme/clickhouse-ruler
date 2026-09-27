@@ -147,8 +147,8 @@ func run(t *testing.T, q *Querier, r rule.Rule, now time.Time) []alertSample {
 		t.Fatalf("Run: %v", err)
 	}
 
-	out := make([]alertSample, 0, len(got))
-	for _, s := range got {
+	out := make([]alertSample, 0, len(got.Samples))
+	for _, s := range got.Samples {
 		out = append(out, alertSample{service: s.Labels["ServiceName"], value: s.Value})
 	}
 	return out
@@ -340,10 +340,11 @@ func TestRunGroupsByResourceAttribute(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	got, err := q.Run(ctx, r, testGroup, anchor)
+	evaluation, err := q.Run(ctx, r, testGroup, anchor)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
+	got := evaluation.Samples
 
 	want := []struct {
 		env   string

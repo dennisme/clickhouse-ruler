@@ -8,7 +8,6 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
-	"github.com/dennisme/clickhouse-ruler/internal/alert"
 	"github.com/dennisme/clickhouse-ruler/internal/notify"
 	"github.com/dennisme/clickhouse-ruler/internal/query"
 	"github.com/dennisme/clickhouse-ruler/internal/rule"
@@ -21,9 +20,9 @@ type countingQuerier struct {
 	calls atomic.Int64
 }
 
-func (q *countingQuerier) Run(context.Context, rule.Rule, query.Attribution, time.Time) ([]alert.Sample, error) {
+func (q *countingQuerier) Run(context.Context, rule.Rule, query.Attribution, time.Time) (query.Evaluation, error) {
 	q.calls.Add(1)
-	return oneSample(), nil
+	return query.Evaluation{Samples: oneSample()}, nil
 }
 
 // Every group shares one Cadence, and each group runs in its own goroutine,

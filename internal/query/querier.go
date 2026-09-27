@@ -82,11 +82,37 @@ func settings(src source.Source) clickhouse.Settings {
 	}
 }
 
-// Run evaluates one rule and returns a sample per returned row.
-func (q *Querier) Run(ctx context.Context, r rule.Rule, who Attribution, now time.Time) ([]alert.Sample, error) {
+// Evaluation is what one evaluation of a rule produced.
+//
+// The shape and the cost are carried out beside the samples because the
+// evaluator compares each evaluation against the previous one, which is how a
+// rule broken by a schema change is reported without anything asking a second
+// question (spec 6.3.2). They used to be read here, spent on scanning and
+// dropped.
+type Evaluation struct {
+	// Samples is one sample per returned row.
+	Samples []alert.Sample
+
+	// Shape is the result's column names and types, as the driver reported
+	// them. It is what the comparison in 6.3.2 is on: there is exactly one
+	// correct answer for it at any moment and a change to it is never a
+	// healthy transition, neither of which is true of a row count.
+	Shape []Column
+
+	// Usage is what the server reported the query read, from the same
+	// callbacks the cost metrics are recorded from (spec 8.2). Its Duration is
+	// zero: how long the ruler waited is known only once the result has been
+	// handed back, so the cost metrics time it and this carries what the
+	// ceilings in 6.7 are measured against.
+	Usage Usage
+}
+
+// Run evaluates one rule and returns a sample per returned row, with what the
+// result looked like and what it cost.
+func (q *Querier) Run(ctx context.Context, r rule.Rule, who Attribution, now time.Time) (Evaluation, error) {
 	sql, err := render(r.Expr)
 	if err != nil {
-		return nil, fmt.Errorf("rule %q: %w", r.Alert, err)
+		return Evaluation{}, fmt.Errorf("rule %q: %w", r.Alert, err)
 	}
 	from, to := window(q.src, r, now)
 
@@ -114,7 +140,7 @@ func (q *Querier) Run(ctx context.Context, r rule.Rule, who Attribution, now tim
 
 	rows, err := q.conn.Query(ctx, sql)
 	if err != nil {
-		return nil, q.queryErr(r, err)
+		return Evaluation{}, q.queryErr(r, err)
 	}
 	// Close reports errors already surfaced by rows.Err below.
 	defer func() { _ = rows.Close() }()
@@ -129,7 +155,7 @@ func (q *Querier) Run(ctx context.Context, r rule.Rule, who Attribution, now tim
 			scan[i] = reflect.New(types[i].ScanType()).Interface()
 		}
 		if err := rows.Scan(scan...); err != nil {
-			return nil, q.queryErr(r, fmt.Errorf("scanning row: %w", err))
+			return Evaluation{}, q.queryErr(r, fmt.Errorf("scanning row: %w", err))
 		}
 
 		values := make([]any, len(scan))
@@ -139,14 +165,14 @@ func (q *Querier) Run(ctx context.Context, r rule.Rule, who Attribution, now tim
 		collected = append(collected, values)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, q.queryErr(r, err)
+		return Evaluation{}, q.queryErr(r, err)
 	}
 
 	samples, err := toSamples(columns, collected, q.src.MaxRows)
 	if err != nil {
-		return nil, fmt.Errorf("rule %q: %w", r.Alert, err)
+		return Evaluation{}, fmt.Errorf("rule %q: %w", r.Alert, err)
 	}
-	return samples, nil
+	return Evaluation{Samples: samples, Shape: shapeOf(columns, types), Usage: m.read()}, nil
 }
 
 // record hands one evaluation's cost to whoever is collecting it.

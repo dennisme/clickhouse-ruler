@@ -178,8 +178,9 @@ Alerting on it staying raised is how the soft failure in 6.10 stops being
 ignored: the check warns at authoring time, this catches the case where nobody
 read the warning.
 
-Of these four, only `clickhouse_ruler_problem` is outstanding. It is fed from two
-places, and 10.4 is why: most of what it reports is drift the evaluation can see
+Of these four, `clickhouse_ruler_problem` is the only one fed from somewhere
+other than the loader, and the half of it that reads the evaluations is built.
+It is fed from two places, and 10.4 is why: most of what it reports is drift the evaluation can see
 for free by comparing itself against the last one (6.3.2), and the rest is
 `rule/attribute-key`, which needs its own query on its own timer. The reload pair exists
 because `SIGHUP` reloads the files, and the two deliberately do not say the same
@@ -589,7 +590,7 @@ section 7 including the checks that read the query through the database and
 the one that reads rows, and `ruler run`, which ticks groups on their
 intervals, evaluates against every matched source, delivers to Alertmanager,
 and reloads all three files on `SIGHUP`. The observability in section 8 is
-complete apart from `clickhouse_ruler_problem`.
+complete apart from the timer half of `clickhouse_ruler_problem`.
 
 Hot reload is `SIGHUP` and nothing else: nothing watches the filesystem,
 because whoever rolled the files out is the only party that knows when they are
@@ -798,7 +799,8 @@ outage.
 on a timer. It is not built and it is not going to be, because most of what it
 would have re-asked is answerable from the evaluations already happening.
 
-**Two feeds, and the split is whether an extra query is needed.**
+**Two feeds, and the split is whether an extra query is needed.** The first is
+built and the second is not.
 
 The first is free and lives in the evaluator. Every evaluation already knows the
 result's column names and types, its cost, and whether it errored, so comparing
@@ -832,13 +834,15 @@ evaluation, and neither resolves an alert. Refusing belongs to reload alone
 paging for the condition on the strength of a schema change nobody reviewed.
 
 **The validation package is already re-runnable against loaded rules** (7.1), so
-neither feed is a rewrite. The evaluator comparison needs somewhere to keep the
-previous result's shape and the timer needs a caller, and the checks themselves
-are the ones CI runs. The shape does not currently leave `internal/query`: the
-column names and types are read, spent on scanning, and dropped, so carrying
-them out to the scheduler is a signature change rather than a pure addition.
+neither feed is a rewrite. The evaluator comparison keeps the previous result's
+shape per rule and source in `internal/scheduler`, and `query.Run` now returns
+that shape and what the query cost beside the samples rather than reading the
+column types, spending them on scanning and dropping them. The timer still needs
+a caller, and the checks themselves are the ones CI runs.
 
-**Neither feed ships without its page.** The signal is addressed to somebody who
+**Neither feed ships without its page.** The evaluator feed's is the
+"a rule that broke while running" section of the operations page, with the
+paragraph on how evaluation notices drift at all on how-it-works. The signal is addressed to somebody who
 owns a rule and may never have operated this ruler, so a gauge nobody explained
 is a gauge whose finding lands on the operator anyway, which is the outcome this
 whole section exists to avoid. 8.7 says what the operations page has to carry.

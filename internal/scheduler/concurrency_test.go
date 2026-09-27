@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dennisme/clickhouse-ruler/internal/alert"
 	"github.com/dennisme/clickhouse-ruler/internal/notify"
 	"github.com/dennisme/clickhouse-ruler/internal/query"
 	"github.com/dennisme/clickhouse-ruler/internal/rule"
@@ -34,7 +33,7 @@ func newBarrierQuerier(expect int) *barrierQuerier {
 	return b
 }
 
-func (b *barrierQuerier) Run(ctx context.Context, _ rule.Rule, _ query.Attribution, _ time.Time) ([]alert.Sample, error) {
+func (b *barrierQuerier) Run(ctx context.Context, _ rule.Rule, _ query.Attribution, _ time.Time) (query.Evaluation, error) {
 	n := b.inFlight.Add(1)
 	for {
 		peak := b.peak.Load()
@@ -54,7 +53,7 @@ func (b *barrierQuerier) Run(ctx context.Context, _ rule.Rule, _ query.Attributi
 	case <-ctx.Done():
 	}
 	b.inFlight.Add(-1)
-	return oneSample(), nil
+	return query.Evaluation{Samples: oneSample()}, nil
 }
 
 // barrierTimeout is how long a test waits for the queries it expects to be

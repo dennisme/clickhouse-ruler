@@ -8,6 +8,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+
 	"github.com/dennisme/clickhouse-ruler/internal/notify"
 	"github.com/dennisme/clickhouse-ruler/internal/ruleset"
 	"github.com/dennisme/clickhouse-ruler/internal/source"
@@ -82,6 +84,12 @@ type configured struct {
 type namedEval struct {
 	rule string
 	eval *RuleEval
+
+	// team and file are what a finding about this rule is addressed with: who
+	// owns the query and where to edit it (spec 8.2). The rule's own file,
+	// which is also the file half of its group's identity.
+	team string
+	file string
 }
 
 // New builds a Scheduler for set, which build lays out group by group.
@@ -218,7 +226,7 @@ func (s *Scheduler) build(set *ruleset.Set, queriers map[string]Querier, prev ma
 				eval.carry(p, retention)
 			}
 			evals[key] = eval
-			named = append(named, namedEval{rule: r.Alert, eval: eval})
+			named = append(named, namedEval{rule: r.Alert, eval: eval, team: r.Team(), file: r.File})
 		}
 		s.metrics.RulesUnmatched.WithLabelValues(groupName).Set(float64(unmatched))
 
@@ -374,6 +382,31 @@ func evalGroup(groupName string, evals []namedEval, m *Metrics, log *slog.Logger
 					log.Error("sending alerts to alertmanager failed",
 						"rule_group", groupName, "rule", ne.rule,
 						"error", res.SendError.Error())
+				}
+				// A rule that broke while running, reported to whoever owns
+				// it rather than to whoever operates the ruler (spec 6.3.2,
+				// 10.4). The gauge is rebuilt from this pass so a finding
+				// that went away stops being a series, and a pass that could
+				// not ask rebuilds nothing.
+				if res.Compared {
+					m.Problem.DeletePartialMatch(prometheus.Labels{
+						"rule": ne.rule, "file": ne.file,
+					})
+					for _, p := range res.Problems {
+						m.Problem.WithLabelValues(
+							ne.rule, p.Check, p.Severity.String(), ne.team, p.File).Set(1)
+
+						// A warning however severe the finding is: the rule is
+						// still evaluating and still paging, so nothing about
+						// the ruler is failing. The severity is the check's,
+						// and it is carried as a field rather than as the level
+						// for exactly that reason.
+						log.Warn("a rule broke while running",
+							"rule_group", groupName, "rule", ne.rule,
+							"check", p.Check, "severity", p.Severity.String(),
+							"team", ne.team, "file", p.File,
+							"problem", p.Text)
+					}
 				}
 				for _, qw := range res.QueueWaits {
 					m.QueryQueueWait.WithLabelValues(qw.Source).Observe(qw.Wait.Seconds())

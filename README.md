@@ -170,15 +170,20 @@ Working:
   a version that fails a correctness check.
 - A ClickHouse and Alertmanager compose stack, with an end to end test taking
   a rule from a file all the way to a delivered notification.
+- A rule that broke while running, reported to whoever owns it: every
+  evaluation is compared against the one before it, so a column dropped or
+  retyped under the query, two clusters that stopped agreeing on what a rule
+  returns, or a query reading past its ceiling raises
+  `clickhouse_ruler_problem` with the team and the file to fix. It reports and
+  never refuses, so the rule keeps evaluating and keeps paging.
 
 Not built yet:
 
-- Nothing reports a rule that broke while the ruler was running. Rules reload on
-  `SIGHUP`, but a schema change under a rule nobody edited is not surfaced until
-  something reloads or re-runs `ruler check`. The design is in spec 10.4:
-  comparing each evaluation's result shape against the last one, plus a slow
-  timer for the OTel map key check, both feeding a
-  `clickhouse_ruler_problem` gauge labelled with the team and file to fix.
+- The one case an evaluation cannot see: a renamed OTel map key. The query
+  still parses, returns the same columns and matches nothing forever, so
+  answering it means sampling recent data on a timer of its own rather than
+  comparing evaluations. Until it exists, `ruler check --sample` is where that
+  check runs. The design is in spec 10.4.
 
 Not planned: generating your Alertmanager route tree. That file is yours and
 already under your own review policy, so writing into it is not this tool's

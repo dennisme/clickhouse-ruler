@@ -326,6 +326,14 @@ What that catches, all of it free:
 - An error that has just started, attributed. `clickhouse_ruler_rule_evaluation_failures_total`
   already counts these, but a counter labelled by rule says "this broke" where
   the owner needs the check, the file and the team.
+
+  **Outstanding, and it is the one case of the four not built.** The other three
+  each report under a check that already exists, and this one has no name in the
+  table (7.8): "the query started failing" is not `rule/inspect`, which is the
+  online pass resolving a query, and a check cannot ship without an entry. What
+  it needs is a check of its own, with its page, before any of it is wired to
+  the gauge. Until then a started error is the counter and the log line naming
+  the source, which is what an operator has and what the rule's owner does not.
 - Cost crossing the ceilings in 6.7, which the driver callbacks already
   measure per evaluation and which `rule/cost` otherwise only predicts.
 
@@ -345,6 +353,8 @@ disabling it. Nothing is persisted: a baseline that outlived the process would
 have to be reconciled against a rule that changed while it was down, which is
 work for an answer that re-derives itself for free. That places it inside the
 restart caveat in 12.2 rather than adding a new one.
+
+Built, apart from the started error above.
 
 **Drift reports, it never refuses.** A rule whose shape changed keeps
 evaluating and its findings go to `clickhouse_ruler_problem` (8.2). Refusing is
