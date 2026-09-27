@@ -183,3 +183,66 @@ cluster where this check is off is exactly as safe as one where it passes. It
 is a warning by default for a different reason than a missing runbook is. A
 ruler pointed at an existing cluster fails it on the first run, and a check
 that blocks the first run gets switched off rather than fixed.
+
+## Sharded clusters and partial data
+
+A rule writes its own `FROM`, so on a sharded cluster you name the Distributed
+table and nothing else changes. The ruler does not rewrite your SQL, does not
+expand a cluster name, and does not know how many shards answered. What it does
+insist on is a complete answer.
+
+ClickHouse can answer a distributed query whose shard is unreachable two ways.
+By default it fails the query and names the node it could not reach. With
+`skip_unavailable_shards = 1` it drops that shard, returns the rows the rest of
+the cluster held, and reports success. The ruler sends the setting as `0` with
+every query rather than inheriting whatever a profile says, and the reference
+user in `deploy/clickhouse/init/02-ruler-user.sql` pins it `CONST` so a rule
+cannot raise it back.
+
+**A partial result is a wrong answer, not a smaller one.** Alert expressions are
+aggregates: `count()` over three of four shards is a different number, and a p99
+over a subset of the data is a different number, and a threshold comparison
+cannot tell either of those from a healthy result. The rows that go missing are
+alert instances, so they leave the state machine and their alerts resolve. A
+shard outage would resolve exactly the alerts most likely to matter, during the
+outage, with nothing logged.
+
+So a missing shard fails the evaluation instead:
+
+| | failing the evaluation | a partial result |
+| --- | --- | --- |
+| pending `for` timers | kept running | kept running |
+| firing alerts | stay firing | **resolve falsely** |
+| conditions on the missing shard | invisible, and reported | **invisible, silently** |
+| what the operator sees | log, counter, `rule/execution` | nothing |
+
+The failure is counted in
+`clickhouse_ruler_rule_evaluation_failures_total`, logged as `rule evaluation
+failed against a source` with what the database replied, and raised on
+`clickhouse_ruler_problem` as `rule/execution` against the team that owns the
+file. ClickHouse names the unreachable node in that message. Alert state is
+untouched, so the next successful evaluation sees the `for` timer it would have
+seen had the query never failed, and firing alerts keep being sent for as long
+as the outage lasts. [Evaluation
+failures](operations.md#evaluation-failures) is the operator side of this.
+
+**Draining a node is not a missing shard.** A shard is a set of replicas, and
+this only happens when every replica of one shard is unreachable. Restarting or
+draining one replica fails over to another, and adding or removing a shard is a
+change to the cluster definition rather than a shard that went missing. On a
+cluster with one replica per shard, any node restart does take a shard away, and
+the ruler treats that as the outage it is.
+
+**There is no per-rule setting for tolerating it.** A rule selects sources by
+label and runs against every cluster that matches, so how much of a cluster may
+be missing is a property of that cluster rather than of an alert, and a rule
+carrying the setting would apply it to clusters where it makes no sense.
+
+Two rough edges remain on a sharded cluster, both in
+[spec 6.9](https://github.com/dennisme/clickhouse-ruler/blob/main/spec/design.md):
+`max_execution_time` and `max_memory_usage` are enforced by each node
+independently, so the real ceiling is per shard rather than per query, and
+`evaluation_delay` has to clear the insert lag of the slowest shard rather than
+the average one. A shard lagging further behind than the delay allows returns no
+error at all, because nothing is unavailable; its newest rows are simply not
+there yet.

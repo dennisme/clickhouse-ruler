@@ -590,11 +590,16 @@ caps nothing.
 | `result_overflow_mode = throw` | see below |
 | `timeout_overflow_mode = throw` | see below |
 
-**Both overflow modes must throw.** Their other setting truncates, which hands
-the ruler a partial result that looks like a complete one. Fewer rows means
-instances disappear, and disappearing instances resolve alerts. A rule that
-exceeds its limits has to fail loudly, for the same reason
-`skip_unavailable_shards` is pinned in 6.9.
+**Both overflow modes must throw, and so must a missing shard.** Their other
+setting truncates, which hands the ruler a partial result that looks like a
+complete one. Fewer rows means instances disappear, and disappearing instances
+resolve alerts. `skip_unavailable_shards` is the third setting in this family and
+it is pinned to `0` for the same reason, not because the ruler has an opinion
+about topology: at `1`, "no rows" and "I could not reach the data" become the
+same reply. Alert expressions are aggregates, so a result missing a shard is a
+different number rather than a shorter one, and a threshold comparison cannot
+tell. All three are one requirement: a rule that cannot be answered completely
+has to fail loudly. 6.9 has what a shard adds to it.
 
 **Every limit above needs a settings constraint, or it is advisory.** The
 ruler sends settings with each query, which requires `readonly = 2`, because
@@ -836,24 +841,71 @@ deterministic.
 
 ### 6.9 Sharded clusters
 
-Not addressed yet. Everything below is a known gap, written down now because
-one of the items is a silent correctness bug rather than a missing feature.
+Partly addressed. The silent correctness bug is closed and proven; the
+connection and the caps are still gaps, listed below.
 
 The query path itself needs no change. The author writes their own `FROM`, so
 on a sharded cluster they name the Distributed table and the ruler never has
 to know the difference. What needs work is the connection and the settings.
 
-**`skip_unavailable_shards` must be pinned to `0`.** This is the one that
-matters. The ClickHouse default is already `0`, meaning an unreachable shard
-fails the query, but it is settable on a user or a profile. If it is ever `1`,
-a distributed query with a dead shard *succeeds* and returns only the rows the
+**`skip_unavailable_shards` is pinned to `0`.** This is the one that matters.
+The ClickHouse default is already `0`, meaning an unreachable shard fails the
+query, but it is settable on a user or a profile. If it is ever `1`, a
+distributed query with a dead shard *succeeds* and returns only the rows the
 surviving shards held. Missing rows are indistinguishable from a recovered
 condition: instances disappear from the state machine, their alerts resolve,
 and the page that should have fired never does. It goes wrong silently, and
-only during an outage, which is exactly when the alerts matter. The ruler
-should send it explicitly with the other settings in 6.7 rather than inherit
-whatever the profile says. Failing an evaluation loudly is always better than
+only during an outage, which is exactly when the alerts matter. So the ruler
+sends it explicitly with the other settings in 6.7 rather than inheriting
+whatever the profile says, and the reference profile pins it `CONST` so a rule
+cannot raise it back. Failing an evaluation loudly is always better than
 evaluating a partial result.
+
+**How the pin is proven.** A settings map can be read by a unit test; what a
+unit test cannot show is the answer the setting prevents, because one node
+cannot be missing a shard. So the compose stack has two ClickHouse nodes and
+two cluster definitions over them, one with both shards reachable and one whose
+second shard is an address nothing answers on, with a `Distributed` table on
+each. Three integration tests make one argument: a rule query fans out and
+returns a row from each shard, the same query against the broken cluster fails
+the evaluation under the ruler's settings, and that query returns a partial
+result with no error when the setting is raised. The third is the bug itself,
+reproduced, and it is what makes the second one proof rather than an assertion
+about an error string. It has to run as a user without the reference profile,
+since the profile's `CONST` refuses the raised setting outright, which is the
+contract in 6.7.2 doing its half of the job.
+
+**Failing is safe here, which is what makes the pin affordable.** A failed query
+leaves the alert state untouched: the `for` timer of a pending alert keeps
+running, a firing alert stays firing and keeps being sent, and the failure is
+counted, logged with what the cluster replied, and raised as `rule/execution`
+against the team that owns the file. So refusing a partial result costs one
+tick of visibility into the shards that did answer, while accepting one resolves
+the alerts the missing shard held. There is no per-rule setting for tolerating
+it, and there should not be: a rule selects sources by label and runs against
+every cluster that matches, so how much of a cluster may be missing is a
+property of that cluster. If it is ever wanted it belongs on the source, beside
+the other caps, and as a coverage floor rather than a boolean, since three of
+four shards and ninety nine of a hundred are not the same answer.
+
+**What a skipped shard looks like, if tolerance is ever built.** ClickHouse
+reports it in profile events rather than in the progress packets:
+`DistributedConnectionFailAtAll` counts the shards a query gave up on, beside
+`DistributedConnectionTries` and `DistributedConnectionFailTry`. The ruler
+already subscribes to profile events for the cost metrics in 8.2, so the counter
+arrives on a stream it reads. Nothing needs it today, because the query fails
+instead and the error names the unreachable node, which is what reaches the
+problem signal.
+
+The dead shard is an unroutable address from the range RFC 5737 reserves for
+documentation, not a container the test stops. Stopping a container needs docker
+control from inside a test and leaves the stack changed for whatever runs next,
+and `just integration` runs one package at a time, so the following package
+would inherit a cluster missing a node. A hostname that does not resolve was the
+first attempt and it fails too, but slowly: ClickHouse retries a failed lookup
+with a backoff and the evaluation takes twenty five seconds to give up, against
+three for a connection that is refused. The cost of all of this is a second
+server started and health checked on every integration run.
 
 **`address` must become a list.** The source schema takes one address and
 `query.Open` passes `[]string{src.Address}` to a driver that already accepts
@@ -876,12 +928,6 @@ never read by the querier today; it exists for the tier 1 checks in 7.3. On a
 sharded cluster it could mean the local table or the Distributed one, and
 those have different rows in `system.tables`. Decide this before tier 1 uses
 it, not after.
-
-Testing this needs a second ClickHouse node in the compose stack, a
-`Distributed` table over both, and a test that stops one node and asserts the
-evaluation fails rather than silently returning half the rows. Single-node
-testing cannot catch the `skip_unavailable_shards` bug at all, which is the
-argument for adding the node rather than reasoning about it on paper.
 
 ---
 

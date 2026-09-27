@@ -4,6 +4,11 @@ set shell := ["bash", "-euo", "pipefail", "-c"]
 
 # Matches the address in compose.yaml.
 clickhouse_addr := env("RULER_CLICKHOUSE_ADDR", "127.0.0.1:9000")
+
+# The second shard, also from compose.yaml. Only the sharded tests read it, and
+# they seed it directly: a distributed query reaches it through the cluster
+# definition in deploy/clickhouse/cluster.xml rather than through this address.
+clickhouse_addr_2 := env("RULER_CLICKHOUSE_ADDR_2", "127.0.0.1:9001")
 alertmanager_url := env("RULER_ALERTMANAGER_URL", "http://127.0.0.1:9093")
 
 # List available recipes.
@@ -41,6 +46,7 @@ test:
 # and two of them running at once would fight over it.
 integration:
     RULER_CLICKHOUSE_ADDR="{{clickhouse_addr}}" \
+    RULER_CLICKHOUSE_ADDR_2="{{clickhouse_addr_2}}" \
     RULER_ALERTMANAGER_URL="{{alertmanager_url}}" \
         env -u GOROOT GOTOOLCHAIN=auto go test -tags=integration -count=1 -p 1 ./...
 
@@ -76,6 +82,7 @@ coverage:
 # once fight over the webhook sink's fixed port.
 coverage-integration:
     RULER_CLICKHOUSE_ADDR="{{clickhouse_addr}}" \
+    RULER_CLICKHOUSE_ADDR_2="{{clickhouse_addr_2}}" \
     RULER_ALERTMANAGER_URL="{{alertmanager_url}}" \
         env -u GOROOT GOTOOLCHAIN=auto go test -tags=integration -count=1 -p 1 \
         -coverpkg=./... ./... -coverprofile coverage.out -covermode count

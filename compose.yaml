@@ -30,7 +30,42 @@ services:
       CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
     volumes:
       - ./deploy/clickhouse/init:/docker-entrypoint-initdb.d:ro
+      - ./deploy/clickhouse/cluster.xml:/etc/clickhouse-server/config.d/cluster.xml:ro
       - clickhouse-data:/var/lib/clickhouse
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    healthcheck:
+      test: ["CMD", "clickhouse-client", "--query", "SELECT 1"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  # The second shard. It exists so a distributed query has somewhere to fan out
+  # to and something to lose: with one node, a query whose shard is unreachable
+  # cannot be written at all, and the setting that decides whether that query
+  # fails or quietly returns half the rows cannot be tested (spec 6.9).
+  #
+  # It runs the same image and the same init as the first node, so the ruler's
+  # user and its one table exist on both, the way they would on a real cluster.
+  # The cost is startup: a second server to start and health check on every
+  # integration run, local and in CI. Nothing but the sharded tests reads it,
+  # and everything else keeps talking to the first node on its own port.
+  clickhouse2:
+    image: ${CLICKHOUSE_IMAGE:-clickhouse/clickhouse-server:25.8.2.29-alpine}
+    container_name: ruler-clickhouse2
+    ports:
+      - "127.0.0.1:9001:9000"
+    environment:
+      CLICKHOUSE_DB: otel
+      CLICKHOUSE_USER: ruler
+      CLICKHOUSE_PASSWORD: ruler
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+    volumes:
+      - ./deploy/clickhouse/init:/docker-entrypoint-initdb.d:ro
+      - ./deploy/clickhouse/cluster.xml:/etc/clickhouse-server/config.d/cluster.xml:ro
+      - clickhouse2-data:/var/lib/clickhouse
     ulimits:
       nofile:
         soft: 262144
@@ -65,3 +100,4 @@ services:
 
 volumes:
   clickhouse-data:
+  clickhouse2-data:

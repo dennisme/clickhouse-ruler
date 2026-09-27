@@ -103,11 +103,22 @@ func adminConn(t *testing.T, address string) driver.Conn {
 
 func seed(t *testing.T, q *Querier, spans []span) {
 	t.Helper()
+	seedAt(t, q.src.Address, spans)
+}
+
+// seedAt writes the fixture rows to one node.
+//
+// The node is named rather than taken from the Querier because a sharded
+// cluster is seeded shard by shard: a Distributed table is what a rule reads,
+// not what a test writes through, and a fixture inserted through it would land
+// wherever the sharding key sent it (spec 6.9).
+func seedAt(t *testing.T, address string, spans []span) {
+	t.Helper()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	conn := adminConn(t, q.src.Address)
+	conn := adminConn(t, address)
 	if err := conn.Exec(ctx, "TRUNCATE TABLE otel.otel_traces"); err != nil {
 		t.Fatalf("truncate: %v", err)
 	}
