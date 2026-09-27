@@ -907,11 +907,17 @@ with a backoff and the evaluation takes twenty five seconds to give up, against
 three for a connection that is refused. The cost of all of this is a second
 server started and health checked on every integration run.
 
-**`address` must become a list.** The source schema takes one address and
-`query.Open` passes `[]string{src.Address}` to a driver that already accepts
-many. Against a sharded cluster that single node is both a point of failure
-and the coordinator for every distributed query. Wants an `addresses:` list
-and a connection open strategy.
+**`address` stays one endpoint.** It was written down here as something that
+must become a list, on the grounds that a source names one node while
+`query.Open` passes `[]string{src.Address}` to a driver that accepts many. That
+is a capability rather than a requirement, and the decision is to keep one
+address. See the entry in `decisions.md`, which has the argument: what a list
+buys is failover for a cluster with nothing in front of it, what it costs is
+cluster topology inside the rules repository, a `system.query_log` readback
+that silently covers one node of several, and a load balancer worse than the
+one an operator already runs. The node is still both a point of failure and
+the coordinator for every distributed query, and making it not be is the
+operator's job, the same way the Alertmanager URL is.
 
 **The cost caps are per node.** `max_execution_time` and `max_memory_usage`
 are enforced by each node independently, so on a sharded cluster the real

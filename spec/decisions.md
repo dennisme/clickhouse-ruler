@@ -352,3 +352,48 @@ and are what the code comments cite.
   answer for a single ruler and for a replica joining a set; the high
   availability question in 12 is still open and is the one that would change it.
   See 6.5, 6.7.2, 7.6.
+- **A source names one endpoint, not a list of nodes.** The ClickHouse driver
+  accepts many addresses and 6.9 originally read that as something the source
+  schema owed it. It does not. A list buys client side failover for a cluster
+  with nothing in front of it, and every other way of reaching a cluster already
+  solves that better: a managed service is one FQDN, a self hosted cluster is
+  usually behind chproxy, HAProxy or a Kubernetes service, and a DNS name with
+  several records is one name. What the list costs is worse than what it buys.
+  It puts cluster topology in the rules repository, so replacing a node becomes
+  a pull request in the alerting repo and a stale entry is silent because the
+  driver simply uses another. It splits the `system.query_log` readback in 8.5,
+  which is per node: once queries can land on more than one, the cost per rule
+  and the operator queries on the operations page cover a fraction of the
+  traffic and nothing says which. And it is a load balancer with no health
+  checks, no weighting and no draining, competing with the one the operator
+  runs. So the endpoint is the operator's to make available, the same way the
+  Alertmanager URL is, and the ruler's behaviour when it disappears is already
+  correct: the evaluation fails, alert state is untouched, `for` timers keep
+  running and firing alerts keep being sent (6.3.2, 8.7). The case this leaves
+  out is a bare cluster with no name and no balancer in front of it, where the
+  answer is that a source is cheap: point a second one at another coordinator
+  and let one selector match both, which is the sharding by source argument in
+  10.2. What this costs is typing, and it is worth naming: a team with a
+  production cluster and a disaster recovery one writes two source blocks that
+  differ in a name, a label and an address, and the strict parser rejects the
+  YAML merge key that would otherwise share the rest. A list would be the wrong
+  way to buy that back. Source labels land on alerts (6.10.1), so one source
+  holding both addresses produces an alert that cannot say which cluster
+  answered, and a route tree that cannot either. A standby is usually behind, so
+  failing over inside the driver evaluates rules against lagging data on any
+  connection blip, quietly, and swallows the fact worth knowing, which is that
+  the primary was unreachable. Two sources also carry a decision a list makes
+  for you: whether the standby is alerted on at all, and under which labels. If
+  the duplication becomes a real complaint the answer is a `defaults:` block in
+  the sources file that each source inherits and overrides, chosen over YAML
+  merge keys because every finding carries a line number and a merged field's
+  line points at the anchor rather than at text the reader wrote; an inherited
+  field's finding points at the `defaults:` line and names the source. Two
+  boundaries on it, both load bearing. It carries the boilerplate fields and
+  never `name`, `labels` or `address`, because those three are what one source
+  is: a default label set would put the same labels on two clusters' alerts and
+  bring back the attribution problem this decision exists to avoid. And it
+  carries no `checks:` block, because policy merges as a strictest-wins maximum
+  with deliberately no precedence (7.7), which is the opposite of the override a
+  default needs, and one block holding both rules would be unreadable. See 6.6,
+  6.9, 6.10.1, 7.7.
