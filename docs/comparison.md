@@ -143,6 +143,51 @@ The cost is that every alert needs a metric. High cardinality log and trace
 queries blow up metric cardinality, and you lose alerting on the rows
 themselves, so per-instance alerts get awkward.
 
+## The Prometheus ruler and vmalert
+
+Neither is in the table, because neither can alert on a ClickHouse row: they
+evaluate PromQL and MetricsQL against a time series database. They are here
+because this ruler is modelled on them, and knowing where it agrees and where it
+does not is worth more to an operator than another scored row.
+
+What carries over. Metric names track the Prometheus ruler's wherever an
+equivalent exists, so a dashboard built against one works here by changing the
+prefix. Scheduling is the same model: one goroutine per group, an absolute
+schedule rather than a sleep, a start offset of `hash(name, file) mod interval`,
+and an overrun that skips the boundaries it passed and counts them under a
+metric whose suffix we already carry. There is no per-rule interval in any of the
+three. An alert's cadence is its group's cadence, and an operator asking about one
+alert is asking about its group whether they know it or not.
+
+Where it differs, and all three are deliberate.
+
+**Rules in a group always run concurrently here.** Prometheus evaluates them
+sequentially unless the `concurrent-rule-eval` feature flag is set, because a
+recording rule can feed the next rule in the file and the order is part of the
+contract. There are no recording rules here, so there is no order to preserve. A
+group's tick therefore costs its slowest rule rather than the sum of its rules,
+which makes missed iterations rarer than the same configuration would produce
+upstream, and means splitting a slow group helps less than you would expect.
+vmalert runs a group's rules one at a time unless the group sets `concurrency`.
+
+**Cost metrics carry the cluster.** A rule here can evaluate against many
+clusters, so query duration, rows and bytes carry `source`, and rows and bytes
+carry `team` from the rule's own labels. Neither upstream ruler labels anything by
+the datasource it queried, and vmalert's datasource client is not instrumented at
+all. Per-cluster latency and per-team chargeback are the two questions that
+depends on.
+
+**The wait for a query slot is measured and attributed.** All three bound how
+many queries run at once, and they handle a full gate differently. Prometheus'
+rule concurrency gate never waits: it tries for a slot and evaluates the rule
+inline if there is none, so there is no wait to report. vmalert blocks on a
+channel like we do and reports nothing about it. Prometheus does measure a queue
+wait one layer down, at the PromQL engine's own concurrency gate, but one gate
+serves API queries and rule evaluations and the histogram names neither, so
+nobody can ask which group paid. Here the wait is a histogram labelled by group,
+because a group whose rules all fire on one tick queues against itself, and that
+reads as a late group with fast clusters unless something says otherwise.
+
 ## When you should not use this
 
 If you already run OSS Grafana well, already keep its config in git, and your

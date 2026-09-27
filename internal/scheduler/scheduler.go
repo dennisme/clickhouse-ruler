@@ -135,6 +135,8 @@ func New(
 		resend:          resend,
 		recheckInterval: recheckInterval,
 	}
+	metrics.QueryConcurrency.Set(float64(queryConcurrency))
+
 	s.groups, s.evals, s.recheck = s.build(set, queriers, nil)
 	s.loaded = describe(set)
 	return s
@@ -209,7 +211,7 @@ func (s *Scheduler) Reload(set *ruleset.Set, queriers map[string]Querier) {
 func (s *Scheduler) build(set *ruleset.Set, queriers map[string]Querier, prev map[ruleKey]*RuleEval) ([]GroupSpec, map[ruleKey]*RuleEval, *GroupSpec) {
 	type groupKey struct{ file, name string }
 
-	limits := newQueryLimits(s.concurrency, matchedSources(set))
+	limits := newQueryLimits(s.concurrency, matchedSources(set), s.metrics)
 
 	var order []groupKey
 	rulesByGroup := map[groupKey][]ruleset.Rule{}
@@ -471,6 +473,9 @@ func evalGroup(groupName string, evals []namedEval, m *Metrics, log *slog.Logger
 				}
 				for _, qw := range res.QueueWaits {
 					m.QueryQueueWait.WithLabelValues(qw.Source).Observe(qw.Wait.Seconds())
+				}
+				for _, w := range res.ConcurrencyWaits {
+					m.QueryConcurrencyWait.WithLabelValues(groupName).Observe(w.Seconds())
 				}
 				m.AlertsActive.WithLabelValues(groupName, ne.rule, "pending").Set(float64(res.Pending))
 				m.AlertsActive.WithLabelValues(groupName, ne.rule, "firing").Set(float64(res.Firing))

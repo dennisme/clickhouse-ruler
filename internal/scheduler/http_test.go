@@ -50,10 +50,13 @@ func TestMetricsAreNamespacedToThisRuler(t *testing.T) {
 	m.AlertsSendFailures.WithLabelValues("am").Inc()
 	m.NotificationLatency.Observe(1)
 	m.RulesUnmatched.WithLabelValues("f.yaml:g1").Set(0)
-	m.QueryReadRowsTotal.WithLabelValues("R", "payments").Add(1)
-	m.QueryReadBytesTotal.WithLabelValues("R", "payments").Add(1)
+	m.QueryReadRowsTotal.WithLabelValues("R", "payments", "prod_eu").Add(1)
+	m.QueryReadBytesTotal.WithLabelValues("R", "payments", "prod_eu").Add(1)
 	m.QueryMemoryUsage.WithLabelValues("R").Observe(1)
-	m.QueryDuration.WithLabelValues("R").Observe(1)
+	m.QueryDuration.WithLabelValues("R", "f.yaml:g1", "payments", "prod_eu").Observe(1)
+	m.QueryConcurrencyWait.WithLabelValues("f.yaml:g1").Observe(1)
+	m.QueryConcurrency.Set(8)
+	m.QueriesInFlight.Set(0)
 
 	body := serveMetrics(t, reg)
 
@@ -75,6 +78,9 @@ func TestMetricsAreNamespacedToThisRuler(t *testing.T) {
 		"clickhouse_ruler_query_read_bytes_total",
 		"clickhouse_ruler_query_memory_usage_bytes",
 		"clickhouse_ruler_query_duration_seconds",
+		"clickhouse_ruler_query_concurrency_wait_seconds",
+		"clickhouse_ruler_query_concurrency",
+		"clickhouse_ruler_queries_in_flight",
 	} {
 		if !strings.Contains(body, name+"{") && !strings.Contains(body, name+" ") {
 			t.Errorf("%s is not exposed on /metrics", name)

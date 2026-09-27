@@ -48,6 +48,10 @@ type Metrics struct {
 	QueryMemoryUsage    *prometheus.HistogramVec
 	QueryDuration       *prometheus.HistogramVec
 	QueryQueueWait      *prometheus.HistogramVec
+
+	QueryConcurrencyWait *prometheus.HistogramVec
+	QueryConcurrency     prometheus.Gauge
+	QueriesInFlight      prometheus.Gauge
 }
 
 // NewMetrics registers every scheduler metric against reg. A nil reg uses
@@ -214,28 +218,42 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 		// unattributed.
 		QueryReadRowsTotal: f.NewCounterVec(prometheus.CounterOpts{
 			Name: "clickhouse_ruler_query_read_rows_total",
-			Help: "Total rows ClickHouse read evaluating a rule. Empty team means the rule carries no team label.",
-		}, []string{"rule", "team"}),
+			Help: "Total rows ClickHouse read evaluating a rule, by the cluster it read from. Empty team means the rule carries no team label.",
+		}, []string{"rule", "team", "source"}),
 
 		QueryReadBytesTotal: f.NewCounterVec(prometheus.CounterOpts{
 			Name: "clickhouse_ruler_query_read_bytes_total",
-			Help: "Total bytes ClickHouse read evaluating a rule. Empty team means the rule carries no team label.",
-		}, []string{"rule", "team"}),
+			Help: "Total bytes ClickHouse read evaluating a rule, by the cluster it read from. Empty team means the rule carries no team label.",
+		}, []string{"rule", "team", "source"}),
 
 		// Bucketed in powers of eight from a megabyte, because the cap this
 		// is read against is measured in gigabytes and a linear scale over
 		// that range says nothing about the rules below it.
+		//
+		// The one cost metric that stays on `rule` alone: peak memory is a
+		// property of the query rather than of the cluster it ran on, and the
+		// cap it is read against is the same wherever the rule evaluates
+		// (spec 8.8).
 		QueryMemoryUsage: f.NewHistogramVec(prometheus.HistogramOpts{
 			Name:    "clickhouse_ruler_query_memory_usage_bytes",
 			Help:    "Peak memory one evaluation's query reached on the server.",
 			Buckets: prometheus.ExponentialBuckets(1<<20, 8, 6),
 		}, []string{"rule"}),
 
+		// Carries `source` because a rule evaluates against every cluster its
+		// selector matches, so without it one histogram folds them all together
+		// and cannot say which cluster is slow. It joins to queue wait on that
+		// label and on nothing else. `rule_group` because the group is the
+		// scheduling unit, so its query latency against its interval is the
+		// arithmetic behind a missed iteration, and `team` so chargeback can say
+		// what an owner made a cluster spend time on and not only what they
+		// read. Neither adds series: a rule belongs to one group and carries one
+		// team, so both are determined by `rule` (spec 8.8).
 		QueryDuration: f.NewHistogramVec(prometheus.HistogramOpts{
 			Name:    "clickhouse_ruler_query_duration_seconds",
 			Help:    "Time one evaluation's query took, measured by the ruler from sending it to the last row arriving.",
 			Buckets: prometheus.DefBuckets,
-		}, []string{"rule"}),
+		}, []string{"rule", "rule_group", "team", "source"}),
 
 		// How long queries wait for a slot against the source's own
 		// concurrency limit (spec 6.11), which is what says a limit is set
@@ -251,6 +269,46 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 			Help:    "Time a query waited for a slot against its source's concurrent query limit.",
 			Buckets: prometheus.DefBuckets,
 		}, []string{"source"}),
+
+		// The other gate, and the one that makes a group late while every
+		// cluster it reads is fast: a group's rules all fire at once, so a
+		// group with more rules than the ruler-wide cap has slots queues
+		// against itself and nothing per query reports it. Labelled by
+		// rule_group because the question arrives as "why was my group late",
+		// and not by source as well, because that is the reading queue wait
+		// already gives and a histogram pays the fanout on every bucket
+		// (spec 8.8).
+		//
+		// Zeros belong here, unlike on queue wait: this cap is on unless it is
+		// turned off, so a query that found a slot waiting is the reading that
+		// says the ruler is running below it.
+		QueryConcurrencyWait: f.NewHistogramVec(prometheus.HistogramOpts{
+			Name:    "clickhouse_ruler_query_concurrency_wait_seconds",
+			Help:    "Time a query waited for a slot against the ruler-wide query concurrency cap.",
+			Buckets: prometheus.DefBuckets,
+		}, []string{"rule_group"}),
+
+		// The cap the wait above is read against. Configuration rather than
+		// measurement, exposed for the same reason the wait is: nine seconds of
+		// queueing says nothing without the number of slots it queued for, and
+		// an operator who has to hardcode it reads every expression against a
+		// flag somebody else can change. Zero means unbounded, as the flag
+		// does (spec 8.8).
+		QueryConcurrency: f.NewGauge(prometheus.GaugeOpts{
+			Name: "clickhouse_ruler_query_concurrency",
+			Help: "How many rule queries this ruler allows in flight at once across every group. Zero means unbounded.",
+		}),
+
+		// Read against the cap above, which is saturation without waiting for
+		// the wait histogram to fill. Counts queries waiting for a slot as
+		// well as running ones, because a query the ruler is trying to send is
+		// load whether or not it got through. The pair is
+		// prometheus_engine_queries and prometheus_engine_queries_concurrent_max
+		// by another prefix, so the reading carries over (spec 8.8).
+		QueriesInFlight: f.NewGauge(prometheus.GaugeOpts{
+			Name: "clickhouse_ruler_queries_in_flight",
+			Help: "Rule queries currently running or waiting for a slot.",
+		}),
 	}
 }
 
@@ -270,6 +328,13 @@ func (m *Metrics) deleteGroup(group string) {
 	m.LastDuration.DeletePartialMatch(labels)
 	m.AlertsActive.DeletePartialMatch(labels)
 	m.RulesUnmatched.DeletePartialMatch(labels)
+
+	// Query duration and the concurrency wait carry the group too, so they go
+	// with the group like everything else labelled rule_group (spec 8.2). The
+	// other cost series carry the rule alone and wait for deleteRuleName,
+	// because an alert name may repeat across groups (spec 7.6).
+	m.QueryDuration.DeletePartialMatch(labels)
+	m.QueryConcurrencyWait.DeletePartialMatch(labels)
 }
 
 // deleteRule removes the series of one rule inside a group that is still
@@ -299,9 +364,15 @@ func (m *Metrics) deleteRuleName(rule string) {
 	m.QueryDuration.DeletePartialMatch(labels)
 }
 
-// deleteSource removes the queue wait series of a source no rule reaches any
-// more. Left behind, a histogram of waits against a source this ruler no longer
-// connects to reads as a concurrency limit that is still being hit.
+// deleteSource removes the series of a source no rule reaches any more. Left
+// behind, a histogram of waits against a source this ruler no longer connects
+// to reads as a concurrency limit that is still being hit, and the cost series
+// read as a cluster this ruler still bills for and still measures (spec 8.8).
 func (m *Metrics) deleteSource(source string) {
-	m.QueryQueueWait.DeletePartialMatch(prometheus.Labels{"source": source})
+	labels := prometheus.Labels{"source": source}
+
+	m.QueryQueueWait.DeletePartialMatch(labels)
+	m.QueryReadRowsTotal.DeletePartialMatch(labels)
+	m.QueryReadBytesTotal.DeletePartialMatch(labels)
+	m.QueryDuration.DeletePartialMatch(labels)
 }

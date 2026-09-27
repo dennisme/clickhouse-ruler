@@ -191,7 +191,10 @@ That is the property we are copying. Everything else follows from it.
 2. **Ownership at scale.** Deferred, not solved. Operating a ruler that
    thousands of engineers page off means high availability, missed evaluation
    handling, clock skew, ClickHouse restarts mid window, and backfill after an
-   outage. Revisit before anyone depends on it in production.
+   outage. Revisit before anyone depends on it in production. One part of it has
+   moved: 8.8 says what an operator can see of cadence and of the delay between a
+   condition and a notification, and why the delay carries no target from us.
+   Seeing it is not handling it, so this item stands.
 3. **Sharded clusters.** `skip_unavailable_shards` is pinned to `0`, and a
    two node stack with an unreachable shard proves it: the evaluation fails
    rather than silently resolving the alerts that shard held. What `table:`

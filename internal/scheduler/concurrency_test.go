@@ -8,6 +8,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
+
 	"github.com/dennisme/clickhouse-ruler/internal/notify"
 	"github.com/dennisme/clickhouse-ruler/internal/query"
 	"github.com/dennisme/clickhouse-ruler/internal/rule"
@@ -108,7 +111,7 @@ func TestRuleEvalQueriesItsSourcesConcurrently(t *testing.T) {
 	}
 
 	eval := NewRuleEval(multiSourceRule(names...), queriers,
-		notify.NewCadence(&recordingSender{}, time.Minute, notify.DefaultResendTolerance), newQueryLimits(0, nil), testRetention)
+		notify.NewCadence(&recordingSender{}, time.Minute, notify.DefaultResendTolerance), newQueryLimits(0, nil, nil), testRetention)
 
 	go eval.Evaluate(context.Background(), time.Now())
 
@@ -133,7 +136,7 @@ func TestRuleEvalRespectsTheQueryConcurrencyLimit(t *testing.T) {
 	}
 
 	eval := NewRuleEval(multiSourceRule(names...), queriers,
-		notify.NewCadence(&recordingSender{}, time.Minute, notify.DefaultResendTolerance), newQueryLimits(limit, nil), testRetention)
+		notify.NewCadence(&recordingSender{}, time.Minute, notify.DefaultResendTolerance), newQueryLimits(limit, nil, nil), testRetention)
 
 	done := make(chan Result, 1)
 	go func() { done <- eval.Evaluate(context.Background(), time.Now()) }()
@@ -166,7 +169,7 @@ func TestRuleEvalReturnsSourcesInAStableOrder(t *testing.T) {
 
 	sender := &recordingSender{}
 	eval := NewRuleEval(multiSourceRule(names...), queriers,
-		notify.NewCadence(sender, time.Minute, notify.DefaultResendTolerance), newQueryLimits(0, nil), testRetention)
+		notify.NewCadence(sender, time.Minute, notify.DefaultResendTolerance), newQueryLimits(0, nil, nil), testRetention)
 
 	eval.Evaluate(context.Background(), time.Now())
 
@@ -187,7 +190,7 @@ func TestRuleEvalReturnsSourcesInAStableOrder(t *testing.T) {
 // The reason the per-source limit exists: a cluster that has gone slow must
 // not hold slots that rules against every other cluster then queue behind.
 func TestPerSourceLimitBoundsOnlyThatSource(t *testing.T) {
-	limits := newQueryLimits(0, []source.Source{{Name: "slow", MaxConcurrentQueries: 1}})
+	limits := newQueryLimits(0, []source.Source{{Name: "slow", MaxConcurrentQueries: 1}}, nil)
 
 	// The slow source is asked for three queries at once and may only run
 	// one; the unbounded source is asked for three and must run all three
@@ -229,7 +232,7 @@ func TestPerSourceLimitBoundsOnlyThatSource(t *testing.T) {
 // rather than run it after the ruler has stopped, exactly as it does for the
 // ruler-wide limit.
 func TestPerSourceLimitAbandonsAQueuedQueryOnShutdown(t *testing.T) {
-	limits := newQueryLimits(0, []source.Source{{Name: "slow", MaxConcurrentQueries: 1}})
+	limits := newQueryLimits(0, []source.Source{{Name: "slow", MaxConcurrentQueries: 1}}, nil)
 
 	q := newBarrierQuerier(1)
 	queriers := map[string]Querier{"slow": q}
@@ -270,7 +273,7 @@ func TestPerSourceLimitAbandonsAQueuedQueryOnShutdown(t *testing.T) {
 // Without the wait time nobody can tell a limit that is doing its job from
 // one set too low, so a query that queued has to report how long it queued.
 func TestQueueWaitIsReportedForALimitedSource(t *testing.T) {
-	limits := newQueryLimits(0, []source.Source{{Name: "slow", MaxConcurrentQueries: 1}})
+	limits := newQueryLimits(0, []source.Source{{Name: "slow", MaxConcurrentQueries: 1}}, nil)
 
 	q := newBarrierQuerier(1)
 	queriers := map[string]Querier{"slow": q}
@@ -309,7 +312,7 @@ func TestQueueWaitIsReportedForALimitedSource(t *testing.T) {
 // it never queues per source and must not report a wait that would read as a
 // limit doing something.
 func TestNoQueueWaitForAnUnboundedSource(t *testing.T) {
-	limits := newQueryLimits(0, nil)
+	limits := newQueryLimits(0, nil, nil)
 
 	eval := NewRuleEval(multiSourceRule("s1"), map[string]Querier{"s1": &fakeQuerier{samples: oneSample()}},
 		notify.NewCadence(&recordingSender{}, time.Minute, notify.DefaultResendTolerance),
@@ -317,5 +320,101 @@ func TestNoQueueWaitForAnUnboundedSource(t *testing.T) {
 
 	if res := eval.Evaluate(context.Background(), time.Now()); len(res.QueueWaits) != 0 {
 		t.Errorf("QueueWaits = %v, want none", res.QueueWaits)
+	}
+}
+
+// The ruler-wide cap is the term that makes a group late while every cluster
+// reads fast, so the wait against it has to be reported the way the per-source
+// wait is (spec 8.8).
+func TestConcurrencyWaitIsReportedForTheRulerCap(t *testing.T) {
+	limits := newQueryLimits(1, nil, nil)
+
+	q := newBarrierQuerier(1)
+	queriers := map[string]Querier{"s1": q}
+	cadence := notify.NewCadence(&recordingSender{}, time.Minute, notify.DefaultResendTolerance)
+
+	holder := NewRuleEval(multiSourceRule("s1"), queriers, cadence, limits, testRetention)
+	done := make(chan Result, 1)
+	go func() { done <- holder.Evaluate(context.Background(), time.Now()) }()
+	if !q.waitAllStarted() {
+		t.Fatal("the first query never took the slot")
+	}
+
+	queued := make(chan Result, 1)
+	go func() {
+		queued <- NewRuleEval(multiSourceRule("s1"), queriers, cadence, limits, testRetention).
+			Evaluate(context.Background(), time.Now())
+	}()
+
+	time.Sleep(100 * time.Millisecond)
+	close(q.release)
+
+	res := <-queued
+	<-done
+	if len(res.ConcurrencyWaits) != 1 {
+		t.Fatalf("ConcurrencyWaits = %v, want one entry", res.ConcurrencyWaits)
+	}
+	if res.ConcurrencyWaits[0] < 50*time.Millisecond {
+		t.Errorf("wait = %v, want the time spent queued", res.ConcurrencyWaits[0])
+	}
+}
+
+// Unlike the per-source wait, a zero is worth reporting: the ruler-wide cap is
+// on unless it is turned off, so the shape of the histogram is what says how
+// close to saturated it runs (spec 8.8).
+func TestConcurrencyWaitReportsAQueryThatQueuedForNothing(t *testing.T) {
+	limits := newQueryLimits(DefaultQueryConcurrency, nil, nil)
+
+	eval := NewRuleEval(multiSourceRule("s1"), map[string]Querier{"s1": &fakeQuerier{samples: oneSample()}},
+		notify.NewCadence(&recordingSender{}, time.Minute, notify.DefaultResendTolerance),
+		limits, testRetention)
+
+	res := eval.Evaluate(context.Background(), time.Now())
+	if len(res.ConcurrencyWaits) != 1 {
+		t.Fatalf("ConcurrencyWaits = %v, want one entry per query", res.ConcurrencyWaits)
+	}
+}
+
+// A ruler running unbounded has no cap to queue at, and a zero wait against a
+// limit that does not exist reads as a limit doing something.
+func TestNoConcurrencyWaitWhenTheRulerCapIsOff(t *testing.T) {
+	limits := newQueryLimits(0, nil, nil)
+
+	eval := NewRuleEval(multiSourceRule("s1"), map[string]Querier{"s1": &fakeQuerier{samples: oneSample()}},
+		notify.NewCadence(&recordingSender{}, time.Minute, notify.DefaultResendTolerance),
+		limits, testRetention)
+
+	if res := eval.Evaluate(context.Background(), time.Now()); len(res.ConcurrencyWaits) != 0 {
+		t.Errorf("ConcurrencyWaits = %v, want none", res.ConcurrencyWaits)
+	}
+}
+
+// Saturation is readable without waiting for a histogram to fill: the gauge
+// counts queries executing or waiting, against the cap (spec 8.8).
+func TestQueriesInFlightCountsAQueryWhileItRuns(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	m := NewMetrics(reg)
+	limits := newQueryLimits(DefaultQueryConcurrency, nil, m)
+
+	q := newBarrierQuerier(1)
+	eval := NewRuleEval(multiSourceRule("s1"), map[string]Querier{"s1": q},
+		notify.NewCadence(&recordingSender{}, time.Minute, notify.DefaultResendTolerance),
+		limits, testRetention)
+
+	done := make(chan Result, 1)
+	go func() { done <- eval.Evaluate(context.Background(), time.Now()) }()
+	if !q.waitAllStarted() {
+		t.Fatal("the query never started")
+	}
+
+	if got := testutil.ToFloat64(m.QueriesInFlight); got != 1 {
+		t.Errorf("in flight = %v while one query runs, want 1", got)
+	}
+
+	close(q.release)
+	<-done
+
+	if got := testutil.ToFloat64(m.QueriesInFlight); got != 0 {
+		t.Errorf("in flight = %v once the query returned, want 0", got)
 	}
 }

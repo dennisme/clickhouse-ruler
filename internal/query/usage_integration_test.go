@@ -15,9 +15,11 @@ import (
 // recorded is one call to the Recorder, kept so a test can assert on what a
 // query reported rather than on a metric it would have to scrape back.
 type recorded struct {
-	rule  string
-	team  string
-	usage Usage
+	rule   string
+	group  string
+	team   string
+	source string
+	usage  Usage
 }
 
 type captureRecorder struct {
@@ -25,10 +27,16 @@ type captureRecorder struct {
 	took []recorded
 }
 
-func (c *captureRecorder) QueryCost(rule, team string, u Usage) {
+func (c *captureRecorder) QueryCost(rule string, who Attribution, source string, u Usage) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.took = append(c.took, recorded{rule: rule, team: team, usage: u})
+	c.took = append(c.took, recorded{
+		rule:   rule,
+		group:  who.Group,
+		team:   who.Team,
+		source: source,
+		usage:  u,
+	})
 }
 
 func (c *captureRecorder) calls() []recorded {
@@ -112,6 +120,11 @@ func TestRecordedCostAgreesWithTheQueryLog(t *testing.T) {
 
 	if got.rule != "CostedRule" || got.team != "payments" {
 		t.Errorf("recorded rule=%q team=%q, want CostedRule and payments", got.rule, got.team)
+	}
+	// The cost metrics are labelled per cluster and per group, so the recorder
+	// has to be told both rather than only what the rule is (spec 8.8).
+	if got.group != "rules/payments.yaml:latency" || got.source != "otel_traces" {
+		t.Errorf("recorded group=%q source=%q, want rules/payments.yaml:latency and otel_traces", got.group, got.source)
 	}
 
 	rows, bytes, memory := serverCost(t, q.src.Address, "CostedRule")

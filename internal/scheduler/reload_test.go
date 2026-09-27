@@ -141,8 +141,8 @@ func TestReloadDeletesTheSeriesOfARuleThatIsGone(t *testing.T) {
 
 	sched, metrics, reg, clock := reloadSched(t, set, queriers)
 	evalAll(sched, clock.Now())
-	metrics.QueryReadRowsTotal.WithLabelValues("Removed", "payments").Add(1)
-	metrics.QueryDuration.WithLabelValues("Removed").Observe(0.1)
+	metrics.QueryReadRowsTotal.WithLabelValues("Removed", "payments", "src1").Add(1)
+	metrics.QueryDuration.WithLabelValues("Removed", "f.yaml:g1", "payments", "src1").Observe(0.1)
 
 	sched.Reload(&ruleset.Set{Rules: []ruleset.Rule{reloadRule("g1", "Kept", 0, nil)}}, queriers)
 
@@ -166,7 +166,7 @@ func TestReloadKeepsTheCostSeriesOfARuleNameStillLoadedElsewhere(t *testing.T) {
 
 	sched, metrics, reg, clock := reloadSched(t, set, queriers)
 	evalAll(sched, clock.Now())
-	metrics.QueryDuration.WithLabelValues("Shared").Observe(0.1)
+	metrics.QueryDuration.WithLabelValues("Shared", "f.yaml:g1", "payments", "src1").Observe(0.1)
 
 	sched.Reload(&ruleset.Set{Rules: []ruleset.Rule{shared}}, queriers)
 
