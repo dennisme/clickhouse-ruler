@@ -35,6 +35,15 @@ and are what the code comments cite.
   rather than the single name `ruler_error`, so the next ruler-owned field needs
   no second reserved name. Fixed at `error` and not renameable: turning it off
   restores the silent overwrite, on the one evaluation nobody watches. See 6.5.
+- **A failed annotation template is a finding on the rule's owner.** The page and
+  the log already carry the error, and neither names a team, a file, or whether it
+  is still broken, so the failure is also raised on `clickhouse_ruler_problem`.
+  Under `annotations/template`, the name a pull request already uses for it, the
+  way `rule/cost` is one name for a prediction and a measurement: one page, and one
+  setting that covers the merge and the backstop. The runtime half exists because
+  the check warns by default, because a repository with no address gets no tier 1
+  finding, and because a schema can move after the merge. A pass that rendered no
+  annotations does not clear it. See 6.5, 8.2.
 - **Source selection is a selector on the rule.** A source carries `labels`
   saying what it is; a rule carries a `sources` selector saying what it wants.
   Adding terms narrows. The reverse, sources declaring requirements on rules,

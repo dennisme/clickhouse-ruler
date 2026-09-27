@@ -451,6 +451,20 @@ Per team severity overrides by path or rule name matcher, so the central team
 can hard fail while product teams get warnings during rollout. Without this,
 nobody adopts.
 
+**One check reaches past the tiers, because its last question needs an alert.**
+`annotations/template` is asked three times under one name. Tier 0 asks whether
+the template parses, which the file answers alone. Tier 1 asks whether its fields
+resolve, against the query's real output columns. Whether it renders needs an
+alert to render against, and no `ruler check` run has one, so that part is raised
+by `ruler run` on `clickhouse_ruler_problem` (6.5, 8.2) rather than here.
+
+That is the same shape as `rule/cost`, predicted in a pull request and measured
+at runtime, and as `rule/columns` and `rule/attribute-key`. One name for one
+question asked whenever it can be asked, so a page explains it once and a
+severity set once covers every time. The alternative, a second check named for
+the moment the defect was observed, would split one defect in two and leave an
+operator who raised the first one covered for half of it.
+
 ### 7.4 The "would have fired N times" check
 
 The `pint` `alerts/count` equivalent, and the reason the online checks are
@@ -619,7 +633,12 @@ and where they take a list of keys that list is configurable too:
   rather than stopping the notification (6.5). An operator who would rather a
   broken template never reach a pager raises it to `error`, which refuses the
   file. Parsing is as far as tier 0 reaches; whether a variable names a column
-  the query returns needs the result, which is tier 1 (7.3).
+  the query returns needs the result, which is tier 1, and whether it renders at
+  all needs an alert, which only `ruler run` has (7.3, 6.5). One setting covers
+  all three: an operator who raises this to block a merge has said the same thing
+  about the finding a running ruler raises. `off` is an operator saying a broken
+  template need not be reported to its author, which is theirs to say and worth
+  saying out loud.
 - `rule/for` and `rule/window` shorter than the group interval
 - `rule/source-match`, a rule whose labels match no source. Unlike everything
   else in this list it is not a matter of taste: it is here because whether a
