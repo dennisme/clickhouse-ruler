@@ -22,6 +22,7 @@ stricter, and a ceiling binds at its lowest value. See spec 7.6 and 7.7.
 
 | Check | Severity | Keys | Spec |
 | --- | --- | --- | --- |
+| [`annotations/protected`](#annotations-protected) | fixed, always `error` | none | [6.5](https://github.com/dennisme/clickhouse-ruler/blob/main/spec.md) |
 | [`annotations/required`](#annotations-required) | `warning` by default | required: `runbook_url`, `summary` | [7.6](https://github.com/dennisme/clickhouse-ruler/blob/main/spec.md) |
 | [`annotations/runbook`](#annotations-runbook) | `warning` by default | none | [7.6](https://github.com/dennisme/clickhouse-ruler/blob/main/spec.md) |
 | [`annotations/template`](#annotations-template) | `warning` by default | none | [7.6](https://github.com/dennisme/clickhouse-ruler/blob/main/spec.md) |
@@ -362,6 +363,39 @@ summary: "{{ .ServiceName }} is slow"
 
 # after
 summary: "{{ .ServiceName }} p99 is {{ .value }}ms"
+```
+
+<a id="annotations-protected"></a>
+
+### annotations/protected
+
+An annotation whose name starts with `ruler_`, which is the prefix the ruler
+writes into.
+
+When an annotation's template fails to render, the ruler puts the error in an
+annotation of its own, so a rule setting a `ruler_` name loses its value on the
+evaluation that failed, and that is the evaluation nobody is watching. This is
+not a routing problem: Alertmanager matches on labels, so the name of an
+annotation cannot send an alert anywhere else. It is fixed at `error` because
+annotations are what a person reads. An Alertmanager template builds the
+PagerDuty title and the Slack message out of them, so the field a responder
+reads is the field the ruler overwrites.
+
+The prefix is reserved whole, not just the name `ruler_error`, so a field the
+ruler adds later needs no second rule to learn. Any other name is the author's,
+including one with `ruler` in it.
+
+```yaml
+# before: the ruler writes this field, so the value is lost when a template
+# in this rule fails
+annotations:
+  summary: "{{ .ServiceName }} p99 is {{ .value }}ms"
+  ruler_error: paging the platform team is never the answer here
+
+# after: a name of the author's own
+annotations:
+  summary: "{{ .ServiceName }} p99 is {{ .value }}ms"
+  escalation: paging the platform team is never the answer here
 ```
 
 ## Timing

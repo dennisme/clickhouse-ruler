@@ -1,0 +1,41 @@
+groups:
+  - name: api-latency
+    interval: 1m
+    rules:
+      - alert: ReservedName
+        sources:
+          team: payments
+        expr: "SELECT 1 AS value FROM t WHERE ts >= {{ .From }} AND ts < {{ .To }}"
+        labels:
+          team: payments
+          severity: warning
+        annotations:
+          summary: "p99 is {{ .value }}"
+          runbook_url: https://runbooks.internal/high-p99
+          ruler_error: what our own error message would have gone in
+      - alert: TwoReservedNames
+        sources:
+          team: payments
+        expr: "SELECT 1 AS value FROM t WHERE ts >= {{ .From }} AND ts < {{ .To }}"
+        labels:
+          team: payments
+          severity: warning
+        annotations:
+          summary: "p99 is {{ .value }}"
+          runbook_url: https://runbooks.internal/high-p99
+          ruler_owner: payments
+          ruler_error: both are reported, in name order
+      - alert: NamesTheRulerDoesNotOwn
+        sources:
+          team: payments
+        expr: "SELECT 1 AS value FROM t WHERE ts >= {{ .From }} AND ts < {{ .To }}"
+        labels:
+          team: payments
+          severity: warning
+        annotations:
+          # Neither starts with the reserved prefix, so neither is reported:
+          # the ruler owns ruler_, not every name with ruler in it.
+          summary: "p99 is {{ .value }}"
+          runbook_url: https://runbooks.internal/high-p99
+          ruler: the one this alert was evaluated by
+          our_ruler_error: ours, and the ruler never writes it

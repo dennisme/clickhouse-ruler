@@ -6,6 +6,7 @@ Generated from the check table in `internal/lint/checks.go`. Edit the table, the
 
 | Check | Severity | What it reports |
 | --- | --- | --- |
+| [`annotations/protected`](rule.md#annotations-protected) | fixed, always `error` | a rule setting an annotation the ruler owns, which the ruler overwrites on a failed template |
 | [`annotations/required`](rule.md#annotations-required) | `warning` by default | an annotation this repository requires on every alert is missing |
 | [`annotations/runbook`](rule.md#annotations-runbook) | `warning` by default | a runbook_url that is not an absolute http or https URL |
 | [`annotations/template`](rule.md#annotations-template) | `warning` by default | an annotation that is not a parseable template |

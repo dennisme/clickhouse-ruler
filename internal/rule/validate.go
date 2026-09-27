@@ -5,6 +5,7 @@ import (
 	"net/url"
 	"regexp"
 	"sort"
+	"strings"
 	"text/template"
 
 	"github.com/dennisme/clickhouse-ruler/internal/lint"
@@ -23,6 +24,10 @@ var timeBoundVars = []struct {
 	{"{{ .From }}", regexp.MustCompile(`\{\{-?\s*\.From\s*-?\}\}`), "lower time bound"},
 	{"{{ .To }}", regexp.MustCompile(`\{\{-?\s*\.To\s*-?\}\}`), "upper time bound"},
 }
+
+// reservedAnnotationPrefix is the annotation namespace the ruler writes into,
+// carrying the error from an annotation whose template failed (spec 6.5).
+const reservedAnnotationPrefix = "ruler_"
 
 // Validate runs every offline check against a parsed rule file and returns all
 // findings. It never stops at the first, because a tool that surfaces one
@@ -115,6 +120,7 @@ func (v *validator) group(g Group) {
 		v.requiredKeys(r, "annotations", "annotation", lint.CheckAnnotationsRequired, r.Annotations)
 		v.annotationsRunbook(r)
 		v.annotationsTemplate(r)
+		v.annotationsProtected(r)
 		v.ruleFor(g, r)
 		v.ruleWindow(g, r)
 	}
@@ -201,17 +207,40 @@ func (v *validator) annotationsRunbook(r Rule) {
 // Annotations are checked in name order so a rule with two broken templates
 // reports them the same way every run.
 func (v *validator) annotationsTemplate(r Rule) {
-	names := make([]string, 0, len(r.Annotations))
-	for name := range r.Annotations {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-
-	for _, name := range names {
+	for _, name := range sortedNames(r.Annotations) {
 		if _, err := template.New(name).Option("missingkey=error").Parse(r.Annotations[name]); err != nil {
 			v.addPolicy(r, r.LineOf("annotations."+name, "annotations"), lint.CheckAnnotationsTemplate,
 				"annotation %q is not a valid template: %s", name, err)
 		}
+	}
+}
+
+// sortedNames orders a block's keys so a rule with two findings in one block
+// reports them the same way every run.
+func sortedNames(block map[string]string) []string {
+	names := make([]string, 0, len(block))
+	for name := range block {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// annotationsProtected refuses an annotation whose name the ruler writes into.
+// A failed annotation template puts its error in an annotation of the ruler's
+// own, so an author using that name loses their value on the evaluation that
+// failed, which is the one nobody is watching (spec 6.5).
+//
+// The reserved name is a prefix rather than a single name, so the next field
+// the ruler owns needs no second reserved name.
+func (v *validator) annotationsProtected(r Rule) {
+	for _, name := range sortedNames(r.Annotations) {
+		if !strings.HasPrefix(name, reservedAnnotationPrefix) {
+			continue
+		}
+		v.add(r, r.LineOf("annotations."+name, "annotations"), lint.CheckAnnotationsProtected,
+			"annotation %q uses the reserved prefix %q, which the ruler writes and would overwrite",
+			name, reservedAnnotationPrefix)
 	}
 }
 
