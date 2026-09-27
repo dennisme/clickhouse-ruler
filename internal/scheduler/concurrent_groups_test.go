@@ -25,6 +25,10 @@ func (q *countingQuerier) Run(context.Context, rule.Rule, query.Attribution, tim
 	return query.Evaluation{Samples: oneSample()}, nil
 }
 
+func (q *countingQuerier) Sample(context.Context, rule.Rule, query.Attribution, query.SampleChecks, time.Time) ([]query.Finding, error) {
+	return nil, nil
+}
+
 // Every group shares one Cadence, and each group runs in its own goroutine,
 // so overlapping ticks post through that Cadence at the same time. Left
 // unsynchronised this is not a subtle race but a fatal "concurrent map
@@ -54,7 +58,7 @@ func TestConcurrentGroupsShareOneCadenceSafely(t *testing.T) {
 	q := &countingQuerier{}
 
 	sched := New(&ruleset.Set{Rules: rules}, map[string]Querier{"src1": q},
-		cadence, metrics, clock, DefaultQueryConcurrency, nil, testResend)
+		cadence, metrics, clock, DefaultQueryConcurrency, nil, testResend, 0)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

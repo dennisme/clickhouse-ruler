@@ -51,6 +51,9 @@ func runRun(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	listen := fs.String("listen", ":9090", "address for the /metrics, /-/healthy and /-/ready HTTP surface")
 	queryConcurrency := fs.Int("query-concurrency", scheduler.DefaultQueryConcurrency,
 		"how many rule queries may run against ClickHouse at once, across every group; 0 means unbounded")
+	recheckInterval := fs.Duration("recheck-interval", scheduler.DefaultRecheckInterval,
+		"how often loaded rules are re-checked against recent data for the map keys they read, "+
+			"which no evaluation can see; 0 turns the pass off")
 	shutdownTimeout := fs.Duration("shutdown-timeout", defaultShutdownTimeout,
 		"how long an in-flight evaluation gets to finish once shutdown starts")
 	resendInterval := fs.Duration("resend-interval", notify.DefaultResendInterval,
@@ -100,6 +103,7 @@ func runRun(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		metrics:     scheduler.NewMetrics(reg),
 		clock:       scheduler.NewRealClock(),
 		concurrency: *queryConcurrency,
+		recheck:     *recheckInterval,
 		// Both the cadence and each rule's resolved-alert retention are sized
 		// from these two, so they travel as the pair they are (spec 6.5).
 		resend: scheduler.Resend{Interval: *resendInterval, Tolerance: *resendTolerance},

@@ -27,9 +27,16 @@ type fakeQuerier struct {
 	shape []query.Column
 	usage query.Usage
 
+	// findings and sampleErr are what the re-check pass reads: what sampling
+	// recent data reported, or why it could not be sampled at all.
+	findings  []query.Finding
+	sampleErr error
+
 	// calls is atomic because rules in a group are evaluated concurrently and
-	// several can share one source's querier.
-	calls atomic.Int64
+	// several can share one source's querier. samplesTaken is for the same
+	// reason, and says whether rows were read at all.
+	calls        atomic.Int64
+	samplesTaken atomic.Int64
 }
 
 func (q *fakeQuerier) Run(context.Context, rule.Rule, query.Attribution, time.Time) (query.Evaluation, error) {
@@ -38,6 +45,14 @@ func (q *fakeQuerier) Run(context.Context, rule.Rule, query.Attribution, time.Ti
 		return query.Evaluation{}, q.err
 	}
 	return query.Evaluation{Samples: q.samples, Shape: q.shape, Usage: q.usage}, nil
+}
+
+func (q *fakeQuerier) Sample(context.Context, rule.Rule, query.Attribution, query.SampleChecks, time.Time) ([]query.Finding, error) {
+	q.samplesTaken.Add(1)
+	if q.sampleErr != nil {
+		return nil, q.sampleErr
+	}
+	return q.findings, nil
 }
 
 // recordingSender captures what a Cadence actually posts, without an HTTP

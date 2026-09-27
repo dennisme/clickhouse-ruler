@@ -21,15 +21,24 @@ type evaluated struct {
 	usage  query.Usage
 }
 
+// failed is one source the rule's query did not run against, and what the
+// cluster said. Only a query that reached a cluster and came back with an
+// error: a source the ruler holds no connection for, or one whose query was
+// abandoned at shutdown, says nothing about the rule (spec 6.3.2).
+type failed struct {
+	source source.Source
+	err    error
+}
+
 // drift compares each evaluation of one rule against the last one, so a rule
 // that was correct when it merged and has been broken by a schema change since
 // is reported without CI running and without anything reloading (spec 6.3.2).
 //
-// Three things it can find, all of them out of an evaluation that already
+// Four things it can find, all of them out of an evaluation that already
 // happened: a column dropped, renamed or retyped under the query, two sources
-// that stopped agreeing on what the rule returns, and a query whose measured
-// cost crossed the ceilings its prediction was checked against at authoring
-// time.
+// that stopped agreeing on what the rule returns, a query whose measured cost
+// crossed the ceilings its prediction was checked against at authoring time,
+// and a query that failed against a cluster.
 //
 // What it never compares is how many rows came back. Zero rows is the healthy
 // state of most alert rules, so a row count comparison would fire on every
@@ -59,10 +68,14 @@ func newDrift(r ruleset.Rule) *drift {
 }
 
 // inspect compares this evaluation against the last one and returns what to
-// report, in source order. Only the sources that answered are passed in: a
-// cluster the query failed against has not drifted, and its baseline is left
-// standing so the comparison resumes against the last result that was real.
-func (d *drift) inspect(evals []evaluated, now time.Time) []lint.Problem {
+// report, in source order.
+//
+// The two arguments are the two halves of one pass: evals is what each source
+// answered and failures is what each source that did not answer said. A cluster
+// the query failed against has not drifted, so its baseline is left standing
+// and the comparison resumes against the last result that was real; the failure
+// itself is reported on its own.
+func (d *drift) inspect(evals []evaluated, failures []failed, now time.Time) []lint.Problem {
 	var problems []lint.Problem
 
 	for _, e := range evals {
@@ -85,6 +98,19 @@ func (d *drift) inspect(evals []evaluated, now time.Time) []lint.Problem {
 				Detail: over,
 			})...)
 		}
+	}
+
+	// Every pass rather than the pass it started on. The gauge is rebuilt from
+	// what this pass found, so a finding that stays raised is a rule still
+	// broken and one that disappears is a rule running again. Reporting only
+	// the transition would leave a ruler restarted into a cluster that is
+	// already broken saying nothing at all.
+	for _, f := range failures {
+		problems = append(problems, d.problem(f.source, now, query.Finding{
+			Check: lint.CheckRuleExecution,
+			Detail: "the query failed, so this rule is evaluating nothing and cannot fire: " +
+				f.err.Error(),
+		})...)
 	}
 
 	return append(problems, d.disagreements(evals)...)
@@ -163,16 +189,27 @@ func (d *drift) overCost(e evaluated) string {
 	return detail
 }
 
-// problem resolves a finding's severity the way the online pass does, so a
-// check an operator turned down reports the same while the ruler is running as
-// it does in CI, and a source holding an unexpired exemption reports nothing
-// (spec 7.7).
+// problem resolves a finding the way the online pass does, against this rule's
+// policy and the source it was found on.
 func (d *drift) problem(src source.Source, now time.Time, f query.Finding) []lint.Problem {
+	return runtimeProblem(d.rule, src, now, f)
+}
+
+// runtimeProblem turns a finding a running ruler made into what to report,
+// resolving its severity the way the online pass does, so a check an operator
+// turned down reports the same while the ruler is running as it does in CI, and
+// a source holding an unexpired exemption reports nothing (spec 7.7).
+//
+// Shared by both feeds into clickhouse_ruler_problem: the comparison every
+// evaluation makes, and the re-check pass on its own timer (spec 10.4). A
+// finding arriving on one clock rather than the other changes nothing about
+// whose rule it is or what policy says about it.
+func runtimeProblem(r ruleset.Rule, src source.Source, now time.Time, f query.Finding) []lint.Problem {
 	severity := lint.SeverityError
 	var origin policy.Setting
 
 	if lint.Configurable(f.Check) {
-		origin = policy.Merge(d.rule.Policy, src.Policy).For(f.Check)
+		origin = policy.Merge(r.Policy, src.Policy).For(f.Check)
 		severity = origin.Severity
 
 		if severity == lint.SeverityOff || src.Exempts(f.Check, now) {
@@ -180,9 +217,9 @@ func (d *drift) problem(src source.Source, now time.Time, f query.Finding) []lin
 		}
 	}
 
-	p := lint.NewProblem(d.rule.File, d.rule.Line(), f.Check, severity,
+	p := lint.NewProblem(r.File, r.Line(), f.Check, severity,
 		fmt.Sprintf("against source %s: %s", src.Name, f.Detail))
-	p.Subject = d.rule.Alert
+	p.Subject = r.Alert
 	p.PolicyFile, p.PolicyLine = origin.File, origin.Line
 
 	return []lint.Problem{p}

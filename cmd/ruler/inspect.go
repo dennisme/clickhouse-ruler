@@ -107,7 +107,7 @@ func inspectRules(
 			// tier asks for itself: sampling does not buy a replay, and a
 			// replay does not buy a sample.
 			if opts.sampling {
-				if sampleChecks, wanted := samplingFromPolicy(merged); wanted {
+				if sampleChecks, wanted := query.SamplingFromPolicy(merged); wanted {
 					sampled, err := q.Sample(ctx, r.Rule, attribution(r), sampleChecks, now)
 					if err != nil {
 						problems = append(problems, inspectionFailed(r, src.Name, err))
@@ -162,27 +162,6 @@ func appendRow(
 	return append(rows, summaryRow(r, src, cost))
 }
 
-// samplingFromPolicy translates the resolved policy into what a sample should
-// do, and says whether to sample at all.
-//
-// A check at severity off is not sampled for, rather than sampled and then
-// dropped. That is the line checksFromPolicy draws for the metadata checks, and
-// it matters more here: honouring `off` after the fact would read rows an
-// operator asked nobody to read.
-func samplingFromPolicy(p *policy.Policy) (query.SampleChecks, bool) {
-	setting := p.For(lint.CheckRuleAttributeKey)
-	if setting.Severity == lint.SeverityOff {
-		return query.SampleChecks{}, false
-	}
-
-	maxRows, _ := setting.Limit(lint.LimitSampleRows)
-
-	return query.SampleChecks{
-		MaxRows:     maxRows,
-		RequireRows: setting.Flag(lint.FlagRequireRows),
-	}, true
-}
-
 // backfillStepFallback is the gap between replayed evaluations when nothing
 // says how much time the rule reads: its group set no interval and the rule set
 // no window. The same span renderForCheck falls back to, for the same reason,
@@ -194,9 +173,9 @@ const backfillStepFallback = 5 * time.Minute
 // replay should do, and says whether to replay at all.
 //
 // A check at severity off is not replayed for, rather than replayed and then
-// dropped, which is the line samplingFromPolicy draws and it matters more here:
-// a replay is one read per window, so honouring off afterwards would be the
-// most expensive way to report nothing.
+// dropped, which is the line query.SamplingFromPolicy draws and it matters more
+// here: a replay is one read per window, so honouring off afterwards would be
+// the most expensive way to report nothing.
 func backfillFromPolicy(
 	p *policy.Policy,
 	r ruleset.Rule,

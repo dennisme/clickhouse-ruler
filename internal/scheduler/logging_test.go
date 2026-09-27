@@ -15,6 +15,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
 	"github.com/dennisme/clickhouse-ruler/internal/alert"
+	"github.com/dennisme/clickhouse-ruler/internal/lint"
 	"github.com/dennisme/clickhouse-ruler/internal/notify"
 	"github.com/dennisme/clickhouse-ruler/internal/query"
 	"github.com/dennisme/clickhouse-ruler/internal/rule"
@@ -82,13 +83,18 @@ func TestEvalGroupLogsWhichRuleAndSourceFailed(t *testing.T) {
 
 	sched := New(oneRuleSet("Broken", source.Source{Name: "src1"}), map[string]Querier{"src1": q},
 		notify.NewCadence(&recordingSender{}, time.Minute, notify.DefaultResendTolerance),
-		NewMetrics(prometheus.NewRegistry()), newFakeClock(time.Unix(0, 0)), 0, log, testResend)
+		NewMetrics(prometheus.NewRegistry()), newFakeClock(time.Unix(0, 0)), 0, log, testResend, 0)
 
 	sched.groups[0].Eval(context.Background(), time.Unix(0, 0))
 
+	// Two lines for one failure, addressed to two people. The error is the
+	// operator's: a query did not run against a cluster they look after. The
+	// warning is the rule owner's, under rule/execution, because a rule that
+	// is evaluating nothing is theirs to fix and they may never have operated
+	// this ruler (spec 6.3.2).
 	lines := logLines(t, buf)
-	if len(lines) != 1 {
-		t.Fatalf("got %d log lines, want 1: %v", len(lines), lines)
+	if len(lines) != 2 {
+		t.Fatalf("got %d log lines, want 2: %v", len(lines), lines)
 	}
 	wantFields(t, lines[0], map[string]string{
 		"level":      "ERROR",
@@ -98,6 +104,16 @@ func TestEvalGroupLogsWhichRuleAndSourceFailed(t *testing.T) {
 	})
 	if got, _ := lines[0]["error"].(string); !strings.Contains(got, "connection refused") {
 		t.Errorf("error field = %q, want it to carry what the query said", got)
+	}
+	wantFields(t, lines[1], map[string]string{
+		"level":      "WARN",
+		"rule_group": "f.yaml:g1",
+		"rule":       "Broken",
+		"check":      lint.CheckRuleExecution,
+		"file":       "f.yaml",
+	})
+	if got, _ := lines[1]["problem"].(string); !strings.Contains(got, "connection refused") {
+		t.Errorf("problem field = %q, want it to carry what the query said", got)
 	}
 }
 
@@ -111,7 +127,7 @@ func TestEvalGroupLogsASendFailure(t *testing.T) {
 	sched := New(oneRuleSet("Undeliverable", source.Source{Name: "src1"}),
 		map[string]Querier{"src1": &fakeQuerier{samples: oneSample()}},
 		notify.NewCadence(sender, time.Minute, notify.DefaultResendTolerance),
-		NewMetrics(prometheus.NewRegistry()), newFakeClock(time.Unix(0, 0)), 0, log, testResend)
+		NewMetrics(prometheus.NewRegistry()), newFakeClock(time.Unix(0, 0)), 0, log, testResend, 0)
 
 	sched.groups[0].Eval(context.Background(), time.Unix(0, 0))
 
@@ -147,7 +163,7 @@ func TestEvalGroupLogsOncePerRuleRegardlessOfInstanceCount(t *testing.T) {
 	sched := New(oneRuleSet("Noisy", source.Source{Name: "src1"}),
 		map[string]Querier{"src1": &fakeQuerier{samples: samples}},
 		notify.NewCadence(sender, time.Minute, notify.DefaultResendTolerance),
-		NewMetrics(prometheus.NewRegistry()), newFakeClock(time.Unix(0, 0)), 0, log, testResend)
+		NewMetrics(prometheus.NewRegistry()), newFakeClock(time.Unix(0, 0)), 0, log, testResend, 0)
 
 	sched.groups[0].Eval(context.Background(), time.Unix(0, 0))
 
@@ -168,7 +184,7 @@ func TestShutdownLogsWhenTheTimeoutExpires(t *testing.T) {
 	clock := newFakeClock(time.Unix(0, 0))
 	sched := New(oneRuleSet("Slow", source.Source{Name: "src1"}), map[string]Querier{"src1": q},
 		notify.NewCadence(&recordingSender{}, time.Minute, notify.DefaultResendTolerance),
-		NewMetrics(prometheus.NewRegistry()), clock, 0, log, testResend)
+		NewMetrics(prometheus.NewRegistry()), clock, 0, log, testResend, 0)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -212,6 +228,12 @@ type blockingQuerier struct {
 	once    bool
 }
 
+// Sampling is not what this querier is for: it exists to hold an evaluation
+// open.
+func (q *blockingQuerier) Sample(context.Context, rule.Rule, query.Attribution, query.SampleChecks, time.Time) ([]query.Finding, error) {
+	return nil, nil
+}
+
 func (q *blockingQuerier) Run(context.Context, rule.Rule, query.Attribution, time.Time) (query.Evaluation, error) {
 	if !q.once {
 		q.once = true
@@ -238,7 +260,7 @@ func TestEvalGroupLogsADuplicateLabelSet(t *testing.T) {
 	metrics := NewMetrics(prometheus.NewRegistry())
 	sched := New(oneRuleSet("Collapsed", src), map[string]Querier{"src1": q},
 		notify.NewCadence(&recordingSender{}, time.Minute, notify.DefaultResendTolerance),
-		metrics, newFakeClock(time.Unix(0, 0)), 0, log, testResend)
+		metrics, newFakeClock(time.Unix(0, 0)), 0, log, testResend, 0)
 
 	sched.groups[0].Eval(context.Background(), time.Unix(0, 0))
 
@@ -287,7 +309,7 @@ func TestEvalGroupLogsABrokenAnnotationWithoutFailingTheSend(t *testing.T) {
 	metrics := NewMetrics(prometheus.NewRegistry())
 	sched := New(set, map[string]Querier{"src1": &fakeQuerier{samples: samples}},
 		notify.NewCadence(sender, time.Minute, notify.DefaultResendTolerance),
-		metrics, newFakeClock(time.Unix(0, 0)), 0, log, testResend)
+		metrics, newFakeClock(time.Unix(0, 0)), 0, log, testResend, 0)
 
 	sched.groups[0].Eval(context.Background(), time.Unix(0, 0))
 

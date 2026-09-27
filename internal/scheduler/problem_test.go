@@ -36,9 +36,17 @@ func ownedRuleSet(sources ...source.Source) *ruleset.Set {
 // than on a count.
 func problemGauge(t *testing.T, m *Metrics) float64 {
 	t.Helper()
+	return checkGauge(t, m, lint.CheckRuleColumns, lint.SeverityError)
+}
+
+// checkGauge is the same reading for one named check at one severity, because
+// the two feeds into this gauge own a check each and a test has to say which one
+// it means.
+func checkGauge(t *testing.T, m *Metrics, check string, severity lint.Severity) float64 {
+	t.Helper()
 
 	g, err := m.Problem.GetMetricWithLabelValues(
-		"SlowCheckout", lint.CheckRuleColumns, "error", "payments", "rules/payments.yaml")
+		"SlowCheckout", check, severity.String(), "payments", "rules/payments.yaml")
 	if err != nil {
 		t.Fatalf("reading the gauge: %v", err)
 	}
@@ -55,7 +63,7 @@ func TestEvalGroupReportsDrift(t *testing.T) {
 	sched := New(ownedRuleSet(source.Source{Name: "payments_prod"}),
 		map[string]Querier{"payments_prod": q},
 		notify.NewCadence(&recordingSender{}, time.Minute, notify.DefaultResendTolerance),
-		m, newFakeClock(time.Unix(0, 0)), 0, log, testResend)
+		m, newFakeClock(time.Unix(0, 0)), 0, log, testResend, 0)
 
 	sched.groups[0].Eval(context.Background(), time.Unix(0, 0))
 	if got := problemGauge(t, m); got != 0 {
@@ -96,7 +104,7 @@ func TestEvalGroupClearsAFindingThatWentAway(t *testing.T) {
 	sched := New(ownedRuleSet(source.Source{Name: "payments_prod"}),
 		map[string]Querier{"payments_prod": q},
 		notify.NewCadence(&recordingSender{}, time.Minute, notify.DefaultResendTolerance),
-		m, newFakeClock(time.Unix(0, 0)), 0, log, testResend)
+		m, newFakeClock(time.Unix(0, 0)), 0, log, testResend, 0)
 
 	sched.groups[0].Eval(context.Background(), time.Unix(0, 0))
 	q.shape = []query.Column{{Name: "value", Type: "Int64"}}
@@ -124,7 +132,7 @@ func TestEvalGroupKeepsFindingsWhenAPassCouldNotAsk(t *testing.T) {
 	sched := New(ownedRuleSet(source.Source{Name: "payments_prod"}),
 		map[string]Querier{"payments_prod": q},
 		notify.NewCadence(&recordingSender{}, time.Minute, notify.DefaultResendTolerance),
-		m, newFakeClock(time.Unix(0, 0)), 0, log, testResend)
+		m, newFakeClock(time.Unix(0, 0)), 0, log, testResend, 0)
 
 	sched.groups[0].Eval(context.Background(), time.Unix(0, 0))
 	q.shape = []query.Column{{Name: "value", Type: "Int64"}}
@@ -157,5 +165,114 @@ func TestReloadStartsTheComparisonOver(t *testing.T) {
 
 	if got := testutil.CollectAndCount(m.Problem); got != 0 {
 		t.Fatalf("%d series raised, want none: the first evaluation after a reload has no baseline", got)
+	}
+}
+
+// A query that stopped running, raised under rule/execution and cleared by the
+// evaluation that works again (spec 6.3.2).
+func TestEvalGroupReportsAQueryThatFailed(t *testing.T) {
+	log, _ := logBuffer()
+	q := &fakeQuerier{samples: oneSample(), shape: []query.Column{{Name: "value", Type: "Float64"}}}
+	m := NewMetrics(prometheus.NewRegistry())
+
+	sched := New(ownedRuleSet(source.Source{Name: "payments_prod"}),
+		map[string]Querier{"payments_prod": q},
+		notify.NewCadence(&recordingSender{}, time.Minute, notify.DefaultResendTolerance),
+		m, newFakeClock(time.Unix(0, 0)), 0, log, testResend, 0)
+
+	sched.groups[0].Eval(context.Background(), time.Unix(0, 0))
+	if got := checkGauge(t, m, lint.CheckRuleExecution, lint.SeverityError); got != 0 {
+		t.Fatalf("gauge is %v, want 0 while the query runs", got)
+	}
+
+	q.err = errors.New("Code: 47. Unknown expression identifier 'status_code'")
+	sched.groups[0].Eval(context.Background(), time.Unix(60, 0))
+	if got := checkGauge(t, m, lint.CheckRuleExecution, lint.SeverityError); got != 1 {
+		t.Fatalf("gauge is %v, want 1 for the rule whose query failed", got)
+	}
+
+	q.err = nil
+	sched.groups[0].Eval(context.Background(), time.Unix(120, 0))
+	if got := testutil.CollectAndCount(m.Problem); got != 0 {
+		t.Fatalf("%d series left, want none once the query runs again", got)
+	}
+}
+
+// The two things this gauge carries are answered on different clocks, so a pass
+// that could not compare shapes must still be able to report that the query
+// failed, and must not blank the shape finding while it does (spec 10.4).
+func TestEvalGroupKeepsAShapeFindingWhileTheQueryFails(t *testing.T) {
+	log, _ := logBuffer()
+	q := &fakeQuerier{samples: oneSample(), shape: []query.Column{{Name: "value", Type: "Float64"}}}
+	m := NewMetrics(prometheus.NewRegistry())
+
+	sched := New(ownedRuleSet(source.Source{Name: "payments_prod"}),
+		map[string]Querier{"payments_prod": q},
+		notify.NewCadence(&recordingSender{}, time.Minute, notify.DefaultResendTolerance),
+		m, newFakeClock(time.Unix(0, 0)), 0, log, testResend, 0)
+
+	sched.groups[0].Eval(context.Background(), time.Unix(0, 0))
+	q.shape = []query.Column{{Name: "value", Type: "Int64"}}
+	sched.groups[0].Eval(context.Background(), time.Unix(60, 0))
+
+	q.err = errors.New("Code: 60. Table does not exist")
+	sched.groups[0].Eval(context.Background(), time.Unix(120, 0))
+
+	if got := problemGauge(t, m); got != 1 {
+		t.Errorf("rule/columns is %v, want the previous answer left standing at 1", got)
+	}
+	if got := checkGauge(t, m, lint.CheckRuleExecution, lint.SeverityError); got != 1 {
+		t.Errorf("rule/execution is %v, want 1: the pass knows the query failed", got)
+	}
+}
+
+// A rule whose second cluster has no connection open. Nothing was asked there,
+// so the pass cannot say the query runs and the finding it raised before stays
+// standing (spec 8.2).
+func TestEvalGroupKeepsAFailureWhenASourceWasNotAsked(t *testing.T) {
+	log, _ := logBuffer()
+	q := &fakeQuerier{samples: oneSample(), shape: []query.Column{{Name: "value", Type: "Float64"}}}
+	m := NewMetrics(prometheus.NewRegistry())
+	prod := source.Source{Name: "payments_prod"}
+	eu := source.Source{Name: "payments_eu"}
+
+	sched := New(ownedRuleSet(prod, eu), map[string]Querier{"payments_prod": q, "payments_eu": q},
+		notify.NewCadence(&recordingSender{}, time.Minute, notify.DefaultResendTolerance),
+		m, newFakeClock(time.Unix(0, 0)), 0, log, testResend, 0)
+
+	q.err = errors.New("Code: 60. Table does not exist")
+	sched.groups[0].Eval(context.Background(), time.Unix(0, 0))
+	if got := checkGauge(t, m, lint.CheckRuleExecution, lint.SeverityError); got != 1 {
+		t.Fatalf("gauge is %v, want 1 while both clusters refuse the query", got)
+	}
+
+	// The reload drops the connection to one of them without dropping the rule.
+	sched.Reload(ownedRuleSet(prod, eu), map[string]Querier{"payments_prod": q})
+	q.err = nil
+	evalAll(sched, time.Unix(60, 0))
+
+	if got := checkGauge(t, m, lint.CheckRuleExecution, lint.SeverityError); got != 1 {
+		t.Errorf("gauge is %v, want the previous answer left standing: one cluster was never asked", got)
+	}
+}
+
+// A source that replied is evidence about that source, whatever the rule's other
+// clusters did, so the failure is raised even though this pass cannot rebuild the
+// check for the whole rule (spec 6.3.2).
+func TestEvalGroupReportsAFailureWhileAnotherSourceWasNotAsked(t *testing.T) {
+	log, _ := logBuffer()
+	q := &fakeQuerier{err: errors.New("Code: 60. Table does not exist")}
+	m := NewMetrics(prometheus.NewRegistry())
+	prod := source.Source{Name: "payments_prod"}
+	eu := source.Source{Name: "payments_eu"}
+
+	sched := New(ownedRuleSet(prod, eu), map[string]Querier{"payments_prod": q},
+		notify.NewCadence(&recordingSender{}, time.Minute, notify.DefaultResendTolerance),
+		m, newFakeClock(time.Unix(0, 0)), 0, log, testResend, 0)
+
+	sched.groups[0].Eval(context.Background(), time.Unix(0, 0))
+
+	if got := checkGauge(t, m, lint.CheckRuleExecution, lint.SeverityError); got != 1 {
+		t.Fatalf("gauge is %v, want 1 for the cluster that refused the query", got)
 	}
 }

@@ -20,6 +20,7 @@ Generated from the check table in `internal/lint/checks.go`. Edit the table, the
 | [`rule/complexity`](rule.md#rule-complexity) | `warning` by default | a query with more joins or subqueries than the configured ceiling |
 | [`rule/cost`](rule.md#rule-cost) | `warning` by default | a query predicted to read more than the ceiling allows, per evaluation or per second |
 | [`rule/duplicate-alert`](rule.md#rule-duplicate-alert) | `warning` by default | two rules whose alerts carry the same labels, so neither can be told from the other |
+| [`rule/execution`](rule.md#rule-execution) | `error` by default | a rule whose query failed against a cluster while the ruler was running |
 | [`rule/expr`](rule.md#rule-expr) | fixed, always `error` | an empty query, or one missing the time bounds the ruler binds |
 | [`rule/for`](rule.md#rule-for) | `warning` by default | a `for` shorter than the group interval, so the alert fires on its first evaluation |
 | [`rule/foreign-table`](rule.md#rule-foreign-table) | `warning` by default | a query reading a table outside its source's own database |

@@ -32,6 +32,7 @@ stricter, and a ceiling binds at its lowest value. See spec 7.6 and 7.7.
 | [`rule/complexity`](#rule-complexity) | `warning` by default | ceilings: `max-joins:2`, `max-subqueries:2` | [7.3](https://github.com/dennisme/clickhouse-ruler/blob/main/spec.md) |
 | [`rule/cost`](#rule-cost) | `warning` by default | ceilings: `max-rows-per-second:1000000`, `max-rows-read:100000000` | [7.3](https://github.com/dennisme/clickhouse-ruler/blob/main/spec.md) |
 | [`rule/duplicate-alert`](#rule-duplicate-alert) | `warning` by default | none | [7.6](https://github.com/dennisme/clickhouse-ruler/blob/main/spec.md) |
+| [`rule/execution`](#rule-execution) | `error` by default | none | [6.3.2](https://github.com/dennisme/clickhouse-ruler/blob/main/spec.md) |
 | [`rule/expr`](#rule-expr) | fixed, always `error` | none | [7.6](https://github.com/dennisme/clickhouse-ruler/blob/main/spec.md) |
 | [`rule/for`](#rule-for) | `warning` by default | none | [7.6](https://github.com/dennisme/clickhouse-ruler/blob/main/spec.md) |
 | [`rule/foreign-table`](#rule-foreign-table) | `warning` by default | none | [7.3](https://github.com/dennisme/clickhouse-ruler/blob/main/spec.md) |
@@ -473,6 +474,46 @@ cluster that did not answer has reported nothing about the SQL, and blocking
 on it would let a network blip fail a deploy. Silence would be worse, because
 a check that did not run would read as a check that passed.
 
+<a id="rule-execution"></a>
+
+### rule/execution
+
+A rule whose query failed against a cluster while the ruler was running.
+
+The only check nothing in CI can raise. It is the running ruler saying that a
+rule which passed every check and merged months ago no longer runs: a column it
+reads was dropped, a grant was revoked, a table moved. Nothing in the file
+changed, so CI has nothing to run and a reload has nothing to re-read, and the
+next two events that would surface it are the next rollout and the outage the
+rule was supposed to catch.
+
+An `error` by default, because a rule whose query does not run is watching
+nothing. It cannot fire, and every dashboard and every silence built on it reads
+exactly like a quiet week.
+
+The finding reaches the rule's owner rather than the ruler's operator: it names
+the file, the alert and the team, because the fix is a query edit and the person
+holding the ruler cannot make it. What the operator gets for the same event is
+`clickhouse_ruler_rule_evaluation_failures_total` and a log line naming the
+source. Both are raised for one failure, deliberately, because they are
+addressed to two different people.
+
+The rule keeps evaluating. Nothing is unloaded, no alert is resolved, and the
+next evaluation that succeeds clears the finding.
+
+A cluster that is down raises this for every rule that reads it, which is that
+outage arriving at each rule owner as well as at the operator. Turn it down for
+a source that is known broken rather than living with the noise:
+
+```yaml
+checks:
+  rule/execution:
+    severity: warning
+```
+
+An exemption on the source does the same thing with an expiry date, which is the
+better tool for a migration somebody is in the middle of.
+
 <a id="rule-select-star"></a>
 
 ### rule/select-star
@@ -876,6 +917,15 @@ WHERE Timestamp >= {{ .From }} AND Timestamp < {{ .To }}
   AND LogAttributes['payment_id'] != ''
 GROUP BY ServiceName
 ```
+
+**It runs in two places.** In CI, where `ruler check --sample` asks for it, and
+in the running ruler, where the re-check pass asks it again on
+`--recheck-interval` for every rule that is loaded. The second one is the reason
+this check matters most of all: the rename that breaks a rule usually happens
+long after the pull request that added it, and nothing else in the tool can see
+it. A finding from the running ruler raises
+[`clickhouse_ruler_problem`](../operations.md#a-rule-that-broke-while-running)
+with the team and the file rather than failing a build.
 
 One query answers for every key a rule reads: a `countIf(has(...))` per key
 plus a row count, over the window. The window is the rule's own `window`,

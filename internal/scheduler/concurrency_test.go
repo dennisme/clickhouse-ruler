@@ -33,6 +33,12 @@ func newBarrierQuerier(expect int) *barrierQuerier {
 	return b
 }
 
+// Sampling is not what this querier is for: the limits it measures are the ones
+// around an evaluation.
+func (b *barrierQuerier) Sample(context.Context, rule.Rule, query.Attribution, query.SampleChecks, time.Time) ([]query.Finding, error) {
+	return nil, nil
+}
+
 func (b *barrierQuerier) Run(ctx context.Context, _ rule.Rule, _ query.Attribution, _ time.Time) (query.Evaluation, error) {
 	n := b.inFlight.Add(1)
 	for {
