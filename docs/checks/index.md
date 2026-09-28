@@ -26,7 +26,7 @@ Generated from the check table in `internal/lint/checks.go`. Edit the table, the
 | [`rule/for`](rule.md#rule-for) | `warning` by default | a `for` shorter than the group interval, so the alert fires on its first evaluation |
 | [`rule/foreign-table`](rule.md#rule-foreign-table) | `warning` by default | a query reading a table outside its source's own database |
 | [`rule/group-name`](rule.md#rule-group-name) | fixed, always `error` | a group with no name, or a name repeated within one file |
-| [`rule/inspect`](rule.md#rule-inspect) | fixed, always `error` | the ruler could not reach the cluster to read the rule's SQL |
+| [`rule/inspect`](rule.md#rule-inspect) | fixed, always `warning` | the ruler could not reach the cluster to read the rule's SQL |
 | [`rule/name`](rule.md#rule-name) | fixed, always `error` | an alert with no name, or a duplicate within its group, which has no identity |
 | [`rule/nondeterministic`](rule.md#rule-nondeterministic) | `warning` by default | a query calling a function that breaks window alignment, such as now() |
 | [`rule/protected-label`](rule.md#rule-protected-label) | fixed, always `error` | a rule setting a label the ruler owns, which breaks routing |

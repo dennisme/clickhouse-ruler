@@ -178,3 +178,52 @@ func TestMetricNamesReadsTheMetricsAndNothingElse(t *testing.T) {
 		}
 	}
 }
+
+// A variable fills its dropdown from whatever series exist right now, so one
+// sourced from a gauge that only exists while something is broken is empty on
+// a healthy ruler. Somebody opening the dashboard then sees no teams at all,
+// which reads as broken tooling rather than as good news (spec 8.6).
+func TestVariablesAreFilledByAHealthyRuler(t *testing.T) {
+	// Raised only while a finding stands, and deleted when it clears, so it
+	// has no series on a ruler where nothing is wrong.
+	onlyWhenBroken := "clickhouse_ruler_problem"
+
+	for _, file := range []string{operations, alertRules} {
+		for name, query := range load(t, file).VariableQueries() {
+			for _, metric := range MetricNames(query) {
+				if metric == onlyWhenBroken {
+					t.Errorf("%s fills the %q variable from %s, which has no series while nothing is broken\n  %s",
+						file, name, metric, query)
+				}
+			}
+		}
+	}
+}
+
+// The other direction, and the one nothing guarded: a metric the ruler exposes
+// and no panel draws is a signal an operator has to know exists to ever see.
+// The reload pair is the case that made this a test, since a refused reload is
+// silent by design: the rules that are running are valid and nothing about them
+// looks wrong (spec 8.6).
+func TestEveryRegisteredMetricIsOnADashboard(t *testing.T) {
+	drawn := map[string]bool{}
+	for _, file := range []string{operations, alertRules} {
+		d := load(t, file)
+		for _, expr := range d.Expressions() {
+			for _, name := range MetricNames(expr) {
+				drawn[name] = true
+			}
+		}
+		for _, query := range d.VariableQueries() {
+			for _, name := range MetricNames(query) {
+				drawn[name] = true
+			}
+		}
+	}
+
+	for name := range registered(t) {
+		if !drawn[name] {
+			t.Errorf("%s is registered and no panel draws it: nobody sees it unless they already know it exists", name)
+		}
+	}
+}

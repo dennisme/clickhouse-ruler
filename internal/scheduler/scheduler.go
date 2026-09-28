@@ -248,6 +248,14 @@ func (s *Scheduler) build(set *ruleset.Set, queriers map[string]Querier, prev ma
 		for _, r := range rulesByGroup[k] {
 			if len(r.Sources) == 0 {
 				unmatched++
+				// By name, because the gauge below is a count per group and a
+				// count cannot be read back into names. Normal on a ruler per
+				// datacenter reading a shared repository, so info rather than
+				// warn: rule/source-match already decided how loud this is at
+				// authoring time (spec 8.4).
+				s.log.Info("rule matched no source",
+					"rule_group", groupName, "rule", r.Alert,
+					"file", r.File, "team", r.Team())
 				continue
 			}
 			eval := NewRuleEval(r, queriers, s.cadence, limits, retention)
@@ -420,16 +428,12 @@ func evalGroup(groupName string, evals []namedEval, m *Metrics, log *slog.Logger
 						"rule_group", groupName, "rule", ne.rule,
 						"source", se.Source, "error", se.Err.Error())
 				}
-				// One line per broken annotation, not per instance: a template
-				// that will not render fails on every row a rule returns
-				// (spec 8.3, 8.4). Warn rather than error, because the alert
-				// was still delivered.
+				// Counted once per broken annotation, not per instance: a
+				// template that will not render fails on every row a rule
+				// returns (spec 8.3). The finding below is where it is logged,
+				// so one broken template is one line rather than two.
 				for _, ae := range res.AnnotationErrors {
 					m.AnnotationFailures.WithLabelValues(groupName, ne.rule, ae.Annotation).Inc()
-					log.Warn("annotation template failed, the alert carries the error instead",
-						"rule_group", groupName, "rule", ne.rule,
-						"source", ae.Source, "annotation", ae.Annotation,
-						"error", ae.Err.Error())
 				}
 				if res.SendError != nil {
 					log.Error("sending alerts to alertmanager failed",
@@ -443,33 +447,52 @@ func evalGroup(groupName string, evals []namedEval, m *Metrics, log *slog.Logger
 				// checks the pass could answer: the rest keep the last answer
 				// that was real.
 				//
-				// Scoped by check rather than by rule so the two feeds into
-				// this gauge cannot blank each other's findings (spec 10.4).
-				// The re-check timer's answers arrive on their own clock and
-				// an evaluation knows nothing about them.
-				for _, check := range res.Answered {
-					m.Problem.DeletePartialMatch(prometheus.Labels{
-						"rule": ne.rule, "file": ne.file, "check": check,
-					})
+				// Scoped by check and by source so the two feeds into this
+				// gauge cannot blank each other's findings (spec 10.4), and so
+				// one cluster answering cannot clear what another raised. The
+				// re-check timer's answers arrive on their own clock and an
+				// evaluation knows nothing about them.
+				for _, a := range res.Answered {
+					labels := prometheus.Labels{
+						"rule": ne.rule, "file": ne.file, "check": a.Check,
+					}
+					// An answer about the rule rather than about one of its
+					// clusters clears every source's series for that check,
+					// which is the grain rule/source-schema is asked at.
+					if a.Source != "" {
+						labels["source"] = a.Source
+					}
+					m.Problem.DeletePartialMatch(labels)
 				}
-				// Raised whether or not the pass could answer for the whole
-				// rule. A source that did reply is evidence about that source,
-				// and a finding raised while another source was unreachable is
-				// cleared by the first pass that reaches both.
+				// Raised per source, so a rule broken on one of four clusters
+				// does not read like a rule broken on all four, and the pass
+				// that reaches a cluster again clears only what that cluster
+				// raised.
 				for _, p := range res.Problems {
 					m.Problem.WithLabelValues(
-						ne.rule, p.Check, p.Severity.String(), ne.team, p.File).Set(1)
+						ne.rule, p.Check, p.Severity.String(), ne.team, p.File, p.Source).Set(1)
 
 					// A warning however severe the finding is: the rule is
 					// still evaluating and still paging, so nothing about
 					// the ruler is failing. The severity is the check's,
 					// and it is carried as a field rather than as the level
 					// for exactly that reason.
-					log.Warn("a rule broke while running",
+					//
+					// `error` rides along where the finding has one to carry,
+					// which is a broken annotation template: this is the only
+					// line that says why it would not render, and the
+					// finding's own text names the annotation and the missing
+					// key rather than repeating the error (spec 6.5).
+					fields := []any{
 						"rule_group", groupName, "rule", ne.rule,
 						"check", p.Check, "severity", p.Severity.String(),
-						"team", ne.team, "file", p.File,
-						"feed", feedEvaluation, "problem", p.Text)
+						"team", ne.team, "file", p.File, "source", p.Source,
+						"feed", feedEvaluation, "problem", p.Text,
+					}
+					if p.Err != nil {
+						fields = append(fields, "error", p.Err.Error())
+					}
+					log.Warn("a rule broke while running", fields...)
 				}
 				for _, qw := range res.QueueWaits {
 					m.QueryQueueWait.WithLabelValues(qw.Source).Observe(qw.Wait.Seconds())

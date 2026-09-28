@@ -67,23 +67,24 @@ func recheckPass(
 	return func(ctx context.Context, now time.Time) {
 		for _, rr := range rules {
 			problems, asked := recheckRuleOnce(ctx, rr.rule, queriers, limits, now)
-			if !asked {
-				// Nothing answered, so this pass has no opinion. Blanking the
-				// series here would read as a key somebody put back.
-				continue
-			}
 
-			m.Problem.DeletePartialMatch(prometheus.Labels{
-				"rule": rr.rule.Alert, "file": rr.file, "check": lint.CheckRuleAttributeKey,
-			})
+			// Per source, because a cluster that answered says nothing about
+			// the one beside it: blanking a series for a cluster nobody
+			// sampled would read as a key somebody put back (spec 10.4).
+			for _, src := range asked {
+				m.Problem.DeletePartialMatch(prometheus.Labels{
+					"rule": rr.rule.Alert, "file": rr.file,
+					"check": lint.CheckRuleAttributeKey, "source": src,
+				})
+			}
 			for _, p := range problems {
 				m.Problem.WithLabelValues(
-					rr.rule.Alert, p.Check, p.Severity.String(), rr.team, p.File).Set(1)
+					rr.rule.Alert, p.Check, p.Severity.String(), rr.team, p.File, p.Source).Set(1)
 
 				log.Warn("a rule broke while running",
 					"rule_group", rr.rule.GroupID(), "rule", rr.rule.Alert,
 					"check", p.Check, "severity", p.Severity.String(),
-					"team", rr.team, "file", p.File,
+					"team", rr.team, "file", p.File, "source", p.Source,
 					"feed", feedRecheck, "problem", p.Text)
 			}
 		}
@@ -91,7 +92,7 @@ func recheckPass(
 }
 
 // recheckRuleOnce samples one rule against every source it matched, and says
-// whether any of them answered.
+// which of them answered.
 //
 // A source whose sample failed is not a finding about the rule, the same line
 // the online pass draws: the ruler could not ask, and saying nothing is the only
@@ -105,9 +106,9 @@ func recheckRuleOnce(
 	queriers map[string]Querier,
 	limits *queryLimits,
 	now time.Time,
-) ([]lint.Problem, bool) {
-	var problems []lint.Problem
-	asked := false
+) ([]Finding, []string) {
+	var problems []Finding
+	var asked []string
 
 	for _, src := range r.Sources {
 		q, ok := queriers[src.Name]
@@ -116,7 +117,7 @@ func recheckRuleOnce(
 		}
 		checks, wanted := query.SamplingFromPolicy(policy.Merge(r.Policy, src.Policy))
 		if !wanted {
-			asked = true
+			asked = append(asked, src.Name)
 			continue
 		}
 
@@ -129,10 +130,12 @@ func recheckRuleOnce(
 		if err != nil {
 			continue
 		}
-		asked = true
+		asked = append(asked, src.Name)
 
 		for _, f := range findings {
-			problems = append(problems, runtimeProblem(r, src, now, f)...)
+			for _, p := range runtimeProblem(r, src, now, f) {
+				problems = append(problems, Finding{Problem: p, Source: src.Name})
+			}
 		}
 	}
 

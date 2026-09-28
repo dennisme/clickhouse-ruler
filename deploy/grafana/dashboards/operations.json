@@ -453,6 +453,60 @@
           "legendFormat": "queries in flight"
         }
       ]
+    },
+    {
+      "title": "Configuration reload",
+      "description": "Whether the running configuration is the configuration on disk. A refused reload is silent otherwise: the rules that are running are valid, nothing about them looks wrong, and the ruler is evaluating last week's files. Zero on the first series means the last SIGHUP was refused and the previous version is still running, which stays zero until a reload succeeds, so read the log for the reason and the findings printed with it. The second series is how long ago the running configuration was read, which answers the other question: a reload that never arrived looks the same as a reload that was never needed (spec 8.2).",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 57 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "clickhouse_ruler_config_last_reload_successful",
+          "legendFormat": "last reload accepted"
+        },
+        {
+          "refId": "B",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "time() - clickhouse_ruler_config_last_reload_timestamp_seconds",
+          "legendFormat": "age of the running configuration (s)"
+        }
+      ]
+    },
+    {
+      "title": "Sources failing the user contract",
+      "description": "Sources whose ClickHouse user no longer meets the contract the checks rely on, by source and check. This one is yours to fix, unlike the rules broken while running on the other dashboard: a grant that went away, a setting a constraint now blocks, a readonly flag flipped. Rebuilt at startup and on every reload, so a series that disappears is the grant coming back, and a series that stays means the checks depending on it are answering less than they look (spec 8.2, 6.7.3).",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 57 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "clickhouse_ruler_source_problem",
+          "legendFormat": "{{source}} {{check}} ({{severity}})"
+        }
+      ]
+    },
+    {
+      "title": "Build",
+      "description": "Always 1, one series per build, and it is here for its labels: which version, commit and Go version each replica is running. Two series at once is a rollout in progress or a rollout that only half landed, which is the reading that explains two rulers behaving differently from the same files. `dev` is a binary built outside a release (spec 8.2).",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 6, "w": 24, "x": 0, "y": 65 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "clickhouse_ruler_build_info",
+          "legendFormat": "{{version}} {{revision}} {{goversion}}"
+        }
+      ]
     }
   ]
 }

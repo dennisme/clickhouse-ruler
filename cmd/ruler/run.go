@@ -62,6 +62,9 @@ func runRun(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		"how many resend periods a firing alert stays valid for, so how many consecutive failed evaluations or sends "+
 			"pass before Alertmanager expires an alert that is still firing; 4 is what Prometheus gives itself")
 	logLevel := fs.String("log-level", "info", "log verbosity: debug, info, warn or error")
+	reloadEndpoint := fs.Bool("enable-reload-endpoint", false,
+		"serve POST /-/reload, which re-reads the same files SIGHUP does, for deployments where a signal cannot "+
+			"reach the process")
 
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
@@ -124,6 +127,12 @@ func runRun(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	signal.Notify(hup, syscall.SIGHUP)
 	defer signal.Stop(hup)
 
+	// A reload asked for over HTTP is handed to the loop below rather than run
+	// on the handler's goroutine, so a signal and a request arriving together
+	// are two reloads in sequence rather than two loaders racing over one set
+	// of queriers (spec 8.1).
+	reloads := make(chan chan error)
+
 	cfg, err := rn.load()
 	if err != nil {
 		printf(stderr, "%s\n", err)
@@ -146,9 +155,16 @@ func runRun(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 
 	rn.build(cfg)
 
+	// Nil unless an operator asked for it, which is what keeps the endpoint off
+	// the surface rather than merely refusing on it (spec 8.1).
+	var reload scheduler.Reload
+	if *reloadEndpoint {
+		reload = func(ctx context.Context) error { return requestReload(ctx, reloads) }
+	}
+
 	httpSrv := &http.Server{
 		Addr:              *listen,
-		Handler:           scheduler.Handler(reg, rn.ready),
+		Handler:           scheduler.Handler(reg, rn.ready, reload),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	go func() {
@@ -165,7 +181,9 @@ func runRun(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		case <-ctx.Done():
 			running = false
 		case <-hup:
-			rn.reload(ctx)
+			_ = rn.reload(ctx)
+		case done := <-reloads:
+			done <- rn.reload(ctx)
 		}
 	}
 
@@ -177,6 +195,30 @@ func runRun(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	_ = httpSrv.Shutdown(shutdownCtx)
 
 	return exitOK
+}
+
+// requestReload asks the run loop for a reload and waits for its outcome, so the
+// caller is told what happened rather than being sent to the ruler's logs to find
+// out whether its own request worked (spec 8.1).
+//
+// A shutdown that started before the request was picked up leaves nobody to
+// serve it, so both waits watch the request's own context and the error says
+// that rather than hanging.
+func requestReload(ctx context.Context, reloads chan chan error) error {
+	done := make(chan error, 1)
+
+	select {
+	case reloads <- done:
+	case <-ctx.Done():
+		return fmt.Errorf("the ruler did not pick up the reload: %w", ctx.Err())
+	}
+
+	select {
+	case err := <-done:
+		return err
+	case <-ctx.Done():
+		return fmt.Errorf("the reload did not finish: %w", ctx.Err())
+	}
 }
 
 // queryCost reports what an evaluation's query cost into the metrics

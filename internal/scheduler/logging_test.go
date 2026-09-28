@@ -313,24 +313,33 @@ func TestEvalGroupLogsABrokenAnnotationWithoutFailingTheSend(t *testing.T) {
 
 	sched.groups[0].Eval(context.Background(), time.Unix(0, 0))
 
-	// Two lines and no more: the template error once, however many instances hit
-	// it, and the finding that reaches whoever owns the rule (spec 6.5, 8.3).
+	// One line and no more, however many instances hit it: the finding, which is
+	// the line addressed to whoever owns the rule. A second line announcing the
+	// same broken template made one event count twice for anybody grepping how
+	// often it happened (spec 6.5, 8.3).
 	lines := logLines(t, buf)
-	if len(lines) != 2 {
-		t.Fatalf("got %d log lines for 50 instances, want 2: %v", len(lines), lines)
+	if len(lines) != 1 {
+		t.Fatalf("got %d log lines for 50 instances, want 1: %v", len(lines), lines)
 	}
 	wantFields(t, lines[0], map[string]string{
 		"level":      "WARN",
+		"msg":        "a rule broke while running",
 		"rule_group": "f.yaml:g1",
 		"rule":       "BrokenSummary",
-		"source":     "src1",
-		"annotation": "summary",
+		"check":      lint.CheckAnnotationsTemplate,
+		"team":       "",
+		"feed":       feedEvaluation,
 	})
-	wantFields(t, lines[1], map[string]string{
-		"level": "WARN",
-		"rule":  "BrokenSummary",
-		"check": lint.CheckAnnotationsTemplate,
-	})
+	// Being the only line, it is the only place the Go template error is outside
+	// the alert's own ruler_error annotation.
+	if err, _ := lines[0]["error"].(string); !strings.Contains(err, "NoSuchColumn") {
+		t.Errorf("error field = %q, want the template error itself", err)
+	}
+	// The finding's own text names the annotation and the key, and is not a
+	// second copy of that error.
+	if problem, _ := lines[0]["problem"].(string); !strings.Contains(problem, "summary") {
+		t.Errorf("problem field = %q, want it to name the annotation", problem)
+	}
 
 	if got := testutil.ToFloat64(metrics.AlertsSendFailures.WithLabelValues("")); got != 0 {
 		t.Errorf("clickhouse_ruler_alerts_send_failures_total = %v, want 0: this is not a delivery problem", got)
@@ -372,4 +381,77 @@ func TestEvalGroupLogsABrokenAnnotationWithoutFailingTheSend(t *testing.T) {
 		t.Errorf("%s = %q, want the error itself", rule.ErrorAnnotation,
 			sent.Annotations[rule.ErrorAnnotation])
 	}
+}
+
+// A log line is an event, and a pass that had nothing to render is not one. The
+// finding stands on the gauge for as long as it is true, where a line repeated
+// every group interval for a rule that is not even firing is volume nobody can
+// act on (spec 6.5, 8.4).
+func TestEvalGroupLogsABrokenAnnotationOnceWhileTheRuleIsQuiet(t *testing.T) {
+	log, buf := logBuffer()
+
+	set := oneRuleSet("BrokenSummary", source.Source{Name: "src1"})
+	set.Rules[0].Annotations = map[string]string{"summary": "{{ .NoSuchColumn }} is slow"}
+
+	q := &fakeQuerier{samples: []alert.Sample{{Labels: map[string]string{"ServiceName": "svc"}, Value: 1}}}
+	metrics := NewMetrics(prometheus.NewRegistry())
+	sched := New(set, map[string]Querier{"src1": q},
+		notify.NewCadence(&recordingSender{}, time.Minute, notify.DefaultResendTolerance),
+		metrics, newFakeClock(time.Unix(0, 0)), 0, log, testResend, 0)
+
+	sched.groups[0].Eval(context.Background(), time.Unix(0, 0))
+	if got := len(logLines(t, buf)); got != 1 {
+		t.Fatalf("got %d lines for the pass that found it, want 1: %v", got, logLines(t, buf))
+	}
+
+	// The condition goes away. The template is still broken, so the gauge still
+	// carries the finding, and there is nothing new to say about it.
+	q.samples = nil
+	for i := 1; i <= 3; i++ {
+		sched.groups[0].Eval(context.Background(), time.Unix(int64(60*i), 0))
+	}
+
+	if got := len(logLines(t, buf)); got != 1 {
+		t.Errorf("got %d lines after three quiet passes, want the one from the pass that found it: %v",
+			got, logLines(t, buf))
+	}
+	if got := testutil.ToFloat64(metrics.Problem.WithLabelValues(
+		"BrokenSummary", lint.CheckAnnotationsTemplate, lint.SeverityWarning.String(),
+		"", "f.yaml", "src1")); got != 1 {
+		t.Errorf("gauge is %v, want the finding still standing at 1", got)
+	}
+}
+
+// clickhouse_ruler_rules_unmatched is a count per group, and a count cannot be
+// read back into names. An operator reading it weeks after the loader printed
+// its findings needs the ruler itself to say which rules they were (spec 8.4).
+func TestNewLogsEveryRuleThatMatchedNoSource(t *testing.T) {
+	log, buf := logBuffer()
+
+	set := oneRuleSet("NeverEvaluated")
+	set.Rules[0].Labels = map[string]string{"team": "payments"}
+	set.Rules = append(set.Rules, ruleset.Rule{
+		Rule:    rule.Rule{Alert: "Evaluated"},
+		File:    "f.yaml",
+		Group:   testGroup("g1", time.Minute),
+		Labels:  map[string]string{},
+		Sources: []source.Source{{Name: "src1"}},
+	})
+
+	New(set, map[string]Querier{"src1": &fakeQuerier{}},
+		notify.NewCadence(&recordingSender{}, time.Minute, notify.DefaultResendTolerance),
+		NewMetrics(prometheus.NewRegistry()), newFakeClock(time.Unix(0, 0)), 0, log, testResend, 0)
+
+	lines := logLines(t, buf)
+	if len(lines) != 1 {
+		t.Fatalf("got %d lines, want one for the rule that matched no source: %v", len(lines), lines)
+	}
+	wantFields(t, lines[0], map[string]string{
+		"level":      "INFO",
+		"msg":        "rule matched no source",
+		"rule_group": "f.yaml:g1",
+		"rule":       "NeverEvaluated",
+		"file":       "f.yaml",
+		"team":       "payments",
+	})
 }

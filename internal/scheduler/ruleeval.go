@@ -19,6 +19,7 @@ import (
 	"github.com/dennisme/clickhouse-ruler/internal/query"
 	"github.com/dennisme/clickhouse-ruler/internal/rule"
 	"github.com/dennisme/clickhouse-ruler/internal/ruleset"
+	"github.com/dennisme/clickhouse-ruler/internal/source"
 )
 
 // Querier is what one source's connection does for a running ruler: it
@@ -52,12 +53,65 @@ type SourceError struct {
 // source whose evaluation found it.
 //
 // Not a failure of anything: the alert was evaluated, it is being sent, and it
-// carries the template error where its annotation should be. It is reported so
-// an author learns their summary reads as an error on somebody's page.
+// carries a marker where its annotation should be, with the template error in
+// ErrorAnnotation beside it. It is reported so an author learns their summary
+// reads as a marker on somebody's page.
+//
+// What this pass itself found, which is what the counter counts: once per rule,
+// source and annotation per evaluation. The finding that says the rule is still
+// broken is in Problems, and outlives a pass with nothing to render (spec 8.2).
 type AnnotationError struct {
 	Source     string
 	Annotation string
 	Err        error
+}
+
+// Finding is one thing to report about a rule, with the error behind it where
+// there is one to carry.
+//
+// Err is set only on an annotations/template finding, whose Go template error
+// has nowhere else to go: the finding's text names the annotation and the key
+// the alert did not carry, and the error itself would otherwise reach nobody
+// but whoever reads the alert's ruler_error annotation (spec 6.5). The drift
+// findings are read out of a result rather than raised by an error, so they
+// have none.
+type Finding struct {
+	lint.Problem
+	Err error
+
+	// Source is the cluster this was found against, and empty when the finding
+	// is about the rule rather than one of its sources: rule/source-schema
+	// compares two clusters and belongs to neither (spec 8.2).
+	//
+	// A label on the gauge, so a rule broken on one of four clusters does not
+	// read like a rule broken on all four, and so the pass that reaches a
+	// cluster again clears only what that cluster raised.
+	Source string
+}
+
+// Answer is a check this pass can rebuild the gauge for, and the source it can
+// rebuild it for. An empty Source is an answer about the rule as a whole, which
+// clears every source's series for that check.
+//
+// Per source because that is the grain the evidence arrives at: one cluster
+// answering says nothing about another, and a pass that reached three of four
+// clusters knows three quarters of the truth rather than none of it (spec 10.4).
+type Answer struct {
+	Check  string
+	Source string
+}
+
+// annotationFindings pairs each finding with the template error that produced
+// it, in the order the annotations were read.
+func annotationFindings(r ruleset.Rule, src source.Source, now time.Time, a alert.AnnotationError) []Finding {
+	var out []Finding
+	for _, p := range runtimeProblem(r, src, now, query.Finding{
+		Check:  lint.CheckAnnotationsTemplate,
+		Detail: renderDetail(a),
+	}) {
+		out = append(out, Finding{Problem: p, Err: a.Err, Source: src.Name})
+	}
+	return out
 }
 
 // SourceWait is how long one source's query spent queued behind that
@@ -114,7 +168,7 @@ type Result struct {
 	// for a check outside it is still this rule's finding and still reported:
 	// a source that replied is evidence about that source whatever the rule's
 	// other clusters did.
-	Problems []lint.Problem
+	Problems []Finding
 
 	// Answered is the checks this pass has a current answer for, so the gauge
 	// series this rule holds for each of them can be rebuilt from Problems. A
@@ -126,7 +180,7 @@ type Result struct {
 	// to answer are different. A source that did not reply says nothing about
 	// its result's shape or its cost, and a source the ruler holds no
 	// connection for says nothing about whether the query runs.
-	Answered []string
+	Answered []Answer
 
 	// Pending and Firing are counts of currently tracked instances across
 	// every matched source, for the clickhouse_ruler_alerts_active gauge. Counts only:
@@ -134,6 +188,37 @@ type Result struct {
 	// cardinality problem it exists to avoid (spec 8.3).
 	Pending int
 	Firing  int
+}
+
+// sourceResult is what one source's half of an evaluation produced, before the
+// halves are merged in source order.
+type sourceResult struct {
+	alerts      []alert.Alert
+	err         error
+	annotations []alert.AnnotationError
+
+	// shape and usage are what the drift comparison reads out of an
+	// evaluation that succeeded (spec 6.3.2).
+	shape []query.Column
+	usage query.Usage
+
+	// queryErr is set when the query itself failed, which is a finding
+	// about the rule. err covers that and more: a source with no
+	// connection open, a query abandoned at shutdown, and rows that could
+	// not be turned into alerts are all reported to the operator and none
+	// of them says the rule's query stopped running.
+	queryErr error
+
+	// rendered says this source's evaluation had an instance to render
+	// annotations for, which is what answers annotations/template at
+	// runtime. A pass that returned no rows rendered nothing and so learned
+	// nothing about the templates (spec 6.5).
+	rendered bool
+
+	// acquired says the query got through both gates, so wait holds real
+	// measurements rather than the zero values of a query that never ran.
+	acquired bool
+	wait     waits
 }
 
 // RuleEval evaluates one rule against every source it matched.
@@ -203,34 +288,6 @@ func (e *RuleEval) attribution() query.Attribution {
 func (e *RuleEval) Evaluate(ctx context.Context, now time.Time) Result {
 	var res Result
 
-	type sourceResult struct {
-		alerts      []alert.Alert
-		err         error
-		annotations []alert.AnnotationError
-
-		// shape and usage are what the drift comparison reads out of an
-		// evaluation that succeeded (spec 6.3.2).
-		shape []query.Column
-		usage query.Usage
-
-		// queryErr is set when the query itself failed, which is a finding
-		// about the rule. err covers that and more: a source with no
-		// connection open, a query abandoned at shutdown, and rows that could
-		// not be turned into alerts are all reported to the operator and none
-		// of them says the rule's query stopped running.
-		queryErr error
-
-		// rendered says this source's evaluation had an instance to render
-		// annotations for, which is what answers annotations/template at
-		// runtime. A pass that returned no rows rendered nothing and so learned
-		// nothing about the templates (spec 6.5).
-		rendered bool
-
-		// acquired says the query got through both gates, so wait holds real
-		// measurements rather than the zero values of a query that never ran.
-		acquired bool
-		wait     waits
-	}
 	results := make([]sourceResult, len(e.rule.Sources))
 
 	var wg sync.WaitGroup
@@ -291,16 +348,7 @@ func (e *RuleEval) Evaluate(ctx context.Context, now time.Time) Result {
 	// that will not render against a real alert. Reported under the name the
 	// pull request would have used, so an operator who raised that check to
 	// block a merge has already said what they think of it (spec 6.5).
-	var annotationProblems []lint.Problem
-
-	// asked counts the sources that reached their cluster and got a reply,
-	// whether it was a result or an error. Anything else is a source nothing
-	// was learned about.
-	asked := 0
-
-	// rendered is whether any source had an instance to render, which decides
-	// whether this pass may clear an annotations/template finding.
-	rendered := false
+	var annotationProblems []Finding
 
 	var current []alert.Alert
 	for i, r := range results {
@@ -315,21 +363,15 @@ func (e *RuleEval) Evaluate(ctx context.Context, now time.Time) Result {
 			res.AnnotationErrors = append(res.AnnotationErrors,
 				AnnotationError{Source: name, Annotation: a.Annotation, Err: a.Err})
 			annotationProblems = append(annotationProblems,
-				runtimeProblem(e.rule, e.rule.Sources[i], now, query.Finding{
-					Check:  lint.CheckAnnotationsTemplate,
-					Detail: renderDetail(a),
-				})...)
+				annotationFindings(e.rule, e.rule.Sources[i], now, a)...)
 		}
-		rendered = rendered || r.rendered
 		if r.err != nil {
 			res.SourceErrors = append(res.SourceErrors, SourceError{Source: name, Err: r.err})
 			if r.queryErr != nil {
-				asked++
 				failures = append(failures, failed{source: e.rule.Sources[i], err: r.queryErr})
 			}
 			continue
 		}
-		asked++
 		answered = append(answered, evaluated{
 			source: e.rule.Sources[i],
 			shape:  r.shape,
@@ -339,7 +381,7 @@ func (e *RuleEval) Evaluate(ctx context.Context, now time.Time) Result {
 	}
 
 	res.Problems = append(e.drift.inspect(answered, failures, now), annotationProblems...)
-	res.Answered = answeredChecks(len(answered) > 0, asked == len(e.rule.Sources), rendered)
+	res.Answered = answeredChecks(e.rule.Sources, results)
 
 	for _, a := range current {
 		switch a.Phase {
@@ -357,25 +399,57 @@ func (e *RuleEval) Evaluate(ctx context.Context, now time.Time) Result {
 	return res
 }
 
-// answeredChecks says which checks a pass can rebuild the gauge for.
+// answeredChecks says which checks a pass can rebuild the gauge for, and for
+// which source.
 //
-// The shape comparison and the cost measurement need a result, so one source
-// answering is enough to make them this rule's current answer. Whether the
-// query runs needs every source to have been asked: a rule whose second cluster
-// has no connection open would otherwise report that its query is fine there.
-// Whether an annotation renders needs an alert to render it against, so a pass
-// that returned no rows answers nothing about the templates: clearing on it would
-// let a rule that broke and then stopped firing clear the finding saying so.
-func answeredChecks(gotAResult, askedEverySource, rendered bool) []string {
-	var out []string
-	if gotAResult {
-		out = append(out, lint.CheckRuleColumns, lint.CheckRuleSourceSchema, lint.CheckRuleCost)
+// Per source, because that is the grain the evidence arrives at (spec 10.4). A
+// cluster that replied says what its result's shape is and what its query cost;
+// a cluster that was reached at all says whether its query runs, whether it
+// answered or refused; and a cluster with rows says whether the annotations
+// render against them. None of the three says anything about the cluster beside
+// it, so a pass that reached three of four clusters rebuilds three quarters of
+// this rule's series and leaves the fourth standing.
+//
+// The exception is the comparison between sources, which belongs to no single one
+// of them: a rule whose clusters stopped agreeing has one finding, answered for
+// the whole rule, and answered only by a pass that has two results to compare.
+func answeredChecks(sources []source.Source, results []sourceResult) []Answer {
+	var out []Answer
+	replied := 0
+
+	for i, src := range sources {
+		r := results[i]
+
+		if r.err == nil {
+			replied++
+			out = append(out,
+				Answer{Check: lint.CheckRuleColumns, Source: src.Name},
+				Answer{Check: lint.CheckRuleCost, Source: src.Name})
+		}
+
+		// Reached its cluster and came back, with a result or with the
+		// database's refusal. A source with no connection open, or a query
+		// abandoned at shutdown, is one nothing was learned about.
+		if r.err == nil || r.queryErr != nil {
+			out = append(out, Answer{Check: lint.CheckRuleExecution, Source: src.Name})
+		}
+
+		// An alert to render the templates against. A pass that returned no
+		// rows rendered nothing and so learned nothing: clearing on it would
+		// let a rule that broke and then stopped firing clear the finding
+		// saying so (spec 6.5).
+		if r.rendered {
+			out = append(out, Answer{Check: lint.CheckAnnotationsTemplate, Source: src.Name})
+		}
 	}
-	if askedEverySource {
-		out = append(out, lint.CheckRuleExecution)
-	}
-	if rendered {
-		out = append(out, lint.CheckAnnotationsTemplate)
+
+	// Two replies, because one reply compares with nothing: a pass where the
+	// second cluster refused the query cannot say the two still agree, and
+	// clearing on it would read as somebody having reconciled them. A rule left
+	// matching one source is the other case, where the comparison can never be
+	// raised again and a finding from when it matched two has to go.
+	if replied >= 2 || (replied > 0 && len(sources) < 2) {
+		out = append(out, Answer{Check: lint.CheckRuleSourceSchema})
 	}
 	return out
 }
@@ -384,6 +458,12 @@ func answeredChecks(gotAResult, askedEverySource, rendered bool) []string {
 // the keys their template read that the alert did not carry. The template error
 // itself stays on the page and in the log rather than being copied onto the
 // gauge (spec 6.5).
+//
+// Every missing key is named, where the marker on the alert stops at
+// alert.markerKeys and counts the rest. The asymmetry is deliberate: this is a
+// log field read by somebody already debugging one rule, and the marker is a
+// notification field that becomes a PagerDuty title. Length costs nothing here
+// and costs a responder their first line there.
 func renderDetail(a alert.AnnotationError) string {
 	if len(a.MissingKeys) == 0 {
 		return fmt.Sprintf("annotation %q did not render, and the template error is in the log beside this",

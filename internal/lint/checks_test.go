@@ -33,7 +33,12 @@ func TestFixedChecksCarryNoDefault(t *testing.T) {
 			continue
 		}
 		if c.Default != SeverityOff {
-			t.Errorf("%s is fixed but ships severity %v, which nothing reads", c.Name, c.Default)
+			t.Errorf("%s is fixed but ships a configurable default of %v, which no policy can reach", c.Name, c.Default)
+		}
+		// Stated rather than assumed, because the generated check page prints
+		// it and one fixed check is a warning (spec 7.6).
+		if c.Always == SeverityOff {
+			t.Errorf("%s is fixed and states no severity, so its check page cannot say what it does", c.Name)
 		}
 		if len(c.Keys) > 0 || c.List != ListNone {
 			t.Errorf("%s is fixed but carries a key list, which no policy can configure", c.Name)

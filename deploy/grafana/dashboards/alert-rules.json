@@ -32,9 +32,10 @@
       {
         "name": "team",
         "label": "Team",
+        "description": "Teams whose rules have run a query on this ruler. A team whose rules match none of this ruler's sources has never run one and is absent here, which is what Rules matching no source is about rather than a team with nothing to alert on.",
         "type": "query",
         "datasource": { "type": "prometheus", "uid": "${datasource}" },
-        "query": "label_values(clickhouse_ruler_problem, team)",
+        "query": "label_values(clickhouse_ruler_query_read_rows_total, team)",
         "refresh": 2,
         "includeAll": true,
         "allValue": ".*",
@@ -110,7 +111,7 @@
     },
     {
       "title": "Annotations that will not render",
-      "description": "The alert was evaluated and delivered, carrying the template error where its annotation should be. Somebody is reading that error on their page right now, and the fix is in the rule file.",
+      "description": "The alert was evaluated and delivered, carrying a marker where its annotation should be and the template error in its ruler_error annotation. Somebody is reading that marker on their page right now, and the fix is in the rule file. This counts how often it happened; whether it is still broken is the gauge in the panel beside this one.",
       "type": "timeseries",
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 17 },
@@ -126,7 +127,7 @@
     },
     {
       "title": "Rules broken while running",
-      "description": "Rules that broke after they merged, by check and by the team that owns them, and the only signal here nobody operating the ruler can fix: a column dropped or retyped under the query, clusters that stopped agreeing, a query over its ceiling or no longer running, or an annotation that will not render against a real alert. The rule is still evaluating and still paging. A series disappears on the next pass that could ask and found nothing, which is somebody fixing it. There is no rule group to filter on, because this gauge carries team and file instead, so the Team variable above is how you narrow this to your own rules.",
+      "description": "Rules that broke after they merged, by check and by the team that owns them, and the only signal here nobody operating the ruler can fix: a column dropped or retyped under the query, clusters that stopped agreeing, a query over its ceiling or no longer running, or an annotation that will not render against a real alert. The rule is still evaluating and still paging. A series disappears on the next pass that could ask and found nothing, which is somebody fixing it. There is no rule group to filter on, because this gauge carries team and file instead, so the Team variable above is how you narrow this to your own rules. It does carry the cluster the finding was found against, which is how you tell a rule broken on one of four clusters from a rule broken on all four; the empty source is the one finding that belongs to no single cluster, a rule whose clusters stopped agreeing. This says whether a rule is broken right now; how often a broken annotation reached a page is the counter in the panel beside this one.",
       "type": "timeseries",
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 17 },
@@ -135,8 +136,8 @@
         {
           "refId": "A",
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
-          "expr": "sum by (check, team) (clickhouse_ruler_problem{team=~\"$team\"})",
-          "legendFormat": "{{check}} / {{team}}"
+          "expr": "sum by (check, team, source) (clickhouse_ruler_problem{team=~\"$team\"})",
+          "legendFormat": "{{check}} / {{team}} / {{source}}"
         }
       ]
     }

@@ -112,6 +112,10 @@ func annotate(annotations map[string]*template.Template, parseErrs map[string]er
 // rest. Three, because summary is a notification field: it becomes a PagerDuty
 // title and a Slack message, and a template reading a dozen labels must not turn
 // one into a list of them.
+//
+// The cap is on this field alone. MissingKeys carries all of them, and the
+// finding the running ruler raises from it names all of them, because a log
+// field is read by somebody already debugging that rule (spec 6.5).
 const markerKeys = 3
 
 // marker is what a failed annotation carries in place of what it could not

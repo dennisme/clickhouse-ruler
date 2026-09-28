@@ -172,13 +172,22 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 		// an alert built on this gauge lands its owner on an explanation rather
 		// than on our dashboard.
 		//
-		// Cardinality is rules times checks, bounded by the rules loaded, and
-		// it is rebuilt per pass rather than incremented: a finding that went
-		// away has to stop being a series or the alert never clears (spec 8.2).
+		// `source` is the cluster the finding was found against, and empty on a
+		// finding about the rule rather than one of its clusters, which is
+		// rule/source-schema comparing two of them. Without it a rule broken on
+		// one of four clusters reads like a rule broken on all four, and a pass
+		// that reached one cluster would clear what another raised: the label is
+		// what makes a source-scoped answer expressible at all (spec 10.4).
+		//
+		// Cardinality is rules times checks times the sources each rule matched,
+		// bounded by the rules loaded, and it is rebuilt per pass rather than
+		// incremented: a finding that went away has to stop being a series or
+		// the alert never clears (spec 8.2).
 		Problem: f.NewGaugeVec(prometheus.GaugeOpts{
 			Name: "clickhouse_ruler_problem",
-			Help: "Rules that broke while running, by check. Fixed by whoever owns the rule, not by the operator.",
-		}, []string{"rule", "check", "severity", "team", "file"}),
+			Help: "Rules that broke while running, by check and by the cluster it was found against. " +
+				"Fixed by whoever owns the rule, not by the operator.",
+		}, []string{"rule", "check", "severity", "team", "file", "source"}),
 
 		// The same idea for the other audience, and a second gauge rather than
 		// a label on the one above.
@@ -398,4 +407,9 @@ func (m *Metrics) deleteSource(source string) {
 	m.QueryReadRowsTotal.DeletePartialMatch(labels)
 	m.QueryReadBytesTotal.DeletePartialMatch(labels)
 	m.QueryDuration.DeletePartialMatch(labels)
+
+	// A rule finding about a cluster this ruler no longer reads is a finding
+	// nothing can ever clear, because clearing it takes a pass against that
+	// cluster (spec 8.2).
+	m.Problem.DeletePartialMatch(labels)
 }

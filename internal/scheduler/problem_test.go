@@ -10,6 +10,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
+	"github.com/dennisme/clickhouse-ruler/internal/alert"
 	"github.com/dennisme/clickhouse-ruler/internal/lint"
 	"github.com/dennisme/clickhouse-ruler/internal/notify"
 	"github.com/dennisme/clickhouse-ruler/internal/query"
@@ -31,22 +32,28 @@ func ownedRuleSet(sources ...source.Source) *ruleset.Set {
 	}}}
 }
 
+// The cluster the single-source fixtures here match, which is the source label
+// most of these assertions read.
+const prodSource = "payments_prod"
+
 // problemGauge is what the metric carries for one finding about the rule
 // ownedRuleSet builds, so a test asserts on the labels an owner reads rather
 // than on a count.
 func problemGauge(t *testing.T, m *Metrics) float64 {
 	t.Helper()
-	return checkGauge(t, m, lint.CheckRuleColumns, lint.SeverityError)
+	return checkGauge(t, m, lint.CheckRuleColumns, lint.SeverityError, prodSource)
 }
 
-// checkGauge is the same reading for one named check at one severity, because
-// the two feeds into this gauge own a check each and a test has to say which one
-// it means.
-func checkGauge(t *testing.T, m *Metrics, check string, severity lint.Severity) float64 {
+// checkGauge is the same reading for one named check at one severity against one
+// source, because the two feeds into this gauge own a check each and a finding is
+// raised against the cluster it was found on, so a test has to say which of each
+// it means. The empty source is a finding about the rule rather than one of its
+// clusters, which is rule/source-schema.
+func checkGauge(t *testing.T, m *Metrics, check string, severity lint.Severity, src string) float64 {
 	t.Helper()
 
 	g, err := m.Problem.GetMetricWithLabelValues(
-		"SlowCheckout", check, severity.String(), "payments", "rules/payments.yaml")
+		"SlowCheckout", check, severity.String(), "payments", "rules/payments.yaml", src)
 	if err != nil {
 		t.Fatalf("reading the gauge: %v", err)
 	}
@@ -181,13 +188,13 @@ func TestEvalGroupReportsAQueryThatFailed(t *testing.T) {
 		m, newFakeClock(time.Unix(0, 0)), 0, log, testResend, 0)
 
 	sched.groups[0].Eval(context.Background(), time.Unix(0, 0))
-	if got := checkGauge(t, m, lint.CheckRuleExecution, lint.SeverityError); got != 0 {
+	if got := checkGauge(t, m, lint.CheckRuleExecution, lint.SeverityError, prodSource); got != 0 {
 		t.Fatalf("gauge is %v, want 0 while the query runs", got)
 	}
 
 	q.err = errors.New("Code: 47. Unknown expression identifier 'status_code'")
 	sched.groups[0].Eval(context.Background(), time.Unix(60, 0))
-	if got := checkGauge(t, m, lint.CheckRuleExecution, lint.SeverityError); got != 1 {
+	if got := checkGauge(t, m, lint.CheckRuleExecution, lint.SeverityError, prodSource); got != 1 {
 		t.Fatalf("gauge is %v, want 1 for the rule whose query failed", got)
 	}
 
@@ -221,7 +228,7 @@ func TestEvalGroupKeepsAShapeFindingWhileTheQueryFails(t *testing.T) {
 	if got := problemGauge(t, m); got != 1 {
 		t.Errorf("rule/columns is %v, want the previous answer left standing at 1", got)
 	}
-	if got := checkGauge(t, m, lint.CheckRuleExecution, lint.SeverityError); got != 1 {
+	if got := checkGauge(t, m, lint.CheckRuleExecution, lint.SeverityError, prodSource); got != 1 {
 		t.Errorf("rule/execution is %v, want 1: the pass knows the query failed", got)
 	}
 }
@@ -242,8 +249,10 @@ func TestEvalGroupKeepsAFailureWhenASourceWasNotAsked(t *testing.T) {
 
 	q.err = errors.New("Code: 60. Table does not exist")
 	sched.groups[0].Eval(context.Background(), time.Unix(0, 0))
-	if got := checkGauge(t, m, lint.CheckRuleExecution, lint.SeverityError); got != 1 {
-		t.Fatalf("gauge is %v, want 1 while both clusters refuse the query", got)
+	for _, src := range []string{prodSource, "payments_eu"} {
+		if got := checkGauge(t, m, lint.CheckRuleExecution, lint.SeverityError, src); got != 1 {
+			t.Fatalf("gauge for %s is %v, want 1 while both clusters refuse the query", src, got)
+		}
 	}
 
 	// The reload drops the connection to one of them without dropping the rule.
@@ -251,8 +260,14 @@ func TestEvalGroupKeepsAFailureWhenASourceWasNotAsked(t *testing.T) {
 	q.err = nil
 	evalAll(sched, time.Unix(60, 0))
 
-	if got := checkGauge(t, m, lint.CheckRuleExecution, lint.SeverityError); got != 1 {
-		t.Errorf("gauge is %v, want the previous answer left standing: one cluster was never asked", got)
+	// The cluster that answered is answered for, and the one nothing was asked
+	// of keeps what it raised: the pass knows half of this rule's truth and says
+	// so rather than claiming all of it.
+	if got := checkGauge(t, m, lint.CheckRuleExecution, lint.SeverityError, prodSource); got != 0 {
+		t.Errorf("gauge for %s is %v, want 0: its query runs again", prodSource, got)
+	}
+	if got := checkGauge(t, m, lint.CheckRuleExecution, lint.SeverityError, "payments_eu"); got != 1 {
+		t.Errorf("gauge for payments_eu is %v, want the previous answer left standing: it was never asked", got)
 	}
 }
 
@@ -272,7 +287,7 @@ func TestEvalGroupReportsAFailureWhileAnotherSourceWasNotAsked(t *testing.T) {
 
 	sched.groups[0].Eval(context.Background(), time.Unix(0, 0))
 
-	if got := checkGauge(t, m, lint.CheckRuleExecution, lint.SeverityError); got != 1 {
+	if got := checkGauge(t, m, lint.CheckRuleExecution, lint.SeverityError, prodSource); got != 1 {
 		t.Fatalf("gauge is %v, want 1 for the cluster that refused the query", got)
 	}
 }
@@ -295,7 +310,7 @@ func brokenAnnotationRuleSet(annotations map[string]string, sources ...source.So
 // drift checks carry.
 func renderGauge(t *testing.T, m *Metrics) float64 {
 	t.Helper()
-	return checkGauge(t, m, lint.CheckAnnotationsTemplate, lint.SeverityWarning)
+	return checkGauge(t, m, lint.CheckAnnotationsTemplate, lint.SeverityWarning, prodSource)
 }
 
 // A template that will not render reaches its author on the gauge that names the
@@ -429,5 +444,170 @@ func TestEvalGroupKeepsAnAnnotationFindingWhenNothingRendered(t *testing.T) {
 
 	if got := renderGauge(t, m); got != 1 {
 		t.Fatalf("gauge is %v, want the finding left standing at 1", got)
+	}
+}
+
+// Each source contributes its own labels, so a summary reading a label only one
+// cluster carries renders there and fails on the other. The healthy cluster
+// returning rows says nothing about the broken one, so a pass where only it had
+// something to render must not clear the finding (spec 6.5).
+func TestEvalGroupKeepsAnAnnotationFindingWhileTheBrokenSourceRendersNothing(t *testing.T) {
+	log, _ := logBuffer()
+	shape := []query.Column{{Name: "value", Type: "Float64"}}
+
+	// staging carries the label the summary reads. prod does not, so prod is
+	// the cluster the template breaks on.
+	prod := &fakeQuerier{samples: oneSample(), shape: shape}
+	staging := &fakeQuerier{
+		samples: []alert.Sample{{Labels: map[string]string{"p99": "42"}, Value: 1}},
+		shape:   shape,
+	}
+	m := NewMetrics(prometheus.NewRegistry())
+
+	set := brokenAnnotationRuleSet(
+		map[string]string{"summary": "p99 is {{ .p99 }}ms"},
+		source.Source{Name: "payments_prod"}, source.Source{Name: "payments_staging"})
+	sched := New(set, map[string]Querier{"payments_prod": prod, "payments_staging": staging},
+		notify.NewCadence(&recordingSender{}, time.Minute, notify.DefaultResendTolerance),
+		m, newFakeClock(time.Unix(0, 0)), 0, log, testResend, 0)
+
+	sched.groups[0].Eval(context.Background(), time.Unix(0, 0))
+	if got := renderGauge(t, m); got != 1 {
+		t.Fatalf("gauge is %v, want 1 for the cluster the summary would not render against", got)
+	}
+
+	// The condition went away on prod alone. staging still fires and still
+	// renders cleanly, which is evidence about staging and nothing else.
+	prod.samples = nil
+	sched.groups[0].Eval(context.Background(), time.Unix(60, 0))
+
+	if got := renderGauge(t, m); got != 1 {
+		t.Fatalf("gauge is %v, want the finding left standing at 1: prod is still broken", got)
+	}
+}
+
+// The other half of remembering per source: what a source last found is
+// replaced by what it finds on its next pass with something to render,
+// including nothing, so a template that starts rendering clears itself without
+// waiting for a reload (spec 6.5).
+func TestEvalGroupClearsAnAnnotationFindingWhenTheSourceRendersAgain(t *testing.T) {
+	log, _ := logBuffer()
+	q := &fakeQuerier{samples: oneSample(), shape: []query.Column{{Name: "value", Type: "Float64"}}}
+	m := NewMetrics(prometheus.NewRegistry())
+
+	set := brokenAnnotationRuleSet(
+		map[string]string{"summary": "p99 is {{ .p99 }}ms"},
+		source.Source{Name: "payments_prod"})
+	sched := New(set, map[string]Querier{"payments_prod": q},
+		notify.NewCadence(&recordingSender{}, time.Minute, notify.DefaultResendTolerance),
+		m, newFakeClock(time.Unix(0, 0)), 0, log, testResend, 0)
+
+	sched.groups[0].Eval(context.Background(), time.Unix(0, 0))
+	if got := renderGauge(t, m); got != 1 {
+		t.Fatalf("gauge is %v, want 1 while the label the summary reads is missing", got)
+	}
+
+	// The column the summary reads is back, so the same template renders.
+	q.samples = []alert.Sample{{Labels: map[string]string{"p99": "42"}, Value: 1}}
+	sched.groups[0].Eval(context.Background(), time.Unix(60, 0))
+
+	if got := testutil.CollectAndCount(m.Problem); got != 0 {
+		t.Fatalf("%d series left, want none once the source renders cleanly", got)
+	}
+}
+
+// The series is the memory, so a reload does not resolve a finding whose cluster
+// has gone quiet. Every merge to a rules repository is a reload, including merges
+// to somebody else's rule, and a finding that a deploy can clear is one nobody
+// can trust (spec 8.2).
+func TestReloadKeepsAFindingWhoseSourceIsQuiet(t *testing.T) {
+	log, _ := logBuffer()
+	shape := []query.Column{{Name: "value", Type: "Float64"}}
+
+	// staging carries the label the summary reads, prod does not.
+	prod := &fakeQuerier{samples: oneSample(), shape: shape}
+	staging := &fakeQuerier{
+		samples: []alert.Sample{{Labels: map[string]string{"p99": "42"}, Value: 1}},
+		shape:   shape,
+	}
+	m := NewMetrics(prometheus.NewRegistry())
+	broken := map[string]string{"summary": "p99 is {{ .p99 }}ms"}
+	queriers := map[string]Querier{"payments_prod": prod, "payments_staging": staging}
+	sources := []source.Source{{Name: "payments_prod"}, {Name: "payments_staging"}}
+
+	sched := New(brokenAnnotationRuleSet(broken, sources...), queriers,
+		notify.NewCadence(&recordingSender{}, time.Minute, notify.DefaultResendTolerance),
+		m, newFakeClock(time.Unix(0, 0)), 0, log, testResend, 0)
+
+	sched.groups[0].Eval(context.Background(), time.Unix(0, 0))
+	if got := checkGauge(t, m, lint.CheckAnnotationsTemplate, lint.SeverityWarning, prodSource); got != 1 {
+		t.Fatalf("gauge for %s is %v, want 1: its summary would not render", prodSource, got)
+	}
+
+	// prod stops firing, and a reload arrives carrying the same broken rule,
+	// which is what any merge to the repository looks like from here.
+	prod.samples = nil
+	sched.Reload(brokenAnnotationRuleSet(broken, sources...), queriers)
+	evalAll(sched, time.Unix(60, 0))
+
+	if got := checkGauge(t, m, lint.CheckAnnotationsTemplate, lint.SeverityWarning, prodSource); got != 1 {
+		t.Errorf("gauge for %s is %v, want it standing at 1 across the reload", prodSource, got)
+	}
+}
+
+// A comparison between clusters needs two of them to have answered. One reply
+// says nothing about whether the rule still means the same thing everywhere, so a
+// pass where the second cluster refused the query must not clear the finding
+// saying they disagree (spec 10.4).
+func TestEvalGroupKeepsADisagreementWhileOneClusterIsDown(t *testing.T) {
+	log, _ := logBuffer()
+	prod := &fakeQuerier{samples: oneSample(), shape: []query.Column{{Name: "value", Type: "Float64"}}}
+	eu := &fakeQuerier{samples: oneSample(), shape: []query.Column{{Name: "value", Type: "Int64"}}}
+	m := NewMetrics(prometheus.NewRegistry())
+
+	sched := New(ownedRuleSet(source.Source{Name: "payments_prod"}, source.Source{Name: "payments_eu"}),
+		map[string]Querier{"payments_prod": prod, "payments_eu": eu},
+		notify.NewCadence(&recordingSender{}, time.Minute, notify.DefaultResendTolerance),
+		m, newFakeClock(time.Unix(0, 0)), 0, log, testResend, 0)
+
+	// The two clusters return different types for value, which is the
+	// disagreement. It belongs to neither of them, so it carries no source.
+	sched.groups[0].Eval(context.Background(), time.Unix(0, 0))
+	if got := checkGauge(t, m, lint.CheckRuleSourceSchema, lint.SeverityWarning, ""); got != 1 {
+		t.Fatalf("gauge is %v, want 1 while the clusters disagree", got)
+	}
+
+	eu.err = errors.New("Code: 60. Table does not exist")
+	sched.groups[0].Eval(context.Background(), time.Unix(60, 0))
+
+	if got := checkGauge(t, m, lint.CheckRuleSourceSchema, lint.SeverityWarning, ""); got != 1 {
+		t.Errorf("gauge is %v, want it standing at 1: one reply compares with nothing", got)
+	}
+}
+
+// A rule that used to match two clusters and now matches one can never raise the
+// comparison again, so its finding has to go or it outlives the rule that could
+// produce it.
+func TestEvalGroupClearsADisagreementWhenOneSourceIsLeft(t *testing.T) {
+	log, _ := logBuffer()
+	prod := &fakeQuerier{samples: oneSample(), shape: []query.Column{{Name: "value", Type: "Float64"}}}
+	eu := &fakeQuerier{samples: oneSample(), shape: []query.Column{{Name: "value", Type: "Int64"}}}
+	m := NewMetrics(prometheus.NewRegistry())
+	queriers := map[string]Querier{"payments_prod": prod, "payments_eu": eu}
+
+	sched := New(ownedRuleSet(source.Source{Name: "payments_prod"}, source.Source{Name: "payments_eu"}),
+		queriers, notify.NewCadence(&recordingSender{}, time.Minute, notify.DefaultResendTolerance),
+		m, newFakeClock(time.Unix(0, 0)), 0, log, testResend, 0)
+
+	sched.groups[0].Eval(context.Background(), time.Unix(0, 0))
+	if got := checkGauge(t, m, lint.CheckRuleSourceSchema, lint.SeverityWarning, ""); got != 1 {
+		t.Fatalf("gauge is %v, want 1 while the clusters disagree", got)
+	}
+
+	sched.Reload(ownedRuleSet(source.Source{Name: "payments_prod"}), queriers)
+	evalAll(sched, time.Unix(60, 0))
+
+	if got := checkGauge(t, m, lint.CheckRuleSourceSchema, lint.SeverityWarning, ""); got != 0 {
+		t.Errorf("gauge is %v, want 0: one cluster cannot disagree with itself", got)
 	}
 }

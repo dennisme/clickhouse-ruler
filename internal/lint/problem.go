@@ -61,8 +61,17 @@ type Problem struct {
 // this repository's own source, not a condition a caller can handle or an
 // operator can cause.
 func NewProblem(file string, line int, check string, sev Severity, text string) Problem {
-	if !Known(check) {
+	c, ok := Lookup(check)
+	if !ok {
 		panic("lint: unknown check " + check + ", every check belongs in the table in checks.go")
+	}
+
+	// A fixed check's severity is the table's to state, not a call site's, or the
+	// generated check page and the finding disagree about what the check does
+	// and the page is the one somebody reads at 3am (spec 7.6).
+	if c.Fixed && sev != c.Always {
+		panic("lint: " + check + " is fixed at " + c.Always.String() + " and was raised at " + sev.String() +
+			", change the table in checks.go or the severity here")
 	}
 	return Problem{
 		File:     file,

@@ -43,7 +43,7 @@ func TestRecheckReportsAKeyNothingWrites(t *testing.T) {
 
 	sched.recheck.Eval(context.Background(), time.Unix(0, 0))
 
-	if got := checkGauge(t, m, lint.CheckRuleAttributeKey, lint.SeverityWarning); got != 1 {
+	if got := checkGauge(t, m, lint.CheckRuleAttributeKey, lint.SeverityWarning, prodSource); got != 1 {
 		t.Fatalf("gauge is %v, want 1 for the rule whose key nothing writes", got)
 	}
 
@@ -113,14 +113,14 @@ func TestRecheckLeavesTheEvaluatorsFindingsStanding(t *testing.T) {
 	if got := problemGauge(t, m); got != 1 {
 		t.Errorf("rule/columns is %v, want the evaluator's finding still raised", got)
 	}
-	if got := checkGauge(t, m, lint.CheckRuleAttributeKey, lint.SeverityWarning); got != 1 {
+	if got := checkGauge(t, m, lint.CheckRuleAttributeKey, lint.SeverityWarning, prodSource); got != 1 {
 		t.Errorf("rule/attribute-key is %v, want the re-check pass's own finding", got)
 	}
 
 	// And the other way round: an evaluation must not take the timer's answer
 	// with it when it rebuilds its own.
 	sched.groups[0].Eval(context.Background(), time.Unix(120, 0))
-	if got := checkGauge(t, m, lint.CheckRuleAttributeKey, lint.SeverityWarning); got != 1 {
+	if got := checkGauge(t, m, lint.CheckRuleAttributeKey, lint.SeverityWarning, prodSource); got != 1 {
 		t.Errorf("rule/attribute-key is %v, want it left standing by an evaluation", got)
 	}
 }
@@ -135,7 +135,7 @@ func TestRecheckClearsAFindingThatWentAway(t *testing.T) {
 	sched, m, _ := recheckSched(t, q, source.Source{Name: "payments_prod"})
 
 	sched.recheck.Eval(context.Background(), time.Unix(0, 0))
-	if got := checkGauge(t, m, lint.CheckRuleAttributeKey, lint.SeverityWarning); got != 1 {
+	if got := checkGauge(t, m, lint.CheckRuleAttributeKey, lint.SeverityWarning, prodSource); got != 1 {
 		t.Fatalf("gauge is %v, want 1 before the rule is fixed", got)
 	}
 
@@ -160,7 +160,7 @@ func TestRecheckKeepsFindingsWhenAPassCouldNotAsk(t *testing.T) {
 	q.sampleErr = errors.New("connection refused")
 	sched.recheck.Eval(context.Background(), time.Unix(3600, 0))
 
-	if got := checkGauge(t, m, lint.CheckRuleAttributeKey, lint.SeverityWarning); got != 1 {
+	if got := checkGauge(t, m, lint.CheckRuleAttributeKey, lint.SeverityWarning, prodSource); got != 1 {
 		t.Fatalf("gauge is %v, want the previous answer left standing at 1", got)
 	}
 }
@@ -276,7 +276,7 @@ func TestRecheckClearsAFindingWhenTheCheckIsSwitchedOff(t *testing.T) {
 		m, newFakeClock(time.Unix(0, 0)), 0, log, testResend, time.Hour)
 
 	sched.recheck.Eval(context.Background(), time.Unix(0, 0))
-	if got := checkGauge(t, m, lint.CheckRuleAttributeKey, lint.SeverityWarning); got != 1 {
+	if got := checkGauge(t, m, lint.CheckRuleAttributeKey, lint.SeverityWarning, prodSource); got != 1 {
 		t.Fatalf("gauge is %v, want 1 before the check is switched off", got)
 	}
 

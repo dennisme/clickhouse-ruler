@@ -33,8 +33,9 @@ type Dashboard struct {
 
 // Variable is one entry in the dashboard's template list.
 type Variable struct {
-	Name string `json:"name"`
-	Type string `json:"type"`
+	Name  string `json:"name"`
+	Type  string `json:"type"`
+	Query string `json:"query"`
 }
 
 // Panel is one graph, stat or table. A row carries its own panels, so the
@@ -90,6 +91,18 @@ func (d Dashboard) Expressions() []string {
 			if t.Expr != "" {
 				out = append(out, t.Expr)
 			}
+		}
+	}
+	return out
+}
+
+// VariableQueries is every template variable that fills itself from a query,
+// by variable name.
+func (d Dashboard) VariableQueries() map[string]string {
+	out := map[string]string{}
+	for _, v := range d.Templating.List {
+		if v.Type == "query" && v.Query != "" {
+			out[v.Name] = v.Query
 		}
 	}
 	return out
