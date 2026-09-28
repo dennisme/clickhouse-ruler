@@ -283,7 +283,9 @@ never evaluate them. Non-zero is normal on a per-datacenter ruler reading a
 shared rules repository, and it is expected to return to zero once a cluster
 rollout finishes. Staying raised means somebody wrote a rule against a
 cluster that does not exist here, and nobody read the warning `ruler check`
-already gave them.
+already gave them. On a dashboard this is *Rules matching no source* on
+*clickhouse-ruler / alert rules*, and
+[if the rule is yours](#if-the-rule-is-yours) is the author's path through it.
 
 ### A rule that broke while running
 
@@ -314,6 +316,11 @@ Read it by its labels, not by its value:
 | `check` | What is wrong, and the name of the page that explains it: [the check pages](checks/index.md). |
 | `severity` | What the same finding would do in CI. An `error` would fail the build; a `warning` is what the policy in effect set. |
 
+On a dashboard this is *Rules broken while running* on
+*clickhouse-ruler / alert rules*, narrowed with the **Team** variable.
+[If the rule is yours](#if-the-rule-is-yours) is the path through it for an
+author rather than an operator.
+
 The log line carries one more field the gauge does not: `feed`, either
 `evaluation` or `re-check`. "Your rule's result changed shape" and "your rule's
 map key is gone from recent data" are different problems, with different fixes,
@@ -325,15 +332,26 @@ its result changed shape would stop paging for the condition on the strength of
 a schema change nobody reviewed, so this reports and never acts. The rule is
 wrong in a way somebody has to fix; it is not switched off while they do.
 
-Four checks come from the evaluations already happening:
+Five checks come from the evaluations already happening:
 [`rule/columns`](checks/rule.md#rule-columns) for a column dropped, renamed or
 retyped under the query, [`rule/source-schema`](checks/rule.md#rule-source-schema)
 for two clusters that stopped agreeing on what the rule returns,
 [`rule/cost`](checks/rule.md#rule-cost) for a query that read more than its
-ceiling allows, and [`rule/execution`](checks/rule.md#rule-execution) for a query
-that failed, which is a rule evaluating nothing at all. The log line
+ceiling allows, [`rule/execution`](checks/rule.md#rule-execution) for a query
+that failed, which is a rule evaluating nothing at all, and
+[`annotations/template`](checks/rule.md#annotations-template) for an annotation
+that would not render against a real alert. The log line
 `a rule broke while running` carries the same labels plus the detail, which says
 what changed rather than that something did.
+
+`annotations/template` is the one finding here that is not a schema moving, and
+the one raised under a name a pull request uses too. The alert it was found on has
+already been delivered, carrying a marker where the annotation should be, so the
+finding is how its author hears about it rather than a warning of something about
+to happen. It is the backstop for a finding somebody merged past, since the check
+warns by default. It clears on the next evaluation that renders every annotation
+cleanly, and an evaluation that produced no alerts rendered nothing and leaves it
+standing: a rule that broke and then stopped firing is still broken.
 
 One check comes from the re-check pass:
 [`rule/attribute-key`](checks/rule.md#rule-attribute-key), the OTel map key
@@ -417,6 +435,43 @@ This one is only stamped by a load that succeeded, so it answers "how old are
 the rules this ruler is evaluating" rather than "when did somebody last try".
 On a ruler nobody reloads it climbs from the moment it started, which is
 correct and not worth alerting on by itself.
+
+## If the rule is yours
+
+Most of this page is for whoever runs the ruler. Two of the signals above are
+not, and this is the path through them for the person who wrote the rule.
+
+**You were paged and the page reads wrong.** An annotation that says
+`<ruler: annotation "summary" failed: no label "ServiceName">` is the ruler
+telling you the template in your rule asked for a label the alert does not
+carry. The alert itself is real: the condition fired, and every annotation that
+rendered was delivered untouched. Only the broken field was replaced, and the
+marker names what is missing so the fix is usually the one edit the marker
+describes. `ruler_error` on the same alert has the full template error if your
+receiver templates it.
+
+**Then find it on the dashboard.** Open *clickhouse-ruler / alert rules*, set
+the **Team** variable to yours, and read *Rules broken while running*. The
+legend is `check / team`, and the `check` is the name of the page that explains
+it: [the check pages](checks/index.md). The same panel carries every other way a
+rule breaks after it merges, so a column dropped under your query and a cluster
+that stopped agreeing with its siblings show up beside the annotation.
+
+**What the panel cannot do.** It has no rule group filter, because
+`clickhouse_ruler_problem` carries `team` and `file` rather than `rule_group`:
+the fix is an edit to a file, so the labels name the file and the team that owns
+it. Narrow by **Team**, then read `file` off the finding in Prometheus or in the
+ruler's logs.
+
+**Nothing pages you about this.** The gauge clears itself when a pass finds the
+problem gone, which makes it alertable, but no alert on it ships. If your rules
+matter enough to page on, write the rule: `clickhouse_ruler_problem{team="yours"}
+> 0`, and route it to yourselves rather than to whoever operates the ruler.
+
+**If your rule never ran at all**, it is the other signal: *Rules matching no
+source* on the same dashboard, which means the ruler you are looking at holds no
+source your selector matched. That is normal on a per-datacenter ruler and a
+mistake everywhere else.
 
 ## What the logs mean
 

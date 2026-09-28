@@ -9,7 +9,7 @@ Generated from the check table in `internal/lint/checks.go`. Edit the table, the
 | [`annotations/protected`](rule.md#annotations-protected) | fixed, always `error` | a rule setting an annotation the ruler owns, which the ruler overwrites on a failed template |
 | [`annotations/required`](rule.md#annotations-required) | `warning` by default | an annotation this repository requires on every alert is missing |
 | [`annotations/runbook`](rule.md#annotations-runbook) | `warning` by default | a runbook_url that is not an absolute http or https URL |
-| [`annotations/template`](rule.md#annotations-template) | `warning` by default | an annotation that is not a parseable template |
+| [`annotations/template`](rule.md#annotations-template) | `warning` by default | an annotation that will not parse, reads a field nothing produces, or fails to render |
 | [`labels/required`](rule.md#labels-required) | `warning` by default | a label this repository requires on every alert is missing |
 | [`policy/check-limit`](policy.md#policy-check-limit) | fixed, always `error` | a ceiling that is not written as name:number, so it would never apply |
 | [`policy/fixed-check`](policy.md#policy-fixed-check) | fixed, always `error` | a policy file configuring a correctness check, which cannot be softened |

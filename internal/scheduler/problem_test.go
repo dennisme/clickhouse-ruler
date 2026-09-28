@@ -276,3 +276,158 @@ func TestEvalGroupReportsAFailureWhileAnotherSourceWasNotAsked(t *testing.T) {
 		t.Fatalf("gauge is %v, want 1 for the cluster that refused the query", got)
 	}
 }
+
+// brokenAnnotationRuleSet is a rule whose summary reads a label its query does
+// not return, which is the runtime half of annotations/template: it parses in a
+// pull request and fails only against a real alert (spec 6.5).
+func brokenAnnotationRuleSet(annotations map[string]string, sources ...source.Source) *ruleset.Set {
+	return &ruleset.Set{Rules: []ruleset.Rule{{
+		Rule:    rule.Rule{Alert: "SlowCheckout", Annotations: annotations},
+		File:    "rules/payments.yaml",
+		Group:   testGroup("payments", time.Minute),
+		Labels:  map[string]string{"team": "payments"},
+		Sources: sources,
+	}}}
+}
+
+// renderGauge is annotations/template as the running ruler raises it, which is
+// the same name a pull request uses and a different severity from the errors the
+// drift checks carry.
+func renderGauge(t *testing.T, m *Metrics) float64 {
+	t.Helper()
+	return checkGauge(t, m, lint.CheckAnnotationsTemplate, lint.SeverityWarning)
+}
+
+// A template that will not render reaches its author on the gauge that names the
+// team and the file, because the page reaches whoever is on call and the log line
+// reaches whoever ships logs, and neither of those is the person who can fix it
+// (spec 6.5, 8.2).
+func TestEvalGroupReportsAnAnnotationThatWouldNotRender(t *testing.T) {
+	log, buf := logBuffer()
+	q := &fakeQuerier{samples: oneSample(), shape: []query.Column{{Name: "value", Type: "Float64"}}}
+	m := NewMetrics(prometheus.NewRegistry())
+
+	set := brokenAnnotationRuleSet(
+		map[string]string{"summary": "{{ .ServiceName }} p99 is {{ .p99 }}ms"},
+		source.Source{Name: "payments_prod"})
+	sched := New(set, map[string]Querier{"payments_prod": q},
+		notify.NewCadence(&recordingSender{}, time.Minute, notify.DefaultResendTolerance),
+		m, newFakeClock(time.Unix(0, 0)), 0, log, testResend, 0)
+
+	sched.groups[0].Eval(context.Background(), time.Unix(0, 0))
+
+	if got := renderGauge(t, m); got != 1 {
+		t.Fatalf("gauge is %v, want 1 for the rule whose summary would not render", got)
+	}
+
+	// The finding names the annotation and the key the alert did not carry, and
+	// not the Go error, which is already on the page and in the log.
+	var finding map[string]any
+	for _, line := range logLines(t, buf) {
+		if line["check"] == lint.CheckAnnotationsTemplate {
+			finding = line
+		}
+	}
+	if finding == nil {
+		t.Fatalf("no log line carried the finding: %v", logLines(t, buf))
+	}
+	wantFields(t, finding, map[string]string{
+		"level":    "WARN",
+		"rule":     "SlowCheckout",
+		"check":    lint.CheckAnnotationsTemplate,
+		"severity": lint.SeverityWarning.String(),
+		"team":     "payments",
+		"file":     "rules/payments.yaml",
+	})
+	problem, _ := finding["problem"].(string)
+	if !strings.Contains(problem, "summary") || !strings.Contains(problem, "p99") {
+		t.Errorf("problem field = %q, want it to name the annotation and the missing key", problem)
+	}
+	if strings.Contains(problem, "map has no entry") {
+		t.Errorf("problem field = %q, want the Go error left in the annotation and the log line", problem)
+	}
+}
+
+// The gauge's labels do not name the annotation, so a rule with two broken
+// templates is one series and cardinality stays rules times checks (spec 8.2).
+func TestEvalGroupReportsTwoBrokenAnnotationsAsOneSeries(t *testing.T) {
+	log, _ := logBuffer()
+	q := &fakeQuerier{samples: oneSample(), shape: []query.Column{{Name: "value", Type: "Float64"}}}
+	m := NewMetrics(prometheus.NewRegistry())
+
+	set := brokenAnnotationRuleSet(map[string]string{
+		"summary":     "p99 is {{ .p99 }}ms",
+		"description": "in {{ .region }}",
+	}, source.Source{Name: "payments_prod"})
+	sched := New(set, map[string]Querier{"payments_prod": q},
+		notify.NewCadence(&recordingSender{}, time.Minute, notify.DefaultResendTolerance),
+		m, newFakeClock(time.Unix(0, 0)), 0, log, testResend, 0)
+
+	sched.groups[0].Eval(context.Background(), time.Unix(0, 0))
+
+	if got := testutil.CollectAndCount(m.Problem); got != 1 {
+		t.Fatalf("%d series raised, want 1 for a rule with two broken annotations", got)
+	}
+	if got := renderGauge(t, m); got != 1 {
+		t.Fatalf("gauge is %v, want 1", got)
+	}
+}
+
+// Fixed by the author, so the series has to go or the alert built on it never
+// clears (spec 8.2).
+func TestEvalGroupClearsAnAnnotationFindingWhenItRenders(t *testing.T) {
+	log, _ := logBuffer()
+	q := &fakeQuerier{samples: oneSample(), shape: []query.Column{{Name: "value", Type: "Float64"}}}
+	m := NewMetrics(prometheus.NewRegistry())
+
+	broken := map[string]string{"summary": "p99 is {{ .p99 }}ms"}
+	set := brokenAnnotationRuleSet(broken, source.Source{Name: "payments_prod"})
+	sched := New(set, map[string]Querier{"payments_prod": q},
+		notify.NewCadence(&recordingSender{}, time.Minute, notify.DefaultResendTolerance),
+		m, newFakeClock(time.Unix(0, 0)), 0, log, testResend, 0)
+
+	sched.groups[0].Eval(context.Background(), time.Unix(0, 0))
+	if got := renderGauge(t, m); got != 1 {
+		t.Fatalf("gauge is %v, want 1 before the template is fixed", got)
+	}
+
+	fixed := brokenAnnotationRuleSet(
+		map[string]string{"summary": "{{ .ServiceName }} is slow"},
+		source.Source{Name: "payments_prod"})
+	sched.Reload(fixed, map[string]Querier{"payments_prod": q})
+	sched.groups[0].Eval(context.Background(), time.Unix(60, 0))
+
+	if got := testutil.CollectAndCount(m.Problem); got != 0 {
+		t.Fatalf("%d series left, want none once every annotation renders", got)
+	}
+}
+
+// An evaluation that produced no alerts rendered no annotations, which is not
+// evidence that the template works. Clearing on it would let a rule that broke
+// and then stopped firing clear the finding saying it is broken (spec 6.5).
+func TestEvalGroupKeepsAnAnnotationFindingWhenNothingRendered(t *testing.T) {
+	log, _ := logBuffer()
+	q := &fakeQuerier{samples: oneSample(), shape: []query.Column{{Name: "value", Type: "Float64"}}}
+	m := NewMetrics(prometheus.NewRegistry())
+
+	set := brokenAnnotationRuleSet(
+		map[string]string{"summary": "p99 is {{ .p99 }}ms"},
+		source.Source{Name: "payments_prod"})
+	sched := New(set, map[string]Querier{"payments_prod": q},
+		notify.NewCadence(&recordingSender{}, time.Minute, notify.DefaultResendTolerance),
+		m, newFakeClock(time.Unix(0, 0)), 0, log, testResend, 0)
+
+	sched.groups[0].Eval(context.Background(), time.Unix(0, 0))
+	if got := renderGauge(t, m); got != 1 {
+		t.Fatalf("gauge is %v, want 1 before the rule stops firing", got)
+	}
+
+	// The condition went away, so there is nothing to render and nothing was
+	// learned about the template.
+	q.samples = nil
+	sched.groups[0].Eval(context.Background(), time.Unix(60, 0))
+
+	if got := renderGauge(t, m); got != 1 {
+		t.Fatalf("gauge is %v, want the finding left standing at 1", got)
+	}
+}

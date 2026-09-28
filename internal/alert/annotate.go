@@ -23,6 +23,13 @@ const valueKey = "value"
 type AnnotationError struct {
 	Annotation string
 	Err        error
+
+	// MissingKeys names the fields the template read that the alert did not
+	// carry, sorted, which is what the finding raised on the rule's owner says
+	// instead of repeating the Go error (spec 6.5). Empty for a template that
+	// never parsed, since it reached no data, and for a failure that was not a
+	// missing key at all.
+	MissingKeys []string
 }
 
 // annotate expands each annotation as a Go template over the alert's labels plus
@@ -81,9 +88,14 @@ func annotate(annotations map[string]*template.Template, parseErrs map[string]er
 				continue
 			}
 		}
-		out[name] = fmt.Sprintf("<ruler: annotation %q failed>", name)
+		missing := missingKeys(annotations[name], data)
+		out[name] = marker(name, missing)
 		errors = append(errors, err.Error())
-		failures = append(failures, AnnotationError{Annotation: name, Err: err})
+		failures = append(failures, AnnotationError{
+			Annotation:  name,
+			Err:         err,
+			MissingKeys: missing,
+		})
 	}
 
 	// One field rather than one per failure: a consumer reading the errors has
@@ -94,6 +106,77 @@ func annotate(annotations map[string]*template.Template, parseErrs map[string]er
 		out[rule.ErrorAnnotation] = strings.Join(errors, "; ")
 	}
 	return out, failures
+}
+
+// markerKeys is how many missing labels the marker names before it counts the
+// rest. Three, because summary is a notification field: it becomes a PagerDuty
+// title and a Slack message, and a template reading a dozen labels must not turn
+// one into a list of them.
+const markerKeys = 3
+
+// marker is what a failed annotation carries in place of what it could not
+// render.
+//
+// The prefix is fixed, so a consumer matching on it keeps working and a human
+// grepping finds every one. The tail names what the template asked for and the
+// alert did not have, because this is the one field a responder is guaranteed to
+// read: `ruler_error` beside it carries the whole error and reaches a human only
+// where the operator's receiver templates it, which is their file and not ours
+// (spec 6.5).
+func marker(name string, missing []string) string {
+	if len(missing) == 0 {
+		return fmt.Sprintf("<ruler: annotation %q failed>", name)
+	}
+
+	noun, named := "label", missing
+	if len(missing) > 1 {
+		noun = "labels"
+	}
+
+	var rest string
+	if len(named) > markerKeys {
+		rest = fmt.Sprintf("%d more", len(named)-markerKeys)
+		named = named[:markerKeys]
+	}
+
+	quoted := make([]string, 0, len(named)+1)
+	for _, key := range named {
+		quoted = append(quoted, strconv.Quote(key))
+	}
+	if rest != "" {
+		quoted = append(quoted, rest)
+	}
+
+	return fmt.Sprintf("<ruler: annotation %q failed: no %s %s>", name, noun, list(quoted))
+}
+
+// list joins names the way a sentence does, so a responder reads the marker
+// rather than parsing it.
+func list(items []string) string {
+	switch len(items) {
+	case 0:
+		return ""
+	case 1:
+		return items[0]
+	default:
+		return strings.Join(items[:len(items)-1], ", ") + " and " + items[len(items)-1]
+	}
+}
+
+// missingKeys names the fields a template read that the data does not have.
+//
+// Read off the parsed template rather than out of the error text, which names
+// only the first key execution reached: a summary missing two labels is one
+// edit for its author and a finding that named half of it would cost them a
+// second evaluation to discover the rest (spec 6.5).
+func missingKeys(t *template.Template, data map[string]any) []string {
+	var out []string
+	for _, field := range rule.TemplateFields(t) {
+		if _, ok := data[field]; !ok {
+			out = append(out, field)
+		}
+	}
+	return out
 }
 
 // parseAnnotations compiles a rule's annotation templates once, because they are

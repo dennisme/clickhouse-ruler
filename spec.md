@@ -206,15 +206,47 @@ That is the property we are copying. Everything else follows from it.
    ceiling on a cluster is per shard, and `evaluation_delay` has to clear the
    slowest shard, which is a larger number rather than new configuration.
 
-4. **Who hears that an annotation template failed.** Where the error goes is
-   settled and built: the page goes out, the failed annotation carries a short
-   marker, and `ruler_error` carries the error, which is a name the ruler owns
-   and `annotations/protected` reserves (6.5). What is left is the owner. A
-   broken template is the author's defect, and it reaches the annotation, the log
-   and a counter, none of which names the team or the file or clears when it is
-   fixed. `clickhouse_ruler_problem` is the surface that does all three, and
-   raising it there means carrying a rule's origin into evaluation, which the
-   alert state does not hold today.
+4. **Who hears that an annotation template failed.** Settled, and kept here
+   because this is where it was asked. Where the error goes was decided first:
+   the page goes out, the failed annotation carries a short marker, and
+   `ruler_error` carries the error, which is a name the ruler owns and
+   `annotations/protected` reserves (6.5). The owner is decided now too. A broken
+   template is the author's defect, so it is raised on
+   `clickhouse_ruler_problem`, the one surface that names the team and the file
+   and clears when somebody fixes it, under `annotations/template` rather than a
+   name of its own: the same check answers what a file can see, what the query's
+   columns can see, and what only a running ruler can, the way `rule/cost` is one
+   name for a prediction and a measurement. The finding names the annotation and
+   the keys the alert did not carry, and the raw Go error stays in the log. What
+   this entry said the finding needed is half there already: the scheduler carries
+   a rule's `team` and `file` into evaluation and rebuilds the gauge per check, so
+   the only new decision was when it clears, and it is that a pass which rendered
+   no annotations at all does not.
+
+5. **Whether one bad file may refuse a whole reading.** Open, and the thing to
+   settle before anybody depends on this. An error-severity finding refuses
+   everything the ruler read, which on a reload keeps the running version and at
+   startup means the process does not start (7.6). That is the right call for a
+   rule that cannot alert, and it is a hard one to defend for a supplemental
+   annotation: `annotations/protected` is fixed at `error`, so one team writing
+   `ruler_error:` in one rule stops a second team's reviewed alert edit from
+   reaching a cluster that syncs on merge, and takes a restarted ruler down with
+   it. The annotation is context for a human reading the page, not routing and
+   not the condition, and the blast radius does not match.
+
+   The arguments both ways: an omitted file is alerts that silently stop
+   existing, which is the failure this tool exists to prevent, and it is worst at
+   cold start where the process would come up ready while missing a file's worth
+   of paging. Against that, CI is where this is meant to be caught, so the
+   refusal only ever fires when CI did not run or somebody merged past it, and
+   punishing every other rule in the checkout for that is a shared-fate coupling
+   nobody chose. Also unresolved: "the offending file" is well defined for the
+   single-file checks and not for `rule/duplicate-alert`, `rule/source-match` or
+   `ruleset/directory`, which are findings about two files or a tree.
+
+   What to work through before deciding: each refusal case on its own, cold start
+   separately from reload, and whether the answer is per-file tolerance, a
+   narrower fixed-at-error list, or an operator flag that is off by default.
 
 ---
 

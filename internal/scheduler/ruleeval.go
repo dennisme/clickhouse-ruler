@@ -7,6 +7,9 @@ package scheduler
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -217,6 +220,12 @@ func (e *RuleEval) Evaluate(ctx context.Context, now time.Time) Result {
 		// of them says the rule's query stopped running.
 		queryErr error
 
+		// rendered says this source's evaluation had an instance to render
+		// annotations for, which is what answers annotations/template at
+		// runtime. A pass that returned no rows rendered nothing and so learned
+		// nothing about the templates (spec 6.5).
+		rendered bool
+
 		// acquired says the query got through both gates, so wait holds real
 		// measurements rather than the zero values of a query that never ran.
 		acquired bool
@@ -263,6 +272,7 @@ func (e *RuleEval) Evaluate(ctx context.Context, now time.Time) Result {
 				return
 			}
 			results[i].alerts = alerts
+			results[i].rendered = len(evaluation.Samples) > 0
 			// An annotation that would not render is reported without failing
 			// anything: the alert is intact and still worth sending.
 			results[i].annotations = annotations
@@ -277,10 +287,20 @@ func (e *RuleEval) Evaluate(ctx context.Context, now time.Time) Result {
 	var answered []evaluated
 	var failures []failed
 
+	// The one finding here that is not drift: an annotation the author wrote
+	// that will not render against a real alert. Reported under the name the
+	// pull request would have used, so an operator who raised that check to
+	// block a merge has already said what they think of it (spec 6.5).
+	var annotationProblems []lint.Problem
+
 	// asked counts the sources that reached their cluster and got a reply,
 	// whether it was a result or an error. Anything else is a source nothing
 	// was learned about.
 	asked := 0
+
+	// rendered is whether any source had an instance to render, which decides
+	// whether this pass may clear an annotations/template finding.
+	rendered := false
 
 	var current []alert.Alert
 	for i, r := range results {
@@ -294,7 +314,13 @@ func (e *RuleEval) Evaluate(ctx context.Context, now time.Time) Result {
 		for _, a := range r.annotations {
 			res.AnnotationErrors = append(res.AnnotationErrors,
 				AnnotationError{Source: name, Annotation: a.Annotation, Err: a.Err})
+			annotationProblems = append(annotationProblems,
+				runtimeProblem(e.rule, e.rule.Sources[i], now, query.Finding{
+					Check:  lint.CheckAnnotationsTemplate,
+					Detail: renderDetail(a),
+				})...)
 		}
+		rendered = rendered || r.rendered
 		if r.err != nil {
 			res.SourceErrors = append(res.SourceErrors, SourceError{Source: name, Err: r.err})
 			if r.queryErr != nil {
@@ -312,8 +338,8 @@ func (e *RuleEval) Evaluate(ctx context.Context, now time.Time) Result {
 		current = append(current, r.alerts...)
 	}
 
-	res.Problems = e.drift.inspect(answered, failures, now)
-	res.Answered = answeredChecks(len(answered) > 0, asked == len(e.rule.Sources))
+	res.Problems = append(e.drift.inspect(answered, failures, now), annotationProblems...)
+	res.Answered = answeredChecks(len(answered) > 0, asked == len(e.rule.Sources), rendered)
 
 	for _, a := range current {
 		switch a.Phase {
@@ -337,7 +363,10 @@ func (e *RuleEval) Evaluate(ctx context.Context, now time.Time) Result {
 // answering is enough to make them this rule's current answer. Whether the
 // query runs needs every source to have been asked: a rule whose second cluster
 // has no connection open would otherwise report that its query is fine there.
-func answeredChecks(gotAResult, askedEverySource bool) []string {
+// Whether an annotation renders needs an alert to render it against, so a pass
+// that returned no rows answers nothing about the templates: clearing on it would
+// let a rule that broke and then stopped firing clear the finding saying so.
+func answeredChecks(gotAResult, askedEverySource, rendered bool) []string {
 	var out []string
 	if gotAResult {
 		out = append(out, lint.CheckRuleColumns, lint.CheckRuleSourceSchema, lint.CheckRuleCost)
@@ -345,7 +374,28 @@ func answeredChecks(gotAResult, askedEverySource bool) []string {
 	if askedEverySource {
 		out = append(out, lint.CheckRuleExecution)
 	}
+	if rendered {
+		out = append(out, lint.CheckAnnotationsTemplate)
+	}
 	return out
+}
+
+// renderDetail says what an author has to change, which is the annotation and
+// the keys their template read that the alert did not carry. The template error
+// itself stays on the page and in the log rather than being copied onto the
+// gauge (spec 6.5).
+func renderDetail(a alert.AnnotationError) string {
+	if len(a.MissingKeys) == 0 {
+		return fmt.Sprintf("annotation %q did not render, and the template error is in the log beside this",
+			a.Annotation)
+	}
+
+	quoted := make([]string, 0, len(a.MissingKeys))
+	for _, key := range a.MissingKeys {
+		quoted = append(quoted, strconv.Quote(key))
+	}
+	return fmt.Sprintf("annotation %q reads %s, which this alert does not carry",
+		a.Annotation, strings.Join(quoted, " and "))
 }
 
 // carry takes over the alert state prev accumulated for the same rule, so a

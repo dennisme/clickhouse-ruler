@@ -98,6 +98,13 @@ broken template is the rule author's. `annotation` is a label worth having,
 since it names what to fix and an annotation is static configuration rather
 than anything data can multiply (8.3).
 
+The counter stays now that the same failure also raises `annotations/template` on
+`clickhouse_ruler_problem`, because the two answer different questions. The
+counter says how often it happened and which annotation, and it never goes down.
+The gauge says whether it is still happening and whose rule it is, and it clears
+on the pass that renders clean. An alert belongs on the gauge; the counter is what
+a dashboard plots beside the evaluations that produced it.
+
 Alert state and delivery:
 
 | Metric | Type | Labels |
@@ -234,7 +241,12 @@ publishing it costs no extra query. `clickhouse_ruler_problem` is fed from two
 places, and 10.4 is why: most of what
 it reports is drift the evaluation can see for free by comparing itself against
 the last one (6.3.2), and the rest is `rule/attribute-key`, which needs its own
-query on its own timer. Each feed rebuilds only the checks it owns, so a finding
+query on its own timer. One finding on the evaluation feed is not drift at all:
+`annotations/template` is raised again at runtime for a template that would not
+render against a real alert, which the evaluation is the first thing able to know
+(6.5). It belongs on this gauge for the reason the drift findings do, that the
+author owns the fix and the team and the file are the only way to reach them, and
+it keeps the name the pull request used so one setting covers both. Each feed rebuilds only the checks it owns, so a finding
 answered on one clock is not blanked by a pass on the other. The reload pair exists
 because `SIGHUP` reloads the files, and the two deliberately do not say the same
 thing. `clickhouse_ruler_config_last_reload_successful` is about the last
@@ -373,9 +385,16 @@ because there are two audiences and one dashboard for both serves neither.
   failures and notification latency.
 - **Alert rules.** Whether a team's own rules work: which of their rules are
   failing to evaluate, which matched no source and will therefore never run,
-  what is firing and pending now, and which annotations will not render. The
-  distinction from the first one is ownership. A rule author cannot act on
-  notification latency and should not be shown it.
+  what is firing and pending now, which annotations will not render, and
+  `clickhouse_ruler_problem` broken out by check and team, which is every way a
+  rule broke after it merged. The distinction from the first one is ownership. A
+  rule author cannot act on notification latency and should not be shown it, and
+  by the same rule the problem gauge belongs here rather than on operations: it is
+  the one signal in 8.2 addressed to whoever owns the query. It is also the one
+  panel here with no rule group to filter on, since the gauge carries team and
+  file instead, so the dashboard carries a `team` variable for narrowing it and
+  the operations page has the author's path through the two signals that are
+  theirs rather than the operator's.
 
 They are files in the repository rather than screenshots in a wiki, for the
 reason rules are: a dashboard that is provisioned from git is one that can be
@@ -1296,8 +1315,8 @@ sizing it is `--recheck-interval` with zero for not at all.
 runs on `--recheck-interval`, an hour by default and zero for not at all, since a
 pass that reads real data must not start on a ruler nobody asked. Each feed
 rebuilds only the gauge series of the checks it owns: `rule/columns`,
-`rule/source-schema`, `rule/cost` and `rule/execution` are the evaluation's, and
-`rule/attribute-key` is the timer's. Scoping the rebuild by check is what keeps
+`rule/source-schema`, `rule/cost`, `rule/execution` and `annotations/template`
+are the evaluation's, and `rule/attribute-key` is the timer's. Scoping the rebuild by check is what keeps
 one clock from resolving the other's findings, and it is also what lets a pass
 where nothing answered leave the previous answer standing per check rather than
 for the whole rule.

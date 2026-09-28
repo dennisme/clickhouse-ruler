@@ -41,7 +41,7 @@ func TestEvalKeepsTheAnnotationsThatRendered(t *testing.T) {
 	if got["description"] != "p99 is 1200ms" {
 		t.Errorf("description = %q, want it rendered", got["description"])
 	}
-	if want := `<ruler: annotation "summary" failed>`; got["summary"] != want {
+	if want := `<ruler: annotation "summary" failed: no label "NoSuchColumn">`; got["summary"] != want {
 		t.Errorf("summary = %q, want %q", got["summary"], want)
 	}
 	if !strings.Contains(got[rule.ErrorAnnotation], "NoSuchColumn") {

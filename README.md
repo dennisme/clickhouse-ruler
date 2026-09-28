@@ -189,8 +189,9 @@ Working, with the manual linked for each:
   one question no evaluation can: a renamed OTel map key leaves the query
   parsing, returning the same columns and matching nothing forever. A column
   dropped or retyped, two clusters that stopped agreeing, a query over its
-  ceiling, a query that stopped running, or a source that no longer meets the
-  contract raises `clickhouse_ruler_problem` with the file to fix. It reports and
+  ceiling, a query that stopped running, an annotation template that will not
+  render against a real alert, or a source that no longer meets the contract
+  raises `clickhouse_ruler_problem` with the file to fix. It reports and
   never refuses, so the rule keeps evaluating and keeps paging.
 
 Not planned: generating your Alertmanager route tree. That file is yours and

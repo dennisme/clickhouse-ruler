@@ -313,9 +313,11 @@ func TestEvalGroupLogsABrokenAnnotationWithoutFailingTheSend(t *testing.T) {
 
 	sched.groups[0].Eval(context.Background(), time.Unix(0, 0))
 
+	// Two lines and no more: the template error once, however many instances hit
+	// it, and the finding that reaches whoever owns the rule (spec 6.5, 8.3).
 	lines := logLines(t, buf)
-	if len(lines) != 1 {
-		t.Fatalf("got %d log lines for 50 instances, want 1: %v", len(lines), lines)
+	if len(lines) != 2 {
+		t.Fatalf("got %d log lines for 50 instances, want 2: %v", len(lines), lines)
 	}
 	wantFields(t, lines[0], map[string]string{
 		"level":      "WARN",
@@ -323,6 +325,11 @@ func TestEvalGroupLogsABrokenAnnotationWithoutFailingTheSend(t *testing.T) {
 		"rule":       "BrokenSummary",
 		"source":     "src1",
 		"annotation": "summary",
+	})
+	wantFields(t, lines[1], map[string]string{
+		"level": "WARN",
+		"rule":  "BrokenSummary",
+		"check": lint.CheckAnnotationsTemplate,
 	})
 
 	if got := testutil.ToFloat64(metrics.AlertsSendFailures.WithLabelValues("")); got != 0 {
@@ -358,7 +365,7 @@ func TestEvalGroupLogsABrokenAnnotationWithoutFailingTheSend(t *testing.T) {
 	if sent.Annotations["runbook_url"] != "https://runbooks.internal/broken-summary" {
 		t.Errorf("runbook_url = %q, want it delivered", sent.Annotations["runbook_url"])
 	}
-	if want := `<ruler: annotation "summary" failed>`; sent.Annotations["summary"] != want {
+	if want := `<ruler: annotation "summary" failed: no label "NoSuchColumn">`; sent.Annotations["summary"] != want {
 		t.Errorf("summary = %q, want %q", sent.Annotations["summary"], want)
 	}
 	if !strings.Contains(sent.Annotations[rule.ErrorAnnotation], "NoSuchColumn") {

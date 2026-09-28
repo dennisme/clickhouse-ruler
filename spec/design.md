@@ -478,12 +478,12 @@ parses. Three shapes were considered, and the third is what is built:
    blank, at the cost of a Go template error in the field a consumer treated as
    stable.
 3. A short bounded marker in the failed annotation and the error beside it in
-   one the ruler owns. `summary` becomes `<ruler: annotation "summary" failed>`,
-   greppable and fixed in length, and `ruler_error` carries `annotation
-   "summary": template: summary:1:25: executing "summary" at <.p99>: map has no
-   entry for key "p99"`. A consumer wanting a known string gets a short one with
-   a fixed prefix, a responder still sees that something is wrong, and a machine
-   has one field to read.
+   one the ruler owns. `summary` becomes
+   `<ruler: annotation "summary" failed: no label "p99">`, and `ruler_error`
+   carries `annotation "summary": template: summary:1:25: executing "summary" at
+   <.p99>: map has no entry for key "p99"`. A consumer wanting a known string
+   gets a fixed prefix, a responder sees what is wrong, and a machine has one
+   field to read.
 
 A rule with more than one failed annotation gets one marker in each and one
 `ruler_error` holding every error, in annotation name order, joined with a
@@ -491,6 +491,26 @@ semicolon and a space.
 One field rather than one per failure, because a consumer reading the errors has
 one name to know, and the value is bounded by how many annotations the rule has
 rather than by how many rows it returned.
+
+**The marker names the reason, and it did not at first.** It was
+`<ruler: annotation "summary" failed>`, fixed in length, on the reasoning that
+`summary` becomes a PagerDuty title and is what downstream automation parses. The
+reason moved into it once the missing labels were computed structurally rather
+than scraped out of the template error, because of who reads what.
+`ruler_error` is delivered on every failed alert and reaches a human only where
+the operator's receiver templates it, and receivers name the fields they render:
+one that prints `summary` and `runbook_url` drops `ruler_error` silently. The
+ruler cannot fix that from here, because the receiver is the operator's file and
+generating it is a non-goal (5). So the field a responder is guaranteed to read
+has to carry enough to act on, or the page says something is broken and nothing
+more.
+
+What is given up is a value that is the same every time, and what is kept is a
+fixed prefix, so a consumer matching `<ruler: annotation` still works and a human
+still greps one string. The tail is bounded rather than free: the annotation's
+name, then at most three missing labels and a count of the rest, which is why the
+labels are worth computing off the parsed template. Prometheus substitutes the
+whole Go error, which is the same instinct without the bound.
 
 Built.
 
@@ -519,31 +539,83 @@ collision. An author already emitting `ruler_*` from a tool they are migrating
 off can be answered by renaming the ruler's own field, which is a change here
 rather than a knob, and nobody has asked for it.
 
-**Not settled: who hears about it.** A failed template is the rule author's
-defect, found only while running because a check never sees real data. Today it
-reaches three places and none of them is the author: the annotation reaches whoever is paged, who is often not the author and
-cannot fix it mid-incident; the log line names the group, the rule, the source and
-the annotation but carries no team and no file; and
+**Who hears about it: the rule's owner, on `clickhouse_ruler_problem`.** A failed
+template is the rule author's defect, found only while running because a check
+never sees real data. It reaches three places and none of them is the author: the
+annotation reaches whoever is paged, who is often not the author and cannot fix it
+mid-incident; the log line names the group, the rule, the source and the
+annotation but carries no team and no file; and
 `clickhouse_ruler_annotation_failures_total` carries neither either, and counts
-occurrences rather than saying whether it is still broken. So it should be raised
-as a finding on `clickhouse_ruler_problem` beside the other runtime findings
-(8.2, 10.4), which is the only surface that names a team and a file and clears
-when somebody fixes it.
+occurrences rather than saying whether it is still broken. So it is raised as a
+finding on `clickhouse_ruler_problem` beside the other runtime findings (8.2,
+10.4), which is the only surface that names a team and a file and clears when
+somebody fixes it.
 
-That takes an assumption worth stating rather than implying: the finding names the
-check, the annotation and the missing key, and the raw template error stays in the
-log, so an alert built on the gauge is only actionable where the ruler's logs are
-shipped somewhere the annotation on that alert can point at. An operator who ships
-no logs gets the team, the file and which annotation broke, and not the error
-itself. The finding is deliberately not a second copy of the Go error, which is
-already on the page and in the log.
+**Under `annotations/template`, not a name of its own.** A separate
+`annotations/render` was built first and then folded back, because the split was
+against the grain of every other check here. Four checks already ask one question
+at two times and keep one name: `rule/columns` and `rule/source-schema` compare a
+result in CI and again on every tick, `rule/cost` is a prediction in a pull
+request and a measurement at runtime, and `rule/attribute-key` samples in CI and
+again on the re-check timer. `annotations/template` was already two of these
+before this slice, since 7.3 raises it against the query's real output columns
+once an address exists, and that finding is the same defect as a failed render
+arrived at by inference rather than by observation.
 
-What that needs and this half does not have: the alert state holds a rule's
-labels and its source and not the file it was read from, so raising a finding
-that names a file means carrying the rule's origin into evaluation, and the
-finding has to clear on the first evaluation that renders clean or it becomes a
-gauge nobody trusts. Both are a slice of their own, and the field half above is
-useful without them.
+So it is one name asked at three times: the file alone says whether the template
+parses, the query's columns say whether its fields resolve, and only a running
+ruler can say whether it renders. One page, and one setting that covers the
+merge and the backstop. An operator being defensive raises
+`annotations/template` to `error` once and gets the file refused in CI and the
+same name on the gauge if something slips past; two names would have meant
+discovering that their setting covered half of it.
+
+It stays at `warn` by default and stays configurable, which is what it already
+was and what the other runtime findings on this gauge are. `warn` because
+severity here routes and gates nothing (10.4): the rule is still evaluating and
+still paging, and by the time anybody reads the finding the page has gone out, so
+`error` would be a severity on a decision nobody can still make. `off` is an
+operator saying a broken template need not be reported to its author, which is
+theirs to say.
+
+**The runtime half is the backstop for a finding somebody merged past**, which
+is the reason it earns its place rather than duplicating CI. The check warns by
+default, so the tier 1 finding can be merged past by anybody in a hurry, and a
+repository that never passes an address to `ruler check` has no tier 1 finding to
+merge past in the first place. Those are two ways a broken template reaches a
+pager with CI green, and neither is answerable before the rule runs.
+
+There is a third, narrower than it first looks. A rule that names its columns
+pins its own result shape, so a table change that removes one makes the query
+fail, which is `rule/execution` rather than anything about an annotation. The
+annotation is what breaks when the result shape is not pinned by the rule text:
+`SELECT *`, a view, a table function. Then a column dropped in a migration that
+lives in somebody else's repository leaves the query running, the label gone and
+the template reading something that is no longer there, with no pull request on
+the rule file to have caught it. In that case `rule/columns` reports the shape
+change on the same tick, so this finding corroborates rather than discovers. What
+it adds is the annotation and the key, which is the edit, where the shape
+comparison reports the column.
+
+**What the finding says.** The check, the annotation and the missing key, with the
+raw template error left in the log. An alert built on the gauge is therefore fully
+actionable only where the ruler's logs are shipped somewhere the annotation on
+that alert can point at. An operator who ships no logs gets the team, the file and
+which annotation broke, and not the error itself. The finding is deliberately not
+a second copy of the Go error, which is already on the page and in the log.
+
+The gauge's labels do not change, so a rule with two broken annotations is one
+series rather than two. Cardinality stays rules times checks (8.2), and which
+annotations broke is in the finding's text and in the log rather than in a label.
+
+**A pass that rendered nothing does not clear it.** `annotations/template`
+belongs to the evaluation feed, so a pass that rendered every annotation cleanly deletes
+the series, the way the other evaluation findings clear (10.4). A rule returning
+no rows renders no annotations, which is not evidence that the template works, and
+clearing on it would mean a broken rule that stopped firing clears the finding
+saying it is broken. So the check is answered by a pass that rendered at least one
+annotation set and left alone by a pass that had nothing to render, which is the
+same shape as the findings that need a source to have replied.
 
 Templates are compiled once per rule rather than per evaluation, because they
 are fixed for the rule's lifetime and a rule returning a thousand rows would
