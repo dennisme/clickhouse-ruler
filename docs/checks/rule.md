@@ -348,14 +348,13 @@ annotations:
 
 ### annotations/template
 
-An annotation that is not a parseable template.
+An annotation that will not parse, reads a field nothing produces, or fails to
+render.
 
 The alert still fires and still pages: the annotation carries a marker naming
 itself, `ruler_error` carries the error, and the notification goes out. An
 operator who would rather a broken template never reach a pager raises this to
-`error`, which refuses the file instead. Whether a variable names a column the query actually returns is
-a different question, answered against the query's real output columns rather
-than its text.
+`error`, which refuses the file instead.
 
 ```yaml
 # before, the action is never closed
@@ -364,6 +363,76 @@ summary: "{{ .ServiceName }} is slow"
 # after
 summary: "{{ .ServiceName }} p99 is {{ .value }}ms"
 ```
+
+**What a template can read.** An annotation is rendered over the alert's own
+labels, plus `.value` for the number it fired on. Those labels come from four
+places: the query's result columns, the rule's `labels` overlaid on its group's,
+the source's labels, and `alertname` and `source`, which the ruler sets. Nothing
+else is in scope, so `{{ .ServiceName }}` resolves only if one of those is named
+`ServiceName`, spelled and cased exactly. A query selecting `service_name`
+produces `.service_name` and nothing else.
+[How it works](../how-it-works.md) has the precedence in full.
+
+**Asked at three times, under one name.** Whether the template parses needs the
+file alone. Whether its fields resolve needs the query's real output columns, so
+it is answered by `ruler check --online` rather than against the template's text.
+Whether it renders needs an alert to render against, which only a running ruler
+has:
+
+```yaml
+# the query selects service_name, so .ServiceName is never set. This parses, and
+# --online reports it against the real columns. Offline, nothing catches it until
+# the rule pages.
+expr: |
+  SELECT service_name, quantile(0.99)(duration_ms) AS value
+  FROM otel.otel_traces
+  WHERE timestamp BETWEEN {{ .From }} AND {{ .To }}
+  GROUP BY service_name
+  HAVING value > 500
+annotations:
+  summary: "{{ .ServiceName }} p99 is {{ .value }}ms"
+  runbook_url: https://runbooks.internal/high-p99-latency
+```
+
+This is what that rule delivers. The annotations are the author's, and
+`ruler_error` is the one field the ruler adds:
+
+```yaml
+# summary keeps its name and loses its text, and names the label that was
+# missing, so a responder reads what is wrong rather than a blank line
+summary: '<ruler: annotation "summary" failed: no label "ServiceName">'
+
+# every other annotation is delivered untouched
+runbook_url: https://runbooks.internal/high-p99-latency
+
+# the ruler's own field, which is why `ruler_` is a reserved prefix
+ruler_error: 'annotation "summary": template: summary:1:3: executing "summary" at <.ServiceName>: map has no entry for key "ServiceName"'
+```
+
+A rule with two broken annotations gets a marker in each and one `ruler_error`
+holding both errors, in annotation name order, joined with a semicolon.
+
+The marker's prefix is fixed, so automation can match `<ruler: annotation` and a
+human can grep one string. What follows it is bounded: the annotation's name, then
+at most three missing labels and a count of the rest. It carries the reason
+because `ruler_error` only reaches a human where a receiver templates it, and a
+receiver that renders `summary` and `runbook_url` drops it without saying so.
+
+**The running ruler is the backstop.** This check warns by default, so a finding
+in a pull request can be merged past, and a repository that never passes an
+address has no such finding to begin with. A rule whose columns are not pinned by
+its own text, `SELECT *` or a view, can also lose a label to a migration in
+another repository, with no pull request on the rule file to catch it.
+`ruler run` raises the same check on
+[`clickhouse_ruler_problem`](../operations.md#a-rule-that-broke-while-running)
+with the `team` and `file` of the rule, so the author hears about it even though
+the page reached somebody else. The finding names the annotation and the keys the
+alert did not carry; the template error itself stays in the ruler's logs beside
+the group, the rule and the source.
+
+It clears on the first evaluation that renders every annotation cleanly. An
+evaluation that produced no alerts rendered nothing, so it leaves a standing
+finding alone: a rule that broke and then stopped firing is still broken.
 
 <a id="annotations-protected"></a>
 

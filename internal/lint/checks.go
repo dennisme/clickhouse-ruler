@@ -248,9 +248,17 @@ var checks = []Check{
 	// alert. An operator who would rather a broken template never reach a
 	// pager raises this to an error, which puts a repo owner on the path to
 	// unblock the author (spec 7.6).
+	//
+	// Asked at three times under one name, the way rule/cost is asked as a
+	// prediction and again as a measurement: whether the template parses needs
+	// the file alone, whether its fields resolve needs the query's real output
+	// columns, and whether it renders needs an alert, which only a running
+	// ruler has. The last of those reaches its author on
+	// clickhouse_ruler_problem rather than in a pull request, and it is the
+	// backstop for the finding somebody merged past (spec 6.5).
 	{
 		Name: CheckAnnotationsTemplate, Spec: "7.6", Default: SeverityWarning,
-		Summary: "an annotation that is not a parseable template",
+		Summary: "an annotation that will not parse, reads a field nothing produces, or fails to render",
 	},
 
 	// Fixed for a different reason than rule/protected-label. Alertmanager

@@ -28,6 +28,18 @@
         "allValue": ".*",
         "multi": true,
         "current": {}
+      },
+      {
+        "name": "team",
+        "label": "Team",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "${datasource}" },
+        "query": "label_values(clickhouse_ruler_problem, team)",
+        "refresh": 2,
+        "includeAll": true,
+        "allValue": ".*",
+        "multi": true,
+        "current": {}
       }
     ]
   },
@@ -101,7 +113,7 @@
       "description": "The alert was evaluated and delivered, carrying the template error where its annotation should be. Somebody is reading that error on their page right now, and the fix is in the rule file.",
       "type": "timeseries",
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
-      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 17 },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 17 },
       "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
       "targets": [
         {
@@ -109,6 +121,22 @@
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
           "expr": "sum by (rule, annotation) (rate(clickhouse_ruler_annotation_failures_total{rule_group=~\"$rule_group\"}[$__rate_interval]))",
           "legendFormat": "{{rule}} / {{annotation}}"
+        }
+      ]
+    },
+    {
+      "title": "Rules broken while running",
+      "description": "Rules that broke after they merged, by check and by the team that owns them, and the only signal here nobody operating the ruler can fix: a column dropped or retyped under the query, clusters that stopped agreeing, a query over its ceiling or no longer running, or an annotation that will not render against a real alert. The rule is still evaluating and still paging. A series disappears on the next pass that could ask and found nothing, which is somebody fixing it. There is no rule group to filter on, because this gauge carries team and file instead, so the Team variable above is how you narrow this to your own rules.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 17 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "sum by (check, team) (clickhouse_ruler_problem{team=~\"$team\"})",
+          "legendFormat": "{{check}} / {{team}}"
         }
       ]
     }

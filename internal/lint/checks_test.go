@@ -212,3 +212,19 @@ func TestDocsURLOfAnUnknownCheck(t *testing.T) {
 		t.Errorf("url = %q, want empty: a name the table does not know has no page", got)
 	}
 }
+
+// annotations/template is asked in a pull request and again by a running ruler,
+// so it has to resolve through policy at both: one name, one page, and one
+// setting that covers the merge and the backstop (spec 6.5).
+func TestAnnotationsTemplateShipsConfigurableAtWarning(t *testing.T) {
+	c, ok := Lookup(CheckAnnotationsTemplate)
+	if !ok {
+		t.Fatalf("%s is not in the table, so NewProblem panics on it", CheckAnnotationsTemplate)
+	}
+	if !c.Configurable() {
+		t.Errorf("%s is fixed, so an operator cannot raise it to block a merge", c.Name)
+	}
+	if c.Default != SeverityWarning {
+		t.Errorf("default is %s, want warning: a broken annotation still pages", c.Default)
+	}
+}
