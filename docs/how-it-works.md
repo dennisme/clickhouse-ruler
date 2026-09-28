@@ -188,6 +188,42 @@ is a warning by default for a different reason than a missing runbook is. A
 ruler pointed at an existing cluster fails it on the first run, and a check
 that blocks the first run gets switched off rather than fixed.
 
+## What an alert is labelled
+
+An alert's labels are what Alertmanager routes on and what an annotation
+template can read, so it is worth knowing exactly where each one comes from.
+Four sources, applied in this order, each overwriting a name the one before it
+set:
+
+1. **The group's `labels`**, which every rule in that group starts with.
+2. **The rule's own `labels`**, overlaid on the group's.
+3. **The query's result columns**, every column except `value`. A query
+   selecting `service_name` produces a `service_name` label, spelled and cased
+   exactly as the column is.
+4. **The source's `labels`**, which say where the evaluation actually happened.
+
+Then `alertname` and `source` are written last, and nothing can overwrite
+them.
+
+The source wins over the query deliberately. Its labels state which cluster
+answered, and a result column claiming otherwise is reporting something
+untrue. `alertname` and `source` are last for a stronger reason: they are the
+alert's identity, and an identity that query data could set is a routing
+hazard.
+
+The precedence is what happens at evaluation time, and it is mostly not what you
+will meet, because a query that reaches for one of these names does not get as
+far as being overwritten:
+[`rule/protected-label`](checks/rule.md#rule-protected-label) refuses the file.
+A column aliased `AS team` or `AS alertname` is an `error` that cannot be turned
+down, so the collision is caught in the pull request rather than resolved
+silently at 3am. What the order above really decides is the ordinary case: a
+group label a rule overrides, and a source label that names the cluster.
+
+Annotations are rendered over exactly this label set, plus `.value` for the
+number the alert fired on. Nothing else is in scope, which is what
+[`annotations/template`](checks/rule.md#annotations-template) is about.
+
 ## Sharded clusters and partial data
 
 A rule writes its own `FROM`, so on a sharded cluster you name the Distributed

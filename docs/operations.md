@@ -287,6 +287,36 @@ already gave them. On a dashboard this is *Rules matching no source* on
 *clickhouse-ruler / alert rules*, and
 [if the rule is yours](#if-the-rule-is-yours) is the author's path through it.
 
+**Which rules they are is in the log, not in the gauge.** The gauge is a count
+per group, so grep the ruler's logs for `rule matched no source`: one `info` line
+per rule, carrying `rule`, `file` and `team`, written at startup and again on
+every reload. The gauge cannot carry the names without a series per rule, which
+is the cardinality rule this ruler holds itself to.
+
+### An annotation that reached a page unrendered
+
+```promql
+sum by (rule, annotation) (rate(clickhouse_ruler_annotation_failures_total[5m])) > 0
+```
+
+**Not yours to fix, and not an alert worth carrying.** An annotation whose
+template did not render still pages. The alert is real, every annotation that
+rendered was delivered untouched, and the broken one carries
+`<ruler: annotation "NAME" failed...>` with the template error in the alert's
+`ruler_error` annotation beside it. Nothing about the ruler is failing, so this
+is the rule author's bug and the fix is an edit to their file.
+
+Counted once per rule, source and annotation per evaluation, never once per
+alert instance, so a rule returning ten thousand rows moves it by one.
+
+**This counter says it happened. It never says it stopped.** A counter cannot
+go down, so a rule fixed an hour ago still has a rate of zero and a total that
+never falls. Whether a rule is broken *right now* is
+`clickhouse_ruler_problem{check="annotations/template"}` in the next section,
+which clears itself. Alert on the gauge, not on this. The counter is for "how
+often did this happen last night" and for spotting the rule that is paging
+somebody every five minutes.
+
 ### A rule that broke while running
 
 ```promql
@@ -315,16 +345,25 @@ Read it by its labels, not by its value:
 | `rule` | Which alert in that file. |
 | `check` | What is wrong, and the name of the page that explains it: [the check pages](checks/index.md). |
 | `severity` | What the same finding would do in CI. An `error` would fail the build; a `warning` is what the policy in effect set. |
+| `source` | Which cluster it was found against, so a rule broken on one of four does not read like a rule broken on all four. Empty on [`rule/source-schema`](checks/rule.md#rule-source-schema), which compares two clusters and belongs to neither. |
 
 On a dashboard this is *Rules broken while running* on
 *clickhouse-ruler / alert rules*, narrowed with the **Team** variable.
 [If the rule is yours](#if-the-rule-is-yours) is the path through it for an
 author rather than an operator.
 
-The log line carries one more field the gauge does not: `feed`, either
-`evaluation` or `re-check`. "Your rule's result changed shape" and "your rule's
+The log line carries two fields the gauge does not. `feed` is either
+`evaluation` or `re-check`: "your rule's result changed shape" and "your rule's
 map key is gone from recent data" are different problems, with different fixes,
-arriving on different clocks.
+arriving on different clocks. `error` is on an
+[`annotations/template`](checks/rule.md#annotations-template) finding alone, and
+is the template error itself, which is on the alert and nowhere else.
+
+The line is written by the pass that found the finding, not on every pass while
+it stands. A rule that is firing and broken writes one per evaluation; a rule
+that stopped firing writes none and keeps its series. So the count of lines is
+how often it happened and the series is whether it is still true, and grepping
+the logs does not answer the second question.
 
 **The rule is still evaluating and still paging.** Nothing is unloaded,
 nothing is refused, no alert is resolved. A ruler that dropped a rule because
@@ -349,9 +388,21 @@ the one raised under a name a pull request uses too. The alert it was found on h
 already been delivered, carrying a marker where the annotation should be, so the
 finding is how its author hears about it rather than a warning of something about
 to happen. It is the backstop for a finding somebody merged past, since the check
-warns by default. It clears on the next evaluation that renders every annotation
-cleanly, and an evaluation that produced no alerts rendered nothing and leaves it
-standing: a rule that broke and then stopped firing is still broken.
+warns by default.
+
+It clears on the next evaluation where **the source that raised it** rendered
+cleanly. Each source contributes its own labels, so a summary reading a label
+only one cluster carries renders there and fails on the others, and one cluster
+rendering says nothing about another. An evaluation that produced no alerts
+rendered nothing and leaves the finding standing: a rule that broke and then
+stopped firing is still broken.
+
+A reload does not clear it. The series is where the finding lives, and it
+survives a reload the way it survives a quiet pass, so a merge to the rules
+repository, including somebody else's rule, does not resolve a finding about
+yours. The one thing that removes a series without a fix is a source nothing
+reaches any more: when a reload closes that connection, findings about that
+cluster go with it, because clearing one would have taken a pass against it.
 
 One check comes from the re-check pass:
 [`rule/attribute-key`](checks/rule.md#rule-attribute-key), the OTel map key
@@ -384,7 +435,9 @@ clickhouse_ruler_source_problem > 0
 **Yours to fix, unlike the gauge above it.** The contract check runs against
 every source at startup and on every reload, and what it finds is raised here as
 well as printed on the stream the ruler was started on, so a ruler that has been
-up for a month still reports it.
+up for a month still reports it. On a dashboard this is *Sources failing the user
+contract* on *clickhouse-ruler / operations*, beside *Build*, which says which
+version each replica is running.
 
 | Label | What it says |
 | --- | --- |
@@ -423,7 +476,8 @@ else says so.
 
 The reason is on stderr, with the file and line of every finding. Fix the file
 and send another `SIGHUP`; the gauge returns to 1 on the first load that
-succeeds.
+succeeds. On a dashboard both of these are *Configuration reload* on
+*clickhouse-ruler / operations*.
 
 Its pair dates the configuration actually running:
 
@@ -483,15 +537,15 @@ about what they typed.
 | Level | Message | What to do |
 | --- | --- | --- |
 | info | `ruler running` | Nothing. It carries `rules` and `listen`; a `rules` count lower than you expect means rules were filtered by source matching, not dropped. |
+| info | `rule matched no source` | Nothing, usually. One line per rule this ruler loaded and will never evaluate, with `rule`, `file` and `team`. Normal on a ruler per datacenter reading a shared repository. This is how you get from `clickhouse_ruler_rules_unmatched` to the rule names. |
 | info | `shutting down` | Nothing. Carries the `timeout` an in-flight evaluation is being given. |
 | error | `rule evaluation failed against a source` | Read `source` and `error`: this is the database's own reply, with credentials removed. A timeout or memory cap means the rule is too expensive, and the `system.query_log` queries below say by how much. The rule's alert state is untouched, so its `for` timer survives and the next evaluation continues from where the last successful one left off. |
 | error | `sending alerts to alertmanager failed` | Check Alertmanager. The alerts were evaluated and their state has advanced; only delivery failed, and they are re-posted on the resend interval. Repeated failures past `--resend-tolerance` periods let Alertmanager expire an alert that is still firing. |
-| warn | `annotation template failed, the alert carries the error instead` | A rule author's problem, not an operator's. The alert was delivered with the template error where its annotation should be, so somebody is reading that error on their page. `annotation` names which one; fix it in the rule file. |
 | error | `metrics listener stopped` | The HTTP surface is gone, so metrics and probes are unanswered while the evaluation loop carries on. Usually the `listen` address is already taken. Restart it. |
 | warn | `shutdown timeout expired with evaluations still running` | A query or a send was cut off part way through. This is the only signal that says so. If it happens on every restart, raise `--shutdown-timeout` above your slowest evaluation. |
-| warn | `a rule broke while running` | Not an operator's problem to fix. `team` and `file` say whose rule it is and where, `check` names the page explaining it, `feed` says which clock found it, and `problem` says what changed. The rule is still evaluating and still paging. Warned rather than errored however severe the finding is, because nothing about the ruler is failing. |
+| warn | `a rule broke while running` | Not an operator's problem to fix. `team` and `file` say whose rule it is and where, `source` says which cluster it was found against, `check` names the page explaining it, `feed` says which clock found it, and `problem` says what changed. On [`annotations/template`](checks/rule.md#annotations-template) it also carries `error`, the template error itself, which is on the alert as well and nowhere else: the alert was delivered with `<ruler: annotation "NAME" failed...>` where that annotation should be, so somebody is reading a marker on their page. One line per broken template, however many rows the rule returned. The rule is still evaluating and still paging. Warned rather than errored however severe the finding is, because nothing about the ruler is failing. |
 | warn | `refusing a source that failed the user contract` | Deliberate, see below. |
-| info | `reloading` / `reloaded` | Nothing. A `SIGHUP` arrived and the files were re-read. `reloaded` carries the `rules` and `sources` count now running, which is the pair to compare against the `ruler running` line. |
+| info | `reloading` / `reloaded` | Nothing. A `SIGHUP` or a `POST /-/reload` arrived and the files were re-read. `reloaded` carries the `rules` and `sources` count now running, which is the pair to compare against the `ruler running` line. |
 | error | `refusing the reload, the previous configuration keeps running` | Read `reason`, then the findings on stderr. The ruler is still evaluating the rules it had before the signal. Nothing is degraded and nothing was applied. |
 
 One line per failed source and one per failed send, never one per alert
@@ -541,6 +595,24 @@ through being written.
 ```bash
 kill -HUP $(pidof ruler)
 ```
+
+**Where a signal cannot reach the process**, start the ruler with
+`--enable-reload-endpoint` and ask over HTTP instead. This is the case for a
+sidecar that syncs a rules repository into a shared volume: it has the files and
+no way to signal the container beside it without a shared process namespace.
+
+```bash
+curl -fsS -XPOST http://localhost:9090/-/reload
+```
+
+It re-reads the same three files, through the same checks, and refuses on the
+same terms. The difference is that it answers: `200` and `reloaded` when the new
+files are the ones now running, `500` and the refusal's reason when they are not,
+which is the reason the log line carries. `-f` makes `curl` exit non-zero on the
+refusal, so a deploy job fails where it would otherwise carry on. The endpoint is
+absent, not merely refused, unless the flag is set, and there is no rule create,
+update or delete endpoint at any time: the caller supplies nothing here, it only
+says when to read the disk.
 
 A reload is all or nothing. Every way it can fail leaves the ruler evaluating
 exactly what it was evaluating before the signal, and raises the refused-reload

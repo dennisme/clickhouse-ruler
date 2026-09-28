@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -112,7 +113,9 @@ func TestReloadPicksUpAnAddedRule(t *testing.T) {
 	}
 
 	writeRuleFile(t, dir, "errors.yaml", addedRule)
-	r.reload(context.Background())
+	if err := r.reload(context.Background()); err != nil {
+		t.Fatalf("reload: %v", err)
+	}
 
 	if r.rules != 2 {
 		t.Errorf("rules loaded after the reload = %d, want 2", r.rules)
@@ -144,7 +147,16 @@ func TestReloadRefusedByAnErrorFindingKeepsTheRunningRules(t *testing.T) {
 
 	// A rule with no time bound on its query: rule/expr, always an error.
 	writeRuleFile(t, dir, "latency.yaml", brokenRule)
-	r.reload(context.Background())
+	err := r.reload(context.Background())
+
+	// The reason is returned as well as logged, because a reload asked for over
+	// HTTP is answered with it (spec 8.1).
+	if err == nil {
+		t.Fatal("reload returned no error, want the refusal's reason for whoever asked")
+	}
+	if !strings.Contains(err.Error(), "correctness check") {
+		t.Errorf("reload error = %q, want the reason the log line carries", err)
+	}
 
 	if r.rules != 1 {
 		t.Errorf("rules loaded after a refused reload = %d, want the 1 that was already running", r.rules)
@@ -167,7 +179,9 @@ func TestReloadRefusesAnUnreadableSourcesFile(t *testing.T) {
 	if err := os.Remove(filepath.Join(dir, "sources.yaml")); err != nil {
 		t.Fatal(err)
 	}
-	r.reload(context.Background())
+	if err := r.reload(context.Background()); err == nil {
+		t.Error("reload returned no error, want the reason the sources file could not be read")
+	}
 
 	if r.rules != 1 {
 		t.Errorf("rules loaded after an unreadable sources file = %d, want 1", r.rules)
@@ -196,7 +210,9 @@ func TestReloadReconcilesTheOpenConnections(t *testing.T) {
 	// first stays matched.
 	writeRuleFile(t, dir, "errors.yaml", addedRule)
 	writeRuleFile(t, dir, "checkout.yaml", checkoutRule)
-	r.reload(context.Background())
+	if err := r.reload(context.Background()); err != nil {
+		t.Fatalf("reload: %v", err)
+	}
 
 	if len(r.queriers) != 2 {
 		t.Fatalf("connections after the reload = %d, want 2: %v", len(r.queriers), r.queriers)
@@ -212,7 +228,9 @@ func TestReloadReconcilesTheOpenConnections(t *testing.T) {
 	if err := os.Remove(filepath.Join(dir, "rules", "payments", "checkout.yaml")); err != nil {
 		t.Fatal(err)
 	}
-	r.reload(context.Background())
+	if err := r.reload(context.Background()); err != nil {
+		t.Fatalf("reload: %v", err)
+	}
 
 	if _, held := r.queriers["otel_traces_eu"]; held {
 		t.Error("the connection to a source nothing matches any more is still held")
@@ -243,7 +261,9 @@ func TestReloadReopensASourceWhoseDefinitionChanged(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "sources.yaml"), []byte(moved), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	r.reload(context.Background())
+	if err := r.reload(context.Background()); err != nil {
+		t.Fatalf("reload: %v", err)
+	}
 
 	if r.queriers["otel_traces"] == before {
 		t.Error("the source moved to another address and the ruler is still on the connection it opened for the old one")

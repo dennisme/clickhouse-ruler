@@ -38,7 +38,7 @@ stricter, and a ceiling binds at its lowest value. See spec 7.6 and 7.7.
 | [`rule/for`](#rule-for) | `warning` by default | none | [7.6](https://github.com/dennisme/clickhouse-ruler/blob/main/spec.md) |
 | [`rule/foreign-table`](#rule-foreign-table) | `warning` by default | none | [7.3](https://github.com/dennisme/clickhouse-ruler/blob/main/spec.md) |
 | [`rule/group-name`](#rule-group-name) | fixed, always `error` | none | [7.6](https://github.com/dennisme/clickhouse-ruler/blob/main/spec.md) |
-| [`rule/inspect`](#rule-inspect) | fixed, always `error` | none | [7.3](https://github.com/dennisme/clickhouse-ruler/blob/main/spec.md) |
+| [`rule/inspect`](#rule-inspect) | fixed, always `warning` | none | [7.3](https://github.com/dennisme/clickhouse-ruler/blob/main/spec.md) |
 | [`rule/name`](#rule-name) | fixed, always `error` | none | [7.6](https://github.com/dennisme/clickhouse-ruler/blob/main/spec.md) |
 | [`rule/nondeterministic`](#rule-nondeterministic) | `warning` by default | required: `generateuuidv4`, `now`, `now64`, `rand`, `rand32`, `rand64`, `randcanonical`, `today`, `uptime`, `yesterday` | [7.3](https://github.com/dennisme/clickhouse-ruler/blob/main/spec.md) |
 | [`rule/protected-label`](#rule-protected-label) | fixed, always `error` | none | [6.3.1](https://github.com/dennisme/clickhouse-ruler/blob/main/spec.md) |
@@ -371,7 +371,8 @@ the source's labels, and `alertname` and `source`, which the ruler sets. Nothing
 else is in scope, so `{{ .ServiceName }}` resolves only if one of those is named
 `ServiceName`, spelled and cased exactly. A query selecting `service_name`
 produces `.service_name` and nothing else.
-[How it works](../how-it-works.md) has the precedence in full.
+[What an alert is labelled](../how-it-works.md#what-an-alert-is-labelled) has
+the precedence in full.
 
 **Asked at three times, under one name.** Whether the template parses needs the
 file alone. Whether its fields resolve needs the query's real output columns, so
@@ -411,6 +412,31 @@ ruler_error: 'annotation "summary": template: summary:1:3: executing "summary" a
 
 A rule with two broken annotations gets a marker in each and one `ruler_error`
 holding both errors, in annotation name order, joined with a semicolon.
+
+**A template that never parsed gets a shorter marker.** The missing labels are
+read off the parsed template, so a template that did not parse has none to name
+and the marker is the bare form. This is what ships when an author forgets a
+brace, which is the most common way to fail this check:
+
+```yaml
+# the rule file, one closing brace short
+summary: "{{ .ServiceName } is slow"
+```
+
+```yaml
+# what the alert carries. The marker says which annotation and nothing more
+summary: '<ruler: annotation "summary" failed>'
+
+# the reason exists only here, and in the ruler's logs
+ruler_error: 'annotation "summary": template: summary:1: unexpected "}" in operand'
+```
+
+Any render failure that is not a missing label reads the same way: the marker
+names the annotation, and `ruler_error` is the only place the reason is. If your
+receiver does not template `ruler_error`, this is the one case where the page
+cannot tell the responder what is wrong. The ruler's logs carry the reason;
+`clickhouse_ruler_problem` carries only which annotation and that it is still
+broken.
 
 The marker's prefix is fixed, so automation can match `<ruler: annotation` and a
 human can grep one string. What follows it is bounded: the annotation's name, then

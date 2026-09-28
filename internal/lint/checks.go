@@ -152,6 +152,16 @@ type Check struct {
 	// fire, which is the failure this tool exists to prevent (spec 7.6).
 	Fixed bool
 
+	// Always is the severity a fixed check carries. Every one of them states it,
+	// because "not configurable" and "error" are different claims and the
+	// generated check pages print this one: `rule/inspect` is fixed and a
+	// warning, since a cluster the ruler could not reach has said nothing about
+	// the rule (spec 7.6).
+	//
+	// Building a finding for a fixed check at another severity is refused, so
+	// the table is where this is decided and not the call site.
+	Always Severity
+
 	// Default is the shipped severity, for the checks that have one.
 	//
 	// Configurable checks ship as warnings, not errors. Severity decides who
@@ -190,28 +200,28 @@ func (c Check) Configurable() bool { return !c.Fixed }
 // configurable.
 var checks = []Check{
 	{
-		Name: CheckYAMLSyntax, Spec: "7.3", Fixed: true,
+		Name: CheckYAMLSyntax, Spec: "7.3", Fixed: true, Always: SeverityError,
 		Summary: "the file is not valid YAML, so nothing in it could be read",
 	},
 	{
-		Name: CheckYAMLUnknownField, Spec: "7.3", Fixed: true,
+		Name: CheckYAMLUnknownField, Spec: "7.3", Fixed: true, Always: SeverityError,
 		Summary: "a field nobody recognises, which silently drops configuration",
 	},
 	{
-		Name: CheckYAMLType, Spec: "7.3", Fixed: true,
+		Name: CheckYAMLType, Spec: "7.3", Fixed: true, Always: SeverityError,
 		Summary: "a field holding the wrong shape, such as a list where a mapping belongs",
 	},
 
 	{
-		Name: CheckRuleName, Spec: "7.6", Fixed: true,
+		Name: CheckRuleName, Spec: "7.6", Fixed: true, Always: SeverityError,
 		Summary: "an alert with no name, or a duplicate within its group, which has no identity",
 	},
 	{
-		Name: CheckRuleGroupName, Spec: "7.6", Fixed: true,
+		Name: CheckRuleGroupName, Spec: "7.6", Fixed: true, Always: SeverityError,
 		Summary: "a group with no name, or a name repeated within one file",
 	},
 	{
-		Name: CheckRuleExpr, Spec: "7.6", Fixed: true,
+		Name: CheckRuleExpr, Spec: "7.6", Fixed: true, Always: SeverityError,
 		Summary: "an empty query, or one missing the time bounds the ruler binds",
 	},
 
@@ -269,7 +279,7 @@ var checks = []Check{
 	// on the evaluation whose template already failed, which is the one
 	// nobody is watching (spec 6.5).
 	{
-		Name: CheckAnnotationsProtected, Spec: "6.5", Fixed: true,
+		Name: CheckAnnotationsProtected, Spec: "6.5", Fixed: true, Always: SeverityError,
 		Summary: "a rule setting an annotation the ruler owns, which the ruler overwrites on a failed template",
 	},
 
@@ -283,7 +293,7 @@ var checks = []Check{
 	},
 
 	{
-		Name: CheckRuleProtectedLabel, Spec: "6.3.1", Fixed: true,
+		Name: CheckRuleProtectedLabel, Spec: "6.3.1", Fixed: true, Always: SeverityError,
 		Summary: "a rule setting a label the ruler owns, which breaks routing",
 	},
 
@@ -303,19 +313,19 @@ var checks = []Check{
 		Summary: "two rules whose alerts carry the same labels, so neither can be told from the other",
 	},
 	{
-		Name: CheckRulesetDirectory, Spec: "7.1", Fixed: true,
+		Name: CheckRulesetDirectory, Spec: "7.1", Fixed: true, Always: SeverityError,
 		Summary: "the rules directory could not be read",
 	},
 
 	{
-		Name: CheckRuleSyntax, Spec: "7.3", Fixed: true,
+		Name: CheckRuleSyntax, Spec: "7.3", Fixed: true, Always: SeverityError,
 		Summary: "SQL ClickHouse cannot parse, or a second statement nobody reviewed",
 	},
 
 	// Not a finding about a rule. It is how the ruler says it could not ask,
 	// and silence there would read as a rule that passed.
 	{
-		Name: CheckRuleInspect, Spec: "7.3", Fixed: true,
+		Name: CheckRuleInspect, Spec: "7.3", Fixed: true, Always: SeverityWarning,
 		Summary: "the ruler could not reach the cluster to read the rule's SQL",
 	},
 
@@ -370,7 +380,7 @@ var checks = []Check{
 	// softens every cost control behind it at once. The profile constraints
 	// are the backstop for anything that gets past (spec 6.7, 7.3).
 	{
-		Name: CheckRuleSettings, Spec: "7.3", Fixed: true,
+		Name: CheckRuleSettings, Spec: "7.3", Fixed: true, Always: SeverityError,
 		Summary: "a query setting its own SETTINGS, overriding the limits the ruler sends",
 	},
 
@@ -399,7 +409,7 @@ var checks = []Check{
 	// CI, because a rule with no value column fails at evaluation time, which
 	// is after review and in front of nobody (spec 7.3).
 	{
-		Name: CheckRuleColumns, Spec: "7.3", Fixed: true,
+		Name: CheckRuleColumns, Spec: "7.3", Fixed: true, Always: SeverityError,
 		Summary: "a query naming a column or table that does not exist, or returning no value column",
 	},
 
@@ -484,51 +494,51 @@ var checks = []Check{
 	},
 
 	{
-		Name: CheckSourceName, Spec: "6.6", Fixed: true,
+		Name: CheckSourceName, Spec: "6.6", Fixed: true, Always: SeverityError,
 		Summary: "a source with no name, or a name used twice",
 	},
 	{
-		Name: CheckSourceAddress, Spec: "6.6", Fixed: true,
+		Name: CheckSourceAddress, Spec: "6.6", Fixed: true, Always: SeverityError,
 		Summary: "a source with no address to connect to",
 	},
 	{
-		Name: CheckSourceDatabase, Spec: "6.6", Fixed: true,
+		Name: CheckSourceDatabase, Spec: "6.6", Fixed: true, Always: SeverityError,
 		Summary: "a source naming no database",
 	},
 	{
-		Name: CheckSourceUsername, Spec: "6.6", Fixed: true,
+		Name: CheckSourceUsername, Spec: "6.6", Fixed: true, Always: SeverityError,
 		Summary: "a source naming no ClickHouse user, which is the tenancy boundary",
 	},
 	{
-		Name: CheckSourcePassword, Spec: "6.6", Fixed: true,
+		Name: CheckSourcePassword, Spec: "6.6", Fixed: true, Always: SeverityError,
 		Summary: "a secret that could not be read, or both secret sources set at once",
 	},
 	{
-		Name: CheckSourceTable, Spec: "6.6", Fixed: true,
+		Name: CheckSourceTable, Spec: "6.6", Fixed: true, Always: SeverityError,
 		Summary: "a source naming no table",
 	},
 	{
-		Name: CheckSourceTimestampColumn, Spec: "6.8", Fixed: true,
+		Name: CheckSourceTimestampColumn, Spec: "6.8", Fixed: true, Always: SeverityError,
 		Summary: "a source naming no timestamp column, so no window can be bound",
 	},
 	{
-		Name: CheckSourceEvaluationDelay, Spec: "6.8", Fixed: true,
+		Name: CheckSourceEvaluationDelay, Spec: "6.8", Fixed: true, Always: SeverityError,
 		Summary: "a negative evaluation delay",
 	},
 	{
-		Name: CheckSourceMaxRows, Spec: "6.7", Fixed: true,
+		Name: CheckSourceMaxRows, Spec: "6.7", Fixed: true, Always: SeverityError,
 		Summary: "a row cap that is not a positive number",
 	},
 	{
-		Name: CheckSourceMaxExecution, Spec: "6.7", Fixed: true,
+		Name: CheckSourceMaxExecution, Spec: "6.7", Fixed: true, Always: SeverityError,
 		Summary: "an execution time cap that is not positive",
 	},
 	{
-		Name: CheckSourceMaxMemory, Spec: "6.7", Fixed: true,
+		Name: CheckSourceMaxMemory, Spec: "6.7", Fixed: true, Always: SeverityError,
 		Summary: "a memory cap that is not positive",
 	},
 	{
-		Name: CheckSourceMaxConcurrency, Spec: "6.11", Fixed: true,
+		Name: CheckSourceMaxConcurrency, Spec: "6.11", Fixed: true, Always: SeverityError,
 		Summary: "a concurrent query cap that is negative",
 	},
 
@@ -536,7 +546,7 @@ var checks = []Check{
 	// malformed one has to fail rather than be softened into a warning
 	// somebody stops reading (spec 7.7).
 	{
-		Name: CheckSourceExemption, Spec: "7.7", Fixed: true,
+		Name: CheckSourceExemption, Spec: "7.7", Fixed: true, Always: SeverityError,
 		Summary: "an exemption that is malformed, names a check nobody can exempt, or has expired",
 	},
 
@@ -552,19 +562,19 @@ var checks = []Check{
 	},
 
 	{
-		Name: CheckPolicyUnknown, Spec: "7.6", Fixed: true,
+		Name: CheckPolicyUnknown, Spec: "7.6", Fixed: true, Always: SeverityError,
 		Summary: "a policy file configuring a check that does not exist",
 	},
 	{
-		Name: CheckPolicyFixed, Spec: "7.6", Fixed: true,
+		Name: CheckPolicyFixed, Spec: "7.6", Fixed: true, Always: SeverityError,
 		Summary: "a policy file configuring a correctness check, which cannot be softened",
 	},
 	{
-		Name: CheckPolicySeverity, Spec: "7.6", Fixed: true,
+		Name: CheckPolicySeverity, Spec: "7.6", Fixed: true, Always: SeverityError,
 		Summary: "a severity that is not off, warn or error",
 	},
 	{
-		Name: CheckPolicyLimit, Spec: "7.7", Fixed: true,
+		Name: CheckPolicyLimit, Spec: "7.7", Fixed: true, Always: SeverityError,
 		Summary: "a ceiling that is not written as name:number, so it would never apply",
 	},
 }

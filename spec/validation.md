@@ -622,6 +622,21 @@ its job:
   parse cannot run, and `rule/inspect`, because it is the ruler reporting that
   it could not ask rather than a finding about any rule.
 
+**Not configurable is not the same as error.** Every fixed check but one carries
+`error`, and `rule/inspect` carries `warning`: a cluster the ruler could not
+reach has said nothing about the rule, and refusing a file on the strength of an
+outage would mean a checkout that passes in one network and fails in another.
+Fork pull requests are the case that settles it, since they are given no
+credentials and cannot reach a cluster by design (10.3).
+
+So the check table states the severity a fixed check carries rather than leaving
+a reader to assume, the generated check pages print what it states, and building
+a finding for a fixed check at any other severity is refused the way an unknown
+check name is (7.8). The consequence to be aware of is that `ruler check
+--online` against an unreachable cluster exits 0, with a warning per rule: a job
+that reads only the exit code cannot tell that from a clean run, which is why the
+run page says so.
+
 Convention checks carry a configurable severity of `error`, `warn` or `off`,
 and where they take a list of keys that list is configurable too:
 

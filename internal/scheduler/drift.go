@@ -75,8 +75,8 @@ func newDrift(r ruleset.Rule) *drift {
 // the query failed against has not drifted, so its baseline is left standing
 // and the comparison resumes against the last result that was real; the failure
 // itself is reported on its own.
-func (d *drift) inspect(evals []evaluated, failures []failed, now time.Time) []lint.Problem {
-	var problems []lint.Problem
+func (d *drift) inspect(evals []evaluated, failures []failed, now time.Time) []Finding {
+	var problems []Finding
 
 	for _, e := range evals {
 		prev, seen := d.prev[e.source.Name]
@@ -123,8 +123,9 @@ func (d *drift) inspect(evals []evaluated, failures []failed, now time.Time) []l
 //
 // One problem however many sources differed, at the rule's own severity and
 // exempted by nobody, for the reasons the same check gives at authoring time:
-// a finding naming two clusters has no one source to take a setting from.
-func (d *drift) disagreements(evals []evaluated) []lint.Problem {
+// a finding naming two clusters has no one source to take a setting from. It
+// carries no source label either, for the same reason (spec 8.2).
+func (d *drift) disagreements(evals []evaluated) []Finding {
 	if len(evals) < 2 {
 		return nil
 	}
@@ -150,7 +151,7 @@ func (d *drift) disagreements(evals []evaluated) []lint.Problem {
 	p.Subject = d.rule.Alert
 	p.PolicyFile, p.PolicyLine = setting.File, setting.Line
 
-	return []lint.Problem{p}
+	return []Finding{{Problem: p}}
 }
 
 // overCost describes what this evaluation read against the ceilings the rule's
@@ -190,9 +191,14 @@ func (d *drift) overCost(e evaluated) string {
 }
 
 // problem resolves a finding the way the online pass does, against this rule's
-// policy and the source it was found on.
-func (d *drift) problem(src source.Source, now time.Time, f query.Finding) []lint.Problem {
-	return runtimeProblem(d.rule, src, now, f)
+// policy and the source it was found on, and carries that source: the gauge
+// labels a finding with the cluster it was found against (spec 8.2).
+func (d *drift) problem(src source.Source, now time.Time, f query.Finding) []Finding {
+	var out []Finding
+	for _, p := range runtimeProblem(d.rule, src, now, f) {
+		out = append(out, Finding{Problem: p, Source: src.Name})
+	}
+	return out
 }
 
 // runtimeProblem turns a finding a running ruler made into what to report,

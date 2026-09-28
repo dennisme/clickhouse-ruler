@@ -73,7 +73,7 @@ func Index() string {
 // as: "fixed" is the part that answers "can I turn this off".
 func severity(c lint.Check) string {
 	if c.Fixed {
-		return "fixed, always `error`"
+		return fmt.Sprintf("fixed, always `%s`", c.Always)
 	}
 	return fmt.Sprintf("`%s` by default", c.Default)
 }

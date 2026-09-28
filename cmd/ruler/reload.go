@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -215,13 +216,12 @@ func (r *runner) build(cfg *config) {
 // are valid, they evaluate, they deliver, and nothing about them looks wrong.
 // The file on disk saying something else is invisible from the outside, which is
 // why the gauge is the alert an operator is expected to have (spec 8.2).
-func (r *runner) reload(ctx context.Context) {
+func (r *runner) reload(ctx context.Context) error {
 	r.log.Info("reloading", "rules", r.rulesDir, "sources", r.sourcesPath)
 
 	cfg, err := r.load()
 	if err != nil {
-		r.refuse("a file could not be read", err)
-		return
+		return r.refuse("a file could not be read", err)
 	}
 
 	r.report(cfg.problems)
@@ -231,25 +231,27 @@ func (r *runner) reload(ctx context.Context) {
 	// a rules tree is loaded as a tree and half of one is not a configuration
 	// anybody wrote down (spec 7.6).
 	if cfg.refused() {
-		r.refuse("at least one rule failed a correctness check", nil)
-		return
+		return r.refuse("at least one rule failed a correctness check", nil)
 	}
 
 	if err := r.connect(ctx, cfg); err != nil {
-		r.refuse("a source could not be opened", err)
-		return
+		return r.refuse("a source could not be opened", err)
 	}
 
 	r.mu.Lock()
 	rules, sources := r.rules, len(r.queriers)
 	r.mu.Unlock()
 	r.log.Info("reloaded", "rules", rules, "sources", sources)
+	return nil
 }
 
-// refuse records a reload that did not happen. The timestamp gauge is left
-// where it is on purpose: it dates the configuration being evaluated, and a
-// refused reload did not change that (see NewMetrics).
-func (r *runner) refuse(reason string, err error) {
+// refuse records a reload that did not happen and returns the reason, for
+// whoever asked. A signal has nobody to return it to and reads the log; a
+// request over HTTP is answered with it (spec 8.1).
+//
+// The timestamp gauge is left where it is on purpose: it dates the configuration
+// being evaluated, and a refused reload did not change that (see NewMetrics).
+func (r *runner) refuse(reason string, err error) error {
 	r.metrics.ConfigLastReloadSuccessful.Set(0)
 
 	args := []any{"reason", reason}
@@ -257,6 +259,11 @@ func (r *runner) refuse(reason string, err error) {
 		args = append(args, "error", err.Error())
 	}
 	r.log.Error("refusing the reload, the previous configuration keeps running", args...)
+
+	if err != nil {
+		return fmt.Errorf("%s: %w", reason, err)
+	}
+	return errors.New(reason)
 }
 
 // ready is the readiness probe over whatever configuration is loaded now. Read

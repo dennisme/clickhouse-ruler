@@ -217,11 +217,14 @@ That is the property we are copying. Everything else follows from it.
    name of its own: the same check answers what a file can see, what the query's
    columns can see, and what only a running ruler can, the way `rule/cost` is one
    name for a prediction and a measurement. The finding names the annotation and
-   the keys the alert did not carry, and the raw Go error stays in the log. What
-   this entry said the finding needed is half there already: the scheduler carries
-   a rule's `team` and `file` into evaluation and rebuilds the gauge per check, so
-   the only new decision was when it clears, and it is that a pass which rendered
-   no annotations at all does not.
+   the keys the alert did not carry, and the raw Go error rides beside it in the
+   log line's `error` field, which is the only line this event writes. What this
+   entry said the finding needed is half there already: the scheduler carries a
+   rule's `team` and `file` into evaluation and rebuilds the gauge per check, so
+   the only new decision was when it clears. That is twice decided now: a pass
+   which rendered no annotations at all does not clear it, and rendering is judged
+   per source, so the finding clears on the source that raised it rather than on
+   any source that rendered (6.5).
 
 5. **Whether one bad file may refuse a whole reading.** Open, and the thing to
    settle before anybody depends on this. An error-severity finding refuses
@@ -247,6 +250,32 @@ That is the property we are copying. Everything else follows from it.
    What to work through before deciding: each refusal case on its own, cold start
    separately from reload, and whether the answer is per-file tolerance, a
    narrower fixed-at-error list, or an operator flag that is off by default.
+
+6. **How a merged rule reaches a running ruler.** Open, and a hole in the chain
+   rather than in the design. A rule's life is pull request, approval, deployment,
+   running, alert sent, and four of those five are specified and documented. The
+   deployment step is not: nothing says how a merged rule file gets onto the disk
+   the ruler reads, who sends the `SIGHUP`, or how long a fix takes to reach a
+   page. 10.2 names the topologies and 7.6 says in detail what a reload refuses,
+   and neither says what causes one. It is the first question an author asks after
+   merging a fix.
+
+   What is missing is artefacts rather than prose. A Helm chart, so the answer to
+   "how do I run this" is a command rather than a paragraph, and deployment
+   examples beside it: a git-sync sidecar writing the rules directory with
+   something sending the signal, a ConfigMap mount for a small estate, and the
+   compose stack this repository already runs as the local case. Whichever the
+   chart ships as its default is the one the manual then documents, which is why
+   this is not a documentation task.
+
+   Two smaller things on the same chain. There is no CI example that gates a
+   merge: `docs/running.md` shows `ruler check --online --summary` and the cost
+   table as a pull request comment, and nothing shows `ruler check` as a required
+   status or what `--format=github` renders as in the diff. And nothing says what
+   the lag between a merged fix and a clean page is: for `annotations/template` it
+   is one group interval plus an alert firing on the source that broke, which is
+   two facts neither page states, where the equivalent for `rule/attribute-key` is
+   spelled out in 10.4.
 
 ---
 

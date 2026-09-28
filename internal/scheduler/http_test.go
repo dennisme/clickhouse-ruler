@@ -17,7 +17,7 @@ func serveMetrics(t *testing.T, reg *prometheus.Registry) string {
 
 	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
 	rec := httptest.NewRecorder()
-	Handler(reg, func(context.Context) error { return nil }).ServeHTTP(rec, req)
+	Handler(reg, func(context.Context) error { return nil }, nil).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("GET /metrics = %d, want 200", rec.Code)
@@ -109,7 +109,7 @@ func get(t *testing.T, handler http.Handler, path string) *httptest.ResponseReco
 func TestHealthIsUnconditional(t *testing.T) {
 	handler := Handler(prometheus.NewRegistry(), func(context.Context) error {
 		return errors.New("no source answering")
-	})
+	}, nil)
 
 	rec := get(t, handler, "/-/healthy")
 	if rec.Code != http.StatusOK {
@@ -126,7 +126,7 @@ func TestHealthIsUnconditional(t *testing.T) {
 func TestReadinessFailsWhenTheRulerCannotDoItsJob(t *testing.T) {
 	handler := Handler(prometheus.NewRegistry(), func(context.Context) error {
 		return errors.New("no source answering")
-	})
+	}, nil)
 
 	rec := get(t, handler, "/-/ready")
 	if rec.Code != http.StatusServiceUnavailable {
@@ -140,7 +140,7 @@ func TestReadinessFailsWhenTheRulerCannotDoItsJob(t *testing.T) {
 }
 
 func TestReadinessPassesWhenTheRulerCanEvaluate(t *testing.T) {
-	handler := Handler(prometheus.NewRegistry(), func(context.Context) error { return nil })
+	handler := Handler(prometheus.NewRegistry(), func(context.Context) error { return nil }, nil)
 
 	rec := get(t, handler, "/-/ready")
 	if rec.Code != http.StatusOK {
@@ -148,5 +148,58 @@ func TestReadinessPassesWhenTheRulerCanEvaluate(t *testing.T) {
 	}
 	if got := rec.Body.String(); got != "ok" {
 		t.Errorf("GET /-/ready body = %q, want %q", got, "ok")
+	}
+}
+
+// A signal is not deliverable everywhere the ruler runs, so a reload can arrive
+// as a request instead. Off unless an operator asked for it, because an endpoint
+// that makes a process re-read its disk is a lever worth opting into (spec 8.1).
+func TestReloadEndpointIsAbsentUntilItIsEnabled(t *testing.T) {
+	handler := Handler(prometheus.NewRegistry(), func(context.Context) error { return nil }, nil)
+
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/-/reload", nil))
+
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("POST /-/reload = %d, want 404 when no reload was wired", rec.Code)
+	}
+}
+
+// The caller learns what happened from the response. Reading the ruler's logs to
+// find out whether your own request worked is no better than the signal this
+// replaces (spec 8.1).
+func TestReloadEndpointReportsWhatHappened(t *testing.T) {
+	var err error
+	calls := 0
+	handler := Handler(prometheus.NewRegistry(), func(context.Context) error { return nil },
+		func(context.Context) error { calls++; return err })
+
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/-/reload", nil))
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "reloaded") {
+		t.Errorf("POST /-/reload = %d %q, want 200 reloaded", rec.Code, rec.Body.String())
+	}
+
+	// A refused reload keeps the running configuration, so the request failed
+	// and nothing else did. The reason travels with it.
+	err = errors.New("at least one rule failed a correctness check")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/-/reload", nil))
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("refused reload = %d, want 500", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "correctness check") {
+		t.Errorf("body = %q, want the refusal's reason", rec.Body.String())
+	}
+
+	// GET is not it: a reload changes what the process is running, so it is not
+	// something a link or a crawler can do.
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/-/reload", nil))
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Errorf("GET /-/reload = %d, want 405", rec.Code)
+	}
+	if calls != 2 {
+		t.Errorf("reload ran %d times, want 2: the GET must not have reloaded", calls)
 	}
 }

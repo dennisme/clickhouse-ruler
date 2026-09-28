@@ -16,10 +16,38 @@ and are what the code comments cite.
 - `GET /metrics`
 - `GET /-/healthy`
 - `GET /-/ready`
+- `POST /-/reload`, only when `--enable-reload-endpoint` is set
 
 There are no rule create, update, or delete endpoints, and there never will be.
 That is section 4 restated as an API decision. The absence of a write path is
 the security model.
+
+**`POST /-/reload` is not a write path**, which is why it can exist beside that
+sentence. It re-reads the same files from the same paths that `SIGHUP` re-reads,
+through the same loader and the same checks (7.1), and a caller supplies nothing:
+no body is read, and a request cannot name a rule, a file or a source. What it
+can do is make the ruler read the disk at a moment the caller chose, which is
+what a signal already does.
+
+It exists because a signal is not deliverable everywhere the ruler runs. A
+sidecar that syncs a rules repository into a volume has the files and no way to
+signal the process beside it without a shared process namespace or an exec into
+the container, and both of those are larger holes than one endpoint that reloads.
+This is the same reason Prometheus has it, and it is off by default for the same
+reason theirs is: an endpoint that makes a process re-read its disk is a lever
+worth opting into rather than one every deployment carries.
+
+The response says what happened, because a caller that has to read the ruler's
+logs to find out whether its own request worked is no better than the signal it
+replaced. 200 with `reloaded` when the new files are running, 500 with the
+refusal's reason when they are not, which is the same reason the log line
+carries. A refused reload leaves the running configuration alone (7.6), so the
+failure is a report rather than an outage.
+
+One reload at a time. The endpoint's request is handed to the same loop that
+serves `SIGHUP` rather than reloading on the HTTP handler's goroutine, so a
+signal and a request arriving together are two reloads in sequence rather than
+two loaders racing over one set of queriers.
 
 **The two health endpoints answer different questions, and today they do not.**
 Both return 200 unconditionally, which makes them the same endpoint written
@@ -90,19 +118,27 @@ then silently late.
 `clickhouse_ruler_rule_evaluation_failures_total` counts evaluations that did not happen,
 which is what the Prometheus metric it is named after counts. An annotation
 that would not render is not one of those: the evaluation produced alerts and
-they were delivered, carrying the template error where the annotation should be
-(6.5). It gets its own counter rather than a label on this one, because a label
+they were delivered, carrying a marker where the annotation should be and the
+template error in `ruler_error` beside it (6.5). It gets its own counter rather than a label on this one, because a label
 would make every carried-over dashboard query read high, and because the two
 have different audiences: a failed evaluation is an operator's problem and a
 broken template is the rule author's. `annotation` is a label worth having,
 since it names what to fix and an annotation is static configuration rather
 than anything data can multiply (8.3).
 
+`clickhouse_ruler_problem` carries the cluster the finding was found against, so
+a rule broken on one of four clusters does not read like a rule broken on all
+four, and so a pass that reached one cluster can rebuild that cluster's series
+without touching another's. Cardinality is rules times checks times the sources
+each rule matched: bounded by the files, and nothing data can multiply (8.3).
+`rule/source-schema` carries an empty `source`, because a comparison between
+clusters belongs to none of them.
+
 The counter stays now that the same failure also raises `annotations/template` on
 `clickhouse_ruler_problem`, because the two answer different questions. The
 counter says how often it happened and which annotation, and it never goes down.
 The gauge says whether it is still happening and whose rule it is, and it clears
-on the pass that renders clean. An alert belongs on the gauge; the counter is what
+on the pass where the source that raised it rendered clean (6.5). An alert belongs on the gauge; the counter is what
 a dashboard plots beside the evaluations that produced it.
 
 Alert state and delivery:
@@ -172,7 +208,7 @@ Validation and config:
 
 | Metric | Type | Labels |
 | --- | --- | --- |
-| `clickhouse_ruler_problem` | gauge | `rule`, `check`, `severity`, `team`, `file` |
+| `clickhouse_ruler_problem` | gauge | `rule`, `check`, `severity`, `team`, `file`, `source` |
 | `clickhouse_ruler_source_problem` | gauge | `source`, `check`, `severity`, `file` |
 | `clickhouse_ruler_rules_unmatched` | gauge | `rule_group` |
 | `clickhouse_ruler_config_last_reload_successful` | gauge | none |
@@ -325,12 +361,21 @@ What is logged:
 | Level | Event | Fields |
 | --- | --- | --- |
 | info | ruler running | `rules`, `listen` |
+| info | rule matched no source | `rule_group`, `rule`, `file`, `team` |
 | info | shutting down | `timeout` |
 | error | rule evaluation failed against a source | `rule_group`, `rule`, `source`, `error` |
 | error | sending alerts to alertmanager failed | `rule_group`, `rule`, `error` |
-| warn | annotation template failed, the alert carries the error instead | `rule_group`, `rule`, `source`, `annotation`, `error` |
+| warn | a rule broke while running | `rule_group`, `rule`, `check`, `severity`, `team`, `file`, `feed`, `problem`, and `error` on an `annotations/template` finding |
 | error | metrics listener stopped | `listen`, `error` |
 | warn | shutdown timeout expired with evaluations still running | `timeout` |
+
+One line per unmatched rule, at startup and on every reload, because
+`clickhouse_ruler_rules_unmatched` is a count per group and a count cannot be
+read back into names. The names are in the loader's findings too, under
+`rule/source-match`, but those are CLI output printed once (7.6) and an operator
+reading the gauge weeks later has neither the terminal nor the checkout. `info`
+rather than `warn`: on a ruler per datacenter reading a shared repository this is
+the normal state, and the check at authoring time already decided how loud it is.
 
 A shutdown that gives up is the only signal an operator gets that a query or a
 send was cut off part way through, which is why it is logged rather than
@@ -382,7 +427,10 @@ because there are two audiences and one dashboard for both serves neither.
 - **Operations.** Is the ruler doing its job: missed iterations first, because
   that is 8.2's most important signal, then evaluation failures, evaluation
   duration against the group interval, staleness of the last evaluation, send
-  failures and notification latency.
+  failures and notification latency. Then the three things about the process
+  rather than about an evaluation: whether the last reload was accepted and when
+  the running configuration was read, the sources whose user no longer meets the
+  contract, and which build each replica is running.
 - **Alert rules.** Whether a team's own rules work: which of their rules are
   failing to evaluate, which matched no source and will therefore never run,
   what is firing and pending now, which annotations will not render, and
@@ -399,6 +447,15 @@ because there are two audiences and one dashboard for both serves neither.
 They are files in the repository rather than screenshots in a wiki, for the
 reason rules are: a dashboard that is provisioned from git is one that can be
 reviewed, and one that can be fixed when a metric is renamed.
+
+**Every metric in 8.2 is on one of them.** A signal an operator has to already
+know about to go looking for is a signal that reaches nobody at 3am, and the
+reload pair is the case that proves it: a refused reload is silent by design,
+because the rules that are running are valid and nothing about them looks wrong.
+So a second test asserts the reverse of the one below, that every metric the
+registry carries is drawn by some panel or fills some variable. Adding a metric
+means adding it to a dashboard in the same change, or deciding out loud that
+nobody needs to see it.
 
 **A panel querying a metric nobody exposes renders an empty graph, which looks
 exactly like a healthy system.** That is the failure this area produces, and it
@@ -1320,6 +1377,31 @@ are the evaluation's, and `rule/attribute-key` is the timer's. Scoping the rebui
 one clock from resolving the other's findings, and it is also what lets a pass
 where nothing answered leave the previous answer standing per check rather than
 for the whole rule.
+
+**Scoped by source as well as by check**, because that is the grain the evidence
+arrives at. A cluster that replied says what its result's shape is and what its
+query cost; a cluster the ruler reached at all says whether its query runs,
+whether it answered or refused; a cluster with rows says whether the annotations
+render against them. None of the three says anything about the cluster beside it,
+so a pass that reached three of four clusters rebuilds three quarters of this
+rule's series and leaves the fourth standing. Before the `source` label the gauge
+could not express that, and the rebuild had to be rule-wide: whether the query
+runs was then answered only by a pass that reached every source, because one
+cluster's reply would otherwise have claimed the others were fine.
+
+The exception is `rule/source-schema`, which is a comparison between clusters and
+answered for the rule rather than for one of them, so it carries no source. It
+takes two replies to answer: one reply compares with nothing, and a pass where the
+second cluster refused the query cannot say the two still agree, so clearing on it
+would read as somebody having reconciled them. A rule left matching a single source
+is the other way round, since the comparison can never be raised again and a
+finding from when it matched two would otherwise stand for ever.
+
+Because the series is where a finding lives, and the series outlive a reload,
+nothing has to be remembered in the evaluator to keep a finding standing while
+its cluster is quiet. What does have to happen is that a source nothing reaches
+any more loses its series, since clearing one takes a pass against that cluster:
+the reconciliation that closes a connection deletes them (8.2).
 
 **Neither feed ships without its page.** The evaluator feed's is the
 "a rule that broke while running" section of the operations page, with the
