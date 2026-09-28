@@ -598,11 +598,36 @@ it adds is the annotation and the key, which is the edit, where the shape
 comparison reports the column.
 
 **What the finding says.** The check, the annotation and the missing key, with the
-raw template error left in the log. An alert built on the gauge is therefore fully
-actionable only where the ruler's logs are shipped somewhere the annotation on
-that alert can point at. An operator who ships no logs gets the team, the file and
-which annotation broke, and not the error itself. The finding is deliberately not
-a second copy of the Go error, which is already on the page and in the log.
+raw template error carried beside it in the log line's `error` field. An alert
+built on the gauge is therefore fully actionable only where the ruler's logs are
+shipped somewhere the annotation on that alert can point at. An operator who ships
+no logs gets the team, the file and which annotation broke, and not the error
+itself. The finding's own text is deliberately not a second copy of the Go error,
+which is already on the page.
+
+**One log line per broken template, not two.** The finding is logged as
+"a rule broke while running" like every other finding on this gauge, and there is
+no second line announcing the same annotation. Two lines meant one event counted
+twice by anybody grepping how often a template failed, in two vocabularies, every
+evaluation until somebody fixed the rule. The surviving line is the one addressed
+to the rule's owner: it carries the team and the file, which the other never did.
+Because it is also the only line, it carries the Go error for this check where
+the other findings on the gauge have none to carry.
+
+The counter is untouched by that, and stays the thing that says how often a
+template failed to render: once per rule, source and annotation per evaluation
+(8.2).
+
+**Logged when it is found, not while it stands.** The line is an event, so it is
+written by the pass that rendered the template and found it broken. A pass that
+had nothing to render found nothing, and repeating the finding it is carrying
+from an earlier pass would write a line every group interval for a rule that is
+not even firing. The gauge is what says the finding still stands, which is the
+division of labour between the two: a series is a state and a line is a thing
+that happened.
+
+A rule that is firing and broken therefore logs once per evaluation, which is
+the same rate it pages at and the rate the counter counts at.
 
 The gauge's labels do not change, so a rule with two broken annotations is one
 series rather than two. Cardinality stays rules times checks (8.2), and which
@@ -616,6 +641,34 @@ clearing on it would mean a broken rule that stopped firing clears the finding
 saying it is broken. So the check is answered by a pass that rendered at least one
 annotation set and left alone by a pass that had nothing to render, which is the
 same shape as the findings that need a source to have replied.
+
+**Rendering is judged per source, and the finding clears only when the source
+that raised it renders cleanly.** Each of a rule's sources contributes its own
+labels to the alert (6.10.1), so a summary reading a label only one cluster
+carries renders on that cluster and fails on the others. "At least one source
+rendered" is therefore not enough to answer the check: a pass where the healthy
+cluster returned rows and the broken one returned none would clear a finding that
+is still true, which is the same false resolve as clearing on a pass that
+rendered nothing.
+
+So the finding is raised against the cluster it was found on, as a `source` label
+on the gauge (8.2), and a pass clears the series of the sources that rendered and
+leaves the rest standing. A cluster whose rows went away keeps its finding until
+it has rows again; a cluster whose template now renders loses its series on the
+next pass with something to render. Nothing is remembered in the evaluator: the
+series is the memory, which is what makes it survive a reload, and a reload is
+every merge to the rules repository rather than only an edit to this rule.
+
+The cost is the label. Cardinality becomes rules times checks times the sources
+each rule matched, still bounded by the files and still nothing data can multiply
+(8.3). What it buys, beyond clearing per source, is that a rule broken on one of
+four clusters no longer reads like a rule broken on all four: an operator reading
+the gauge can tell those apart, where before the cluster's name was only inside
+the finding's text.
+
+The one finding that carries no source is `rule/source-schema`, which compares two
+clusters and belongs to neither, for the same reason it takes its severity from
+the rule rather than from a source (6.3.2).
 
 Templates are compiled once per rule rather than per evaluation, because they
 are fixed for the rule's lifetime and a rule returning a thousand rows would
