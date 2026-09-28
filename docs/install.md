@@ -71,7 +71,8 @@ docker run --rm -p 9090:9090 -v "$PWD/rules:/rules:ro" \
   --alertmanager http://alertmanager:9093
 ```
 
-One port, `9090`, carrying `/metrics`, `/-/healthy` and `/-/ready`. It is the
+One port, `9090`, carrying `/metrics`, `/-/healthy`, `/-/ready`, and
+`/-/reload` if you started it with `--enable-reload-endpoint`. It is the
 `--listen` address and nothing else listens; change both halves of `-p` if you
 move it. Alerts go out over the Alertmanager URL, so that host has to resolve
 from inside the container: `localhost` there is the container, not your

@@ -22,6 +22,36 @@ query is costs a parse, while sampling runs statements against the source's
 data. The sample is bounded by `max-sample-rows` and reads as the source's own
 user, so row policies apply to it.
 
+## What a check exits with
+
+| Code | What it means |
+| --- | --- |
+| `0` | nothing found, or nothing found at `error` severity |
+| `1` | at least one `error`-severity finding |
+| `2` | the command could not run: a bad flag, an unreadable rules directory, an unparseable sources file |
+
+Findings and failures are separated so a CI job can tell "your rules are wrong"
+from "the tool could not run".
+
+**A warning exits 0.** Only an `error`-severity finding fails the command, so
+`ruler check` as a required status gates exactly the checks your policy sets to
+`error`, and nothing else. Every check that warns by default, including
+[`annotations/template`](checks/rule.md#annotations-template) and
+[`rule/cost`](checks/rule.md#rule-cost), passes. Raising one to `error` in
+`ruler.yaml` is how it starts blocking, and doing that is the same decision as
+refusing a ruler that reads the file: the loader and CI run the same checks at
+the same severities.
+
+**An unreachable cluster also exits 0.** A source `--online` could not connect
+to, or a query it could not inspect, is a warning:
+[`rule/inspect`](checks/rule.md#rule-inspect) per rule, and an inconclusive
+[`source/privileges`](checks/source.md#source-privileges) per source. Nothing was
+learned, which is not the same as nothing being wrong, and blocking on it would
+let a network blip fail a deploy. A fork's pull request cannot reach a cluster at
+all, by design. The consequence for a job reading only the exit code is that a
+green check can mean the online checks did not run, so read the output, or fail
+the job on `rule/inspect` where the cluster is meant to be reachable from CI.
+
 ## Replaying a rule over the past
 
 `--backfill` replays every rule over a past range and reports how many alerts
@@ -97,13 +127,14 @@ than something to work around.
 | `--alertmanager` | required | Alertmanager base URL |
 | `--sources` | `sources.yaml` | sources file |
 | `--config` | `ruler.yaml` beside `--rules` | policy file |
-| `--listen` | `:9090` | address for `/metrics`, `/-/healthy`, `/-/ready` |
+| `--listen` | `:9090` | address for `/metrics`, `/-/healthy`, `/-/ready`, and `/-/reload` when it is enabled |
 | `--query-concurrency` | `8` | rule queries allowed against ClickHouse at once, across every group; `0` is unbounded. A source can set `max_concurrent_queries` to bound itself further inside this |
 | `--recheck-interval` | `1h` | how often loaded rules are re-checked against recent data for the map keys they read, which no evaluation can see; `0` turns the pass off. One bounded query per rule per source, sharing `--query-concurrency` with evaluation |
 | `--resend-interval` | `100s` | how often a still-firing alert is re-posted |
 | `--resend-tolerance` | `4` | how many resend periods a firing alert stays valid for, so how many consecutive failed evaluations or sends it survives, and how long a resolved alert is retried for. `4` is Prometheus' own number. Minimum `2` |
 | `--shutdown-timeout` | `30s` | how long an in-flight evaluation gets to finish once shutdown starts |
 | `--log-level` | `info` | `debug`, `info`, `warn` or `error` |
+| `--enable-reload-endpoint` | off | serve `POST /-/reload`, which re-reads the same files `SIGHUP` does. For deployments where a signal cannot reach the process, such as a sidecar syncing rules into a shared volume |
 
 ## What it exposes
 
@@ -127,6 +158,8 @@ series per rule.
 | `clickhouse_ruler_alerts_send_failures_total` | counter | `alertmanager` |
 | `clickhouse_ruler_notification_latency_seconds` | histogram | none |
 | `clickhouse_ruler_rules_unmatched` | gauge | `rule_group` |
+| `clickhouse_ruler_problem` | gauge | `rule`, `check`, `severity`, `team`, `file`, `source` |
+| `clickhouse_ruler_source_problem` | gauge | `source`, `check`, `severity`, `file` |
 | `clickhouse_ruler_config_last_reload_successful` | gauge | none |
 | `clickhouse_ruler_config_last_reload_timestamp_seconds` | gauge | none |
 | `clickhouse_ruler_query_read_rows_total` | counter | `rule`, `team`, `source` |
@@ -138,6 +171,19 @@ series per rule.
 | `clickhouse_ruler_query_concurrency` | gauge | none |
 | `clickhouse_ruler_queries_in_flight` | gauge | none |
 | `clickhouse_ruler_build_info` | gauge | `version`, `revision`, `goversion` |
+
+The two problem gauges are the only metrics here not addressed to whoever
+operates the ruler, and the only ones worth reading by their labels rather than
+their value. `clickhouse_ruler_problem` is a rule that broke after it merged, so
+it carries the `team` that owns it and the `file` to edit, the `check` names the
+page explaining the finding, and `source` is the cluster it was found against, so
+a rule broken on one of four clusters does not read like a rule broken on all
+four. `clickhouse_ruler_source_problem` is the
+operator's half: a source whose ClickHouse user no longer meets the contract the
+checks rely on. Both are rebuilt from each pass rather than incremented, so a
+series that disappears is somebody fixing something.
+[Operations](operations.md#a-rule-that-broke-while-running) has the whole of how
+to read them, including what clears them and what does not.
 
 `clickhouse_ruler_build_info` is always 1 and exists for its labels: it says
 which build each replica is running, which matters during a rollout that only
@@ -179,9 +225,11 @@ right now. Those two are `prometheus_engine_queries_concurrent_max` and
 `prometheus_engine_queries` under another prefix.
 
 `clickhouse_ruler_annotation_failures_total` is separate from the evaluation failures on
-purpose: an annotation that will not render still pages, carrying the template
-error in place of the annotation, so it is the rule author's bug rather than a
-failed evaluation.
+purpose: an annotation that will not render still pages, carrying a marker in
+place of the annotation and the template error in `ruler_error` beside it, so it
+is the rule author's bug rather than a failed evaluation. It counts how often
+that happened; whether the rule is still broken is
+`clickhouse_ruler_problem{check="annotations/template"}`.
 
 Two are worth alerting on. `clickhouse_ruler_rule_group_iterations_missed_total` rising
 means an evaluation took longer than its group interval, so alerts are silently
