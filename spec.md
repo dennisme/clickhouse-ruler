@@ -251,31 +251,43 @@ That is the property we are copying. Everything else follows from it.
    separately from reload, and whether the answer is per-file tolerance, a
    narrower fixed-at-error list, or an operator flag that is off by default.
 
-6. **How a merged rule reaches a running ruler.** Open, and a hole in the chain
-   rather than in the design. A rule's life is pull request, approval, deployment,
-   running, alert sent, and four of those five are specified and documented. The
-   deployment step is not: nothing says how a merged rule file gets onto the disk
-   the ruler reads, who sends the `SIGHUP`, or how long a fix takes to reach a
-   page. 10.2 names the topologies and 7.6 says in detail what a reload refuses,
-   and neither says what causes one. It is the first question an author asks after
-   merging a fix.
+6. **How a merged rule reaches a running ruler.** Decided, and what is left is
+   artifacts. A rule's life is pull request, approval, deployment, running, alert
+   sent, and the deployment step was the one nothing specified: how a merged rule
+   file gets onto the disk the ruler reads, what sends the `SIGHUP`, and how long
+   a fix takes to reach a page. 10.2 now answers all three. A sidecar delivers the
+   files and triggers the reload, the ruler watches nothing, and the lag is the
+   sidecar's sync period plus one reload.
 
-   What is missing is artefacts rather than prose. A Helm chart, so the answer to
-   "how do I run this" is a command rather than a paragraph, and deployment
-   examples beside it: a git-sync sidecar writing the rules directory with
-   something sending the signal, a ConfigMap mount for a small estate, and the
-   compose stack this repository already runs as the local case. Whichever the
-   chart ships as its default is the one the manual then documents, which is why
-   this is not a documentation task.
+   The artifacts are still owed. A Helm chart, so the answer to "how do I run
+   this" is a command rather than a paragraph, and deployment examples beside it:
+   the git-sync sidecar 10.2 chose as the default, a ConfigMap mount for a small
+   estate, and the compose stack this repository already runs as the local case.
+   The chart is also what proves the decision, because a symlinked rules root and
+   a ConfigMap mount are both layouts the loader has to read exactly once.
 
-   Two smaller things on the same chain. There is no CI example that gates a
-   merge: `docs/running.md` shows `ruler check --online --summary` and the cost
-   table as a pull request comment, and nothing shows `ruler check` as a required
-   status or what `--format=github` renders as in the diff. And nothing says what
-   the lag between a merged fix and a clean page is: for `annotations/template` it
-   is one group interval plus an alert firing on the source that broke, which is
-   two facts neither page states, where the equivalent for `rule/attribute-key` is
-   spelled out in 10.4.
+   One smaller thing on the same chain, and it belongs to 7 below rather than
+   here: there is no CI example that gates a merge. `docs/running.md` shows
+   `ruler check --online --summary` and the cost table as a pull request comment,
+   and nothing shows `ruler check` as a required status or what `--format=github`
+   renders as in the diff.
+
+7. **Nothing in this repository runs the action.** Open, and a gap between a
+   decided design and a shipped one. 7.1 chose a composite action in `action/`
+   consumed as `dennisme/clickhouse-ruler/action@v1`, and 10.3 settled its
+   wiring down to checksum verification, tag discipline, permissions and the
+   JSON feed behind the summary comment. The binary half of that is built:
+   `ruler check --format=github` emits the workflow commands GitHub renders on
+   a diff. The rest is not. There is no `action/` directory, no
+   `--changed-since` for the changed-file expansion 10.3 puts in the binary,
+   and no JSON output for the comment to read.
+
+   What is missing beyond the action itself is something that exercises it here.
+   A rules directory of fixtures, some deliberately failing, and a workflow
+   running the action against them when those files or the checker change, so
+   the wiring is regression-tested rather than described. Without it the first
+   run of `@v1` is in a consumer's repository, and a green build in this one
+   says nothing about whether the action works.
 
 ---
 

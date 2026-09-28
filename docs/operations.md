@@ -474,6 +474,13 @@ from the outside: the rules that are loaded evaluate, they fire, they deliver.
 What is wrong is that they are not the rules in your repository, and nothing
 else says so.
 
+**It is also a hazard ahead of the next restart.** The files a reload refuses
+are files the ruler refuses to start on, and `/-/ready` keeps passing in the
+meantime, because rules are loaded and a source answers. So the process survives
+until something restarts it for a reason that has nothing to do with rules, a
+drained node, an eviction, a new image, and then it does not come back. Treat
+this gauge as urgent on a fleet that reschedules on its own.
+
 The reason is on stderr, with the file and line of every finding. Fix the file
 and send another `SIGHUP`; the gauge returns to 1 on the first load that
 succeeds. On a dashboard both of these are *Configuration reload* on

@@ -343,6 +343,40 @@ and are what the code comments cite.
   a configuration anybody wrote down. Series for a group or rule the reload
   dropped are deleted, since a counter left at its last value is
   indistinguishable from a rule that is loaded and quiet. See 7.6, 8.2.
+- **A sidecar delivers the rules and triggers the reload, and the default is
+  `git-sync`.** The ruler exposes a trigger and owns no delivery, which is what
+  Prometheus and vmalert both settled on and why the watching in that ecosystem
+  lives in `prometheus-config-reloader` rather than in the server. `git-sync`
+  earns the default by solving atomicity for free: it clones into a worktree and
+  flips a symlink at the rules path, so the tree is never read half written, and
+  its exec hook runs after each successful sync, which is the thing that posts to
+  `/-/reload`. A ConfigMap mount is the small-estate case and has no hook, so it
+  needs a reloader sidecar of its own. Both layouts put the loader in front of a
+  symlink, which is why reading each of them exactly once is a property the
+  loader owes rather than a detail of a chart. See 10.2.
+- **In-process `inotify` is rejected, and interval polling is the option held in
+  reserve.** A watcher inside the ruler would have to watch the directory rather
+  than the file, because a ConfigMap mount updates by flipping a `..data`
+  symlink and a watch on a path sees nothing; events are dropped on overlayfs and
+  over NFS, so it would need a periodic resync anyway, which is why even the
+  dedicated reloaders poll alongside their watch; a single logical change arrives
+  as a burst needing debounce; and all of it buys back the one property the
+  signal has, that whoever rolled the files out says when they are complete. If
+  the ruler ever reloads itself, it polls on an interval and compares a hash
+  first, the way Prometheus and vmalert both offer and neither enables by
+  default. The hash is not an optimisation: a reload re-checks the user contract
+  and issues statements per source, so a tick that reloaded unconditionally would
+  put rule traffic on every cluster for a file nobody edited. See 6.7.3, 10.2.
+- **A reload tolerates what a start refuses, and a start stays strict.** The same
+  files that keep the previous version running on a reload refuse to start the
+  process, which makes a refused reload a hazard ahead of the next restart rather
+  than only a stale configuration: the ruler survives on the version it already
+  had, `/-/ready` keeps passing because rules are loaded and a source answers, and
+  the replica is lost the next time anything unrelated restarts it. The
+  asymmetry is deliberate in both directions. Tolerating a bad reading at startup
+  would mean a process that is up, failing readiness and paging nobody, and
+  refusing to reload is the only way to keep a valid configuration running when
+  the one on disk is not. See 7.6, 8.1.
 - **A reload re-checks the user contract.** 6.7.3 lists three places the
   contract is checked and a reload is one of them, so this is the decision to
   honour it rather than to make. The argument for doing it is the window 6.7.3

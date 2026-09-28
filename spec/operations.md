@@ -1181,6 +1181,49 @@ its alert instances staying distinct per source; that is settled, because
 `source` is part of an alert's label set and therefore of its fingerprint
 (6.3).
 
+#### How a merged rule reaches the ruler
+
+Every topology above assumes the rules are on a disk the ruler can read, and
+that something asks it to re-read them. That is the deployment step, and a rule
+author's first question after merging a fix is when it starts running.
+
+**The watching belongs outside the ruler.** Section 10 says hot reload is
+`SIGHUP` and nothing else, and the references agree. Prometheus reloads on a
+signal, serves `/-/reload` only when started with `--web.enable-lifecycle`, and
+offers polling as an interval it does not enable by default; vmagent and vmalert
+are the same shape, down to a `configCheckInterval` that is off unless asked
+for. Neither watches its files. What watches, in both ecosystems, is a sidecar:
+`prometheus-config-reloader` and `configmap-reload` follow the mounted directory
+and then call the reload endpoint. So the ruler's job is to expose a trigger,
+and the platform's job is to pull the files and pull the trigger.
+
+**The default is `git-sync` with its exec hook.** It clones the rules
+repository into a worktree and flips a symlink at the rules path, so the swap is
+atomic and the ruler cannot read a tree half written, which is the objection
+that ruled out a watcher in the first place. It then runs an exec hook after
+each successful sync, and that hook posts to `/-/reload`, served when the ruler
+runs with `--enable-reload-endpoint` (8.1). Nothing new is needed on our side.
+
+The chain is then pull request, merge, sync, symlink flip, hook, reload, and the
+lag is the sync period plus one reload. Every link is observable from outside:
+`clickhouse_ruler_config_last_reload_timestamp_seconds` dates the configuration
+running, and `clickhouse_ruler_config_last_reload_successful` says whether the
+last attempt was refused (8.2).
+
+**A ConfigMap mount is the small-estate case**, for an estate whose rules fit in
+one object and whose authors are the operators. There is no exec hook there, so
+it needs a reloader sidecar watching the mount, and kubelet's own atomicity
+comes from the same trick: the real files sit in a timestamped directory, `..data`
+is a symlink to it, and each file at the root is a symlink through `..data`.
+
+Which is the part that constrains the loader rather than the chart. Both
+layouts hand the ruler a rules path built out of symlinks, and both have to load
+their rules exactly once: a symlinked root that is walked without being resolved
+finds no rule files at all, and a mount walked without skipping `..*` finds
+every rule twice and reports each as a duplicate of itself. The compose stack
+this repository already runs is the third case and the simplest, a real
+directory and a signal.
+
 #### Running more than one ruler
 
 The highly available topology above is worth spelling out, because "mostly
@@ -1314,6 +1357,56 @@ annotations, and the summary comment additionally needs
 token nor secrets, so it cannot run the online checks or post a comment. That
 is correct behaviour, and 7.10 explains why `pull_request_target` is not the
 way around it.
+
+#### The checker in CI and the rulers in the fleet
+
+CI and the ruler run the same validation from the same package (7.1), which
+holds only while they are the same version. Skew has a safe direction and an
+unsafe one, and it is worth stating which is which.
+
+A checker newer than the fleet blocks a rule the rulers would have accepted:
+noisy, and nobody is paged for it. A checker older than the fleet passes a rule
+a ruler then refuses, and because a refused reading refuses a start, that lands
+as a replica that cannot come back. So the requirement is a floor rather than a
+pin to latest: **the checker must be at least as new as the oldest ruler still
+running.** During a rollout two versions are live and the floor is the older of
+them.
+
+The floor is a query rather than a piece of tribal knowledge.
+`clickhouse_ruler_build_info` carries the version as a label, shaped like
+`prometheus_build_info` for exactly this kind of use (8.2), so
+`min by (version) (clickhouse_ruler_build_info)` over the fleet is the number
+the pin has to meet.
+
+Pinning to a floating `latest` satisfies the safe direction always, and the
+reason not to is churn: a release that adds a check turns every open pull
+request red without anyone touching a rule. So the version is pinned, and the
+pin belongs to whoever upgrades the rulers. A reusable workflow wrapping the
+composite action puts it there: consumers call the workflow, the platform owns
+the file the version is written in, and upgrading the fleet is one edit in a
+repository the platform already has. Rule authors never hold the number.
+
+#### What to require on a rules repository
+
+Guidance rather than code, and it belongs in the spec because two of the three
+are the mitigation for failures named elsewhere in this document.
+
+**Require branches to be up to date before merging**, or a merge queue once
+that serialises too much. This is what catches two pull requests that are each
+green against the base and not green together, which `rule/duplicate-alert`,
+`rule/source-match` and `ruleset/directory` can all produce because they are
+findings about a pair or a tree rather than a file (7.3).
+
+**The required status must not be filtered by path.** A workflow skipped by a
+`paths` filter reports no status at all, and a required status that never
+reports blocks every pull request. In a rules repository there is nothing worth
+filtering anyway.
+
+**`CODEOWNERS` on the sources file**, which carries addresses, credentials and
+caps and which no rule author needs to read (6.2). Not on `ruler.yaml`: policy
+merges as a maximum, severities take the strictest and allowlists intersect
+(7.7), so a team file cannot loosen what the instance set and a guard there
+would protect nothing.
 
 ### 10.4 Reporting rules that broke while running
 
