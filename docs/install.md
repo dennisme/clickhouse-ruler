@@ -146,8 +146,45 @@ helm install ruler oci://ghcr.io/dennisme/charts/clickhouse-ruler \
 So `--version 1.2.3` installs the chart that runs the `1.2.3` image, and one
 number answers which of either is deployed. It runs the ruler with a git-sync
 sidecar by default, which is what delivers the rules and asks the ruler to
-re-read them. [How a rule reaches the ruler](deployment.md#how-a-rule-reaches-the-ruler)
-covers what the chart decides and what it leaves to you.
+re-read them.
+
+Three things have no default, so `my-values.yaml` is at least this:
+
+```yaml
+alertmanagerURL: http://alertmanager.monitoring:9093
+
+rules:
+  gitSync:
+    repo: https://github.com/your-org/alert-rules
+
+sources:
+  - name: traces
+    address: clickhouse.data:9000
+    database: otel
+    username: ruler
+    passwordSecret:
+      name: ruler-clickhouse
+      key: password
+    table: otel_traces
+    timestamp_column: Timestamp
+```
+
+The password is the one field that is not a value: create the Secret it names
+first, and nothing in the file you are reviewing holds a credential.
+
+```sh
+kubectl create secret generic ruler-clickhouse \
+  --namespace monitoring --from-literal=password='...'
+```
+
+A complete values file per delivery lives in
+[`deploy/examples`](https://github.com/dennisme/clickhouse-ruler/tree/main/deploy/examples),
+fetched rather than referenced by path, since the chart comes from a registry
+and those files are in the repository.
+[How a rule reaches the ruler](deployment.md#how-a-rule-reaches-the-ruler)
+covers what the chart decides and what it leaves to you, and
+[what the chart does for an operator](deployment.md#what-the-chart-does-for-an-operator)
+covers scraping, the grace period and what a drain may take.
 
 ## What is not here
 

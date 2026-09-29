@@ -13,9 +13,15 @@ answer is a command:
 kubectl create secret generic ruler-clickhouse \
   --namespace monitoring --from-literal=password='...'
 
+curl -sSLO https://raw.githubusercontent.com/dennisme/clickhouse-ruler/main/deploy/examples/git-sync.yaml
+
 helm install ruler oci://ghcr.io/dennisme/charts/clickhouse-ruler \
-  --namespace monitoring --values deploy/examples/git-sync.yaml
+  --namespace monitoring --values git-sync.yaml
 ```
+
+The values file is fetched rather than referenced, because the chart comes from
+a registry and the examples live in the repository. Read it before installing
+with it: it names a rules repository and a ClickHouse that are not yours.
 
 The chart version is the tool version, so `--version 1.2.3` installs the chart
 that runs the `1.2.3` image.
@@ -71,6 +77,57 @@ There is a second path for the "ruler as a service" topology below, where the
 sources file is the platform team's own artifact rather than something to
 restate in values: `sourcesSecret` names a Secret holding the whole file, and
 the chart templates none of it. Setting both is refused.
+
+### What the chart does for an operator
+
+**Nothing scrapes the ruler until you say so.** Every expression on
+[the operations page](operations.md) reads `/metrics`, and the chart cannot
+know how your Prometheus finds its targets. Set `serviceMonitor.enabled` where
+the Prometheus Operator runs, which templates a `ServiceMonitor` with an
+interval, a timeout and relabelings you can set. It is off by default because
+that kind comes from the operator's CRDs: rendering it where they are not
+installed fails the whole install over an object the ruler does not need in
+order to run. The install notes say so while it is off.
+
+No alerting rules ship. The thresholds on the operations page are written next
+to the reasoning for each of them, and an alert file carrying the numbers
+without the argument is one somebody silences at 3am and never turns back on.
+
+**The pod is allowed to stop the way the ruler expects to.**
+`terminationGracePeriodSeconds` is derived from `ruler.shutdownTimeoutSeconds`
+rather than left at Kubernetes' default, which happens to be the same 30
+seconds the ruler spends draining: on those two defaults `SIGKILL` lands
+exactly as the drain ends, the in-flight evaluation is cut off anyway, and the
+warning that reports it may never be written. Raise the timeout for a slow
+evaluation and the grace period follows it. Set `--shutdown-timeout` through
+`ruler.extraArgs` instead and it does not.
+
+**A disruption budget is how a drain stops costing you a page.** A restart
+sends every pending alert back through its full `for`, so a drain that takes
+all the replicas at once loses the thing running several of them was for; see
+[what a restart loses](operations.md#what-a-restart-loses). Set
+`podDisruptionBudget.enabled` with either `minAvailable` or `maxUnavailable`,
+not both. It is off by default, and a `minAvailable` at or above
+`replicaCount` is refused at render, because a budget that permits no eviction
+blocks node maintenance rather than shaping it.
+
+`priorityClassName` is the same argument one level down: the component that
+tells you about an outage is a poor first choice for eviction under node
+pressure. The chart carries the field and sets nothing, because the class names
+are your cluster's.
+
+**An upgrade is a restart, and a restart has a price.** `helm upgrade` rolls
+the pods whenever it changes the pod template, which a new image, a new source
+or an edited policy all do, and every replacement pod starts with no alert
+state: each pending alert serves its full `for` again, and a condition that
+clears inside that second `for` never pages at all.
+[What a restart loses](operations.md#what-a-restart-loses) has the whole of it,
+including why a firing alert survives a short roll and not a long one. Two
+consequences for how you drive the chart. Do not upgrade during an incident you
+are relying on the ruler to tell you about. And a rule change is not an upgrade:
+the rule files are deliberately outside the checksums that roll the pods, so a
+merge reaches a running ruler through a reload, which keeps the state a roll
+would throw away.
 
 ## One ruler, one cluster
 
