@@ -1,0 +1,50 @@
+# The default topology: a git-sync sidecar clones the rules repository, flips a
+# symlink at the rules path, and its exec hook posts to /-/reload.
+#
+#   kubectl create secret generic ruler-clickhouse \
+#     --namespace monitoring --from-literal=password='...'
+#
+#   helm install ruler oci://ghcr.io/dennisme/charts/clickhouse-ruler \
+#     --namespace monitoring --values deploy/examples/git-sync.yaml
+#
+# A merged rule starts running one sync period plus one reload later, so with
+# the period below that is under a minute. Nothing watches the filesystem: the
+# hook is what asks, and the symlink flip is what makes the tree safe to read.
+
+alertmanagerURL: http://alertmanager.monitoring:9093
+
+rules:
+  delivery: git-sync
+  # Rule files live under rules/ in the repository. The ruler is pointed at the
+  # symlink plus this, so it reads /rules/current/rules.
+  subdirectory: rules
+  gitSync:
+    repo: https://github.com/example/alert-rules
+    ref: main
+    # Half the lag between a merge and a page. The other half is one reload.
+    period: 30s
+
+# Source fields are reviewable configuration and live here. The password does
+# not: it is a path into the Secret created above, and no value in this file
+# holds one.
+sources:
+  - name: traces
+    labels:
+      region: eu-west
+    address: clickhouse.data.svc.cluster.local:9000
+    database: otel
+    username: ruler
+    passwordSecret:
+      name: ruler-clickhouse
+      key: password
+    table: otel_traces
+    timestamp_column: Timestamp
+    # How far behind now a window ends, which absorbs late-arriving rows.
+    evaluation_delay: 1m
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    memory: 512Mi

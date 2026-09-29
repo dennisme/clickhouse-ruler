@@ -1,0 +1,27 @@
+# The default delivery, with a password read out of a mounted Secret.
+alertmanagerURL: http://alertmanager.monitoring:9093
+rules:
+  delivery: git-sync
+  subdirectory: rules
+  gitSync:
+    repo: git@github.com:example/alert-rules.git
+    ref: main
+    period: 30s
+    credentialsSecret: rules-repo-ssh
+    extraArgs:
+      - --ssh
+      - --ssh-key-file=/etc/git-secret/ssh
+sources:
+  - name: traces_eu
+    labels:
+      region: eu-west
+    address: clickhouse-eu.data:9000
+    database: otel
+    username: ruler
+    passwordSecret:
+      name: ruler-clickhouse
+      key: password
+    table: otel_traces
+    timestamp_column: Timestamp
+    evaluation_delay: 1m
+    max_rows: 10000

@@ -1,0 +1,54 @@
+# The small-estate topology: rules fit in one ConfigMap and the people writing
+# them are the people operating the ruler.
+#
+#   kubectl create configmap alert-rules \
+#     --namespace monitoring --from-file=rules/
+#
+#   helm install ruler oci://ghcr.io/dennisme/charts/clickhouse-ruler \
+#     --namespace monitoring --values deploy/examples/configmap.yaml
+#
+# A ConfigMap mount has no exec hook, so nothing here would ever ask the ruler
+# to re-read its files. That is what the reloader sidecar below is for: it
+# watches the mount and posts to /-/reload, the same endpoint git-sync's hook
+# calls in the other example. Without it, editing the ConfigMap changes the
+# files on disk and the ruler keeps evaluating what it loaded at startup.
+#
+# kubelet updates the mount by flipping a `..data` symlink rather than writing
+# the files in place, which is why the update is atomic and why the ruler reads
+# such a directory exactly once.
+
+alertmanagerURL: http://alertmanager.monitoring:9093
+
+rules:
+  delivery: configMap
+  # A ConfigMap is flat, so the rule files sit at the root of the mount.
+  subdirectory: ""
+  configMap:
+    name: alert-rules
+
+sources:
+  - name: traces
+    address: clickhouse.data.svc.cluster.local:9000
+    database: otel
+    username: ruler
+    passwordSecret:
+      name: ruler-clickhouse
+      key: password
+    table: otel_traces
+    timestamp_column: Timestamp
+
+extraContainers:
+  - name: reloader
+    image: ghcr.io/jimmidyson/configmap-reload:v0.15.0
+    args:
+      - --volume-dir=/etc/clickhouse-ruler/rules
+      - --webhook-url=http://127.0.0.1:9090/-/reload
+    securityContext:
+      allowPrivilegeEscalation: false
+      capabilities:
+        drop: ["ALL"]
+      readOnlyRootFilesystem: true
+    volumeMounts:
+      - name: rules
+        mountPath: /etc/clickhouse-ruler/rules
+        readOnly: true

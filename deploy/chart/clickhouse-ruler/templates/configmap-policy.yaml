@@ -1,0 +1,11 @@
+{{- if .Values.policy }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "clickhouse-ruler.fullname" . }}-policy
+  labels:
+    {{- include "clickhouse-ruler.labels" . | nindent 4 }}
+data:
+  ruler.yaml: |
+    {{- .Values.policy | nindent 4 }}
+{{- end }}

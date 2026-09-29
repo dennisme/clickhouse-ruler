@@ -81,3 +81,33 @@ dockers_v2:
       "org.opencontainers.image.created": "{{ .Date }}"
       "org.opencontainers.image.revision": "{{ .FullCommit }}"
       "org.opencontainers.image.version": "{{ .Version }}"
+
+# The chart ships as an OCI artifact to the registry the image is already in,
+# pushed from the same tag so the chart version is the tool version (spec 10.2).
+# It lands at ghcr.io/dennisme/charts/clickhouse-ruler rather than beside the
+# image's own tags, because a chart and an image sharing one repository share
+# one tag namespace.
+#
+# The packaging and the push are steps in .github/workflows/goreleaser.yaml.
+# goreleaser has no chart step, and its `publishers` run once per artifact rather
+# than once per release, so `helm push` here would push the same chart once per
+# binary. Chart.yaml's committed version is a placeholder; the tag is the only
+# real one.
+
+# Appended after the generated changelog on the GitHub Release, because a
+# release that builds a chart and does not say so leaves the answer to "how do I
+# run this" in the repository rather than in the release.
+release:
+  footer: |
+    ---
+
+    **Container image:** `ghcr.io/dennisme/clickhouse-ruler:{{ .Tag }}`
+
+    **Helm (OCI):**
+    ```
+    helm upgrade --install ruler oci://ghcr.io/dennisme/charts/clickhouse-ruler \
+      --version {{ .Version }} --namespace monitoring --create-namespace \
+      --values deploy/examples/git-sync.yaml
+    ```
+
+    **Docs:** https://dennisme.github.io/clickhouse-ruler/

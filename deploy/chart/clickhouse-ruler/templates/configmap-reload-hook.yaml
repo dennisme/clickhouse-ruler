@@ -1,0 +1,21 @@
+{{- if eq .Values.rules.delivery "git-sync" }}
+{{/*
+git-sync's exec hook. It runs after each successful sync, with no arguments, so
+the command has to be a script on disk rather than a flag carrying one.
+
+--fail makes a reload the ruler refused a failed hook, which git-sync then
+retries on its backoff. That is deliberate: a refusal leaves the previous
+configuration running, and a hook that reported success would hide it.
+*/}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "clickhouse-ruler.fullname" . }}-reload-hook
+  labels:
+    {{- include "clickhouse-ruler.labels" . | nindent 4 }}
+data:
+  reload.sh: |
+    #!/bin/sh
+    exec curl --silent --show-error --fail --max-time 30 \
+      -XPOST http://127.0.0.1:{{ .Values.ruler.port }}/-/reload
+{{- end }}

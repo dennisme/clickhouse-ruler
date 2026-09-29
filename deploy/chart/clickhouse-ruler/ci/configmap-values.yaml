@@ -1,0 +1,26 @@
+# A ConfigMap mount with a reloader sidecar, since there is no exec hook here.
+alertmanagerURL: http://alertmanager.monitoring:9093
+rules:
+  delivery: configMap
+  subdirectory: ""
+  configMap:
+    name: alert-rules
+sources:
+  - name: traces
+    address: clickhouse.data:9000
+    database: otel
+    username: ruler
+    passwordSecret:
+      name: ruler-clickhouse
+    table: otel_traces
+    timestamp_column: Timestamp
+extraContainers:
+  - name: reloader
+    image: ghcr.io/jimmidyson/configmap-reload:v0.15.0
+    args:
+      - --volume-dir=/etc/clickhouse-ruler/rules
+      - --webhook-url=http://127.0.0.1:9090/-/reload
+    volumeMounts:
+      - name: rules
+        mountPath: /etc/clickhouse-ruler/rules
+        readOnly: true

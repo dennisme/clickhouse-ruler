@@ -621,6 +621,10 @@ absent, not merely refused, unless the flag is set, and there is no rule create,
 update or delete endpoint at any time: the caller supplies nothing here, it only
 says when to read the disk.
 
+The Helm chart sets the flag, because its default delivery is a sidecar's exec
+hook and a hook cannot signal another container. See
+[how a rule reaches the ruler](deployment.md#how-a-rule-reaches-the-ruler).
+
 A reload is all or nothing. Every way it can fail leaves the ruler evaluating
 exactly what it was evaluating before the signal, and raises the refused-reload
 gauge above.

@@ -1,0 +1,13 @@
+# The smallest set of values that renders: Alertmanager, a repository, one
+# source with no password.
+alertmanagerURL: http://alertmanager.monitoring:9093
+rules:
+  gitSync:
+    repo: https://github.com/example/alert-rules
+sources:
+  - name: traces
+    address: clickhouse.data:9000
+    database: otel
+    username: ruler
+    table: otel_traces
+    timestamp_column: Timestamp

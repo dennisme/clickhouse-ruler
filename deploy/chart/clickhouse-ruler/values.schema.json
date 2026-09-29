@@ -1,0 +1,383 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "title": "clickhouse-ruler values",
+  "description": "Validated at render time, so a bad install fails before a pod boots.",
+  "type": "object",
+  "required": [
+    "image",
+    "replicaCount",
+    "alertmanagerURL",
+    "ruler",
+    "rules"
+  ],
+  "properties": {
+    "image": {
+      "type": "object",
+      "required": [
+        "repository",
+        "pullPolicy"
+      ],
+      "properties": {
+        "repository": {
+          "type": "string",
+          "minLength": 1
+        },
+        "tag": {
+          "type": "string"
+        },
+        "pullPolicy": {
+          "enum": [
+            "Always",
+            "IfNotPresent",
+            "Never"
+          ]
+        }
+      }
+    },
+    "imagePullSecrets": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "replicaCount": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "nameOverride": {
+      "type": "string",
+      "maxLength": 63
+    },
+    "fullnameOverride": {
+      "type": "string",
+      "maxLength": 63
+    },
+    "alertmanagerURL": {
+      "type": "string",
+      "pattern": "^https?://.+",
+      "description": "Alertmanager base URL. Required, and the ruler refuses to start without it."
+    },
+    "ruler": {
+      "type": "object",
+      "required": [
+        "port",
+        "logLevel"
+      ],
+      "properties": {
+        "port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        },
+        "logLevel": {
+          "enum": [
+            "debug",
+            "info",
+            "warn",
+            "error"
+          ]
+        },
+        "extraArgs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "rules": {
+      "type": "object",
+      "required": [
+        "delivery"
+      ],
+      "properties": {
+        "delivery": {
+          "enum": [
+            "git-sync",
+            "configMap"
+          ]
+        },
+        "subdirectory": {
+          "type": "string"
+        },
+        "configMap": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string"
+            }
+          }
+        },
+        "gitSync": {
+          "type": "object",
+          "properties": {
+            "image": {
+              "type": "object",
+              "required": [
+                "repository",
+                "tag"
+              ],
+              "properties": {
+                "repository": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "tag": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "pullPolicy": {
+                  "enum": [
+                    "Always",
+                    "IfNotPresent",
+                    "Never"
+                  ]
+                }
+              }
+            },
+            "repo": {
+              "type": "string"
+            },
+            "ref": {
+              "type": "string",
+              "minLength": 1
+            },
+            "period": {
+              "type": "string",
+              "pattern": "^[0-9]+(ms|s|m|h)$"
+            },
+            "depth": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "credentialsSecret": {
+              "type": "string"
+            },
+            "extraArgs": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "resources": {
+              "type": "object"
+            },
+            "securityContext": {
+              "type": "object"
+            }
+          }
+        }
+      },
+      "description": "How rule files reach the ruler. Which of gitSync.repo and configMap.name is required follows from delivery, and the template names the missing one."
+    },
+    "sources": {
+      "type": "array",
+      "description": "Templated into the sources file. No entry may carry a password.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name",
+          "address",
+          "database",
+          "username",
+          "table",
+          "timestamp_column"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "labels": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "address": {
+            "type": "string",
+            "minLength": 1
+          },
+          "database": {
+            "type": "string",
+            "minLength": 1
+          },
+          "username": {
+            "type": "string",
+            "minLength": 1
+          },
+          "passwordSecret": {
+            "type": "object",
+            "required": [
+              "name"
+            ],
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1
+              },
+              "key": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          },
+          "table": {
+            "type": "string",
+            "minLength": 1
+          },
+          "timestamp_column": {
+            "type": "string",
+            "minLength": 1
+          },
+          "evaluation_delay": {
+            "type": "string",
+            "pattern": "^[0-9]+(ms|s|m|h)$"
+          },
+          "max_rows": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "max_execution_time": {
+            "type": "string",
+            "pattern": "^[0-9]+(ms|s|m|h)$"
+          },
+          "max_memory_usage": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "max_concurrent_queries": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "checks": {
+            "type": "object"
+          },
+          "exempt": {
+            "type": "object"
+          }
+        }
+      }
+    },
+    "sourcesSecret": {
+      "type": "object",
+      "required": [
+        "key"
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "key": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "policy": {
+      "type": "string"
+    },
+    "extraContainers": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "extraVolumes": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "extraVolumeMounts": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "service": {
+      "type": "object",
+      "required": [
+        "type",
+        "port"
+      ],
+      "properties": {
+        "type": {
+          "enum": [
+            "ClusterIP",
+            "NodePort",
+            "LoadBalancer"
+          ]
+        },
+        "port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        },
+        "annotations": {
+          "type": "object"
+        }
+      }
+    },
+    "serviceAccount": {
+      "type": "object",
+      "required": [
+        "create"
+      ],
+      "properties": {
+        "create": {
+          "type": "boolean"
+        },
+        "name": {
+          "type": "string"
+        },
+        "annotations": {
+          "type": "object"
+        }
+      }
+    },
+    "resources": {
+      "type": "object"
+    },
+    "readinessProbe": {
+      "type": "object"
+    },
+    "livenessProbe": {
+      "type": "object"
+    },
+    "podSecurityContext": {
+      "type": "object"
+    },
+    "securityContext": {
+      "type": "object"
+    },
+    "podAnnotations": {
+      "type": "object"
+    },
+    "podLabels": {
+      "type": "object"
+    },
+    "nodeSelector": {
+      "type": "object"
+    },
+    "tolerations": {
+      "type": "array"
+    },
+    "affinity": {
+      "type": "object"
+    },
+    "topologySpreadConstraints": {
+      "type": "array"
+    }
+  }
+}

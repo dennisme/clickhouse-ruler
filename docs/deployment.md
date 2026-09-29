@@ -3,6 +3,75 @@
 Five ways to run this, all the same binary with a different sources file.
 Which one you want depends on who owns the clusters and who writes the rules.
 
+## How a rule reaches the ruler
+
+The topologies below all assume the rules are on a disk the ruler can read and
+that something asks it to re-read them. That is the Helm chart's job, and the
+answer is a command:
+
+```sh
+kubectl create secret generic ruler-clickhouse \
+  --namespace monitoring --from-literal=password='...'
+
+helm install ruler oci://ghcr.io/dennisme/charts/clickhouse-ruler \
+  --namespace monitoring --values deploy/examples/git-sync.yaml
+```
+
+The chart version is the tool version, so `--version 1.2.3` installs the chart
+that runs the `1.2.3` image.
+
+**The ruler watches nothing.** Hot reload is `SIGHUP`, and `POST /-/reload`
+where a signal cannot be delivered. Whatever rolled the files out is the only
+party that knows when they are complete, so the watching lives beside the ruler
+rather than inside it. The chart runs the ruler with
+`--enable-reload-endpoint`, which the binary does not do by default.
+
+**git-sync is the default delivery.** A sidecar clones the rules repository
+into a worktree and flips a symlink at the rules path, so the ruler cannot read
+a tree half written, and its exec hook posts to `/-/reload` after each
+successful sync. The chain is merge, sync, symlink flip, hook, reload, and the
+lag is the sync period plus one reload.
+
+The chart points the ruler at the symlink plus `rules.subdirectory`, which with
+the defaults is `/rules/current/rules`. An init container syncs once before the
+ruler's first load, because the ruler refuses to start on a rules path it cannot
+read and an empty volume is one.
+
+[`deploy/examples/git-sync.yaml`](https://github.com/dennisme/clickhouse-ruler/blob/main/deploy/examples/git-sync.yaml)
+is that topology as a values file.
+
+**A ConfigMap mount is the small-estate case**, for an estate whose rules fit in
+one object and whose authors are its operators. There is no exec hook there, so
+the mount needs a reloader sidecar of its own, which
+[`deploy/examples/configmap.yaml`](https://github.com/dennisme/clickhouse-ruler/blob/main/deploy/examples/configmap.yaml)
+supplies. Without one, editing the ConfigMap changes the files and the ruler
+keeps evaluating what it loaded at startup.
+
+Both layouts hand the ruler a rules path built out of symlinks: git-sync's
+`--link`, and kubelet's `..data`. The loader reads each of them exactly once.
+
+**Two series say what is actually running.**
+`clickhouse_ruler_config_last_reload_successful` at 0 means the ruler read the
+new files, refused them, and kept the ones it had, which looks healthy from the
+outside and is not. It is also a hazard ahead of the next restart, because files
+a reload refuses are files the ruler refuses to start on. See
+[a reload the ruler refused](operations.md#a-reload-the-ruler-refused). Its pair,
+`clickhouse_ruler_config_last_reload_timestamp_seconds`, dates the configuration
+being evaluated.
+
+### What the chart holds and what it references
+
+A source's address, database, table, timestamp column, caps and labels are
+reviewable configuration and live in values. Its password does not: it is a
+`password_file` pointing into a mounted Secret, and no value in the chart holds
+one. The values schema refuses a source key the sources file does not have,
+which is how a password in a values file fails at render.
+
+There is a second path for the "ruler as a service" topology below, where the
+sources file is the platform team's own artifact rather than something to
+restate in values: `sourcesSecret` names a Secret holding the whole file, and
+the chart templates none of it. Setting both is refused.
+
 ## One ruler, one cluster
 
 One process, one sources file, one ClickHouse. Sources need no labels at all,

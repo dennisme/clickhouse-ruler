@@ -1,0 +1,191 @@
+# Values for clickhouse-ruler.
+#
+# Two things are required before an install renders: where Alertmanager is, and
+# where the rules come from. Everything else has a default that runs.
+
+# -- Container image carrying the `ruler` binary.
+image:
+  repository: ghcr.io/dennisme/clickhouse-ruler
+  # Empty means the chart's appVersion, which is the tool version the chart was
+  # released with. Pin a tag here to run a different one.
+  tag: ""
+  pullPolicy: IfNotPresent
+
+# Names of Secrets holding registry credentials, for a private mirror of the
+# image above.
+imagePullSecrets: []
+
+# How many rulers run. More than one works by duplication rather than
+# coordination: replicas must carry identical source labels, query load is
+# linear in replicas, and a replica label breaks Alertmanager's
+# deduplication. See docs/deployment.md.
+replicaCount: 1
+
+nameOverride: ""
+fullnameOverride: ""
+
+# Alertmanager to deliver to, for example http://alertmanager.monitoring:9093.
+# Required.
+alertmanagerURL: ""
+
+ruler:
+  # Port the /metrics, /-/healthy, /-/ready and /-/reload surface listens on.
+  # The git-sync exec hook posts to this port on localhost.
+  port: 9090
+  # debug, info, warn or error.
+  logLevel: info
+  # Any further `ruler run` flags, passed through verbatim, for example
+  # ["--recheck-interval=1h"]. The reload endpoint is already on and does not
+  # belong here.
+  extraArgs: []
+
+# How rule files reach the ruler's disk, and what asks it to re-read them. The
+# ruler watches nothing itself (spec 10.2).
+rules:
+  # git-sync  a sidecar clones the rules repository, flips a symlink at the
+  #           rules path, and its exec hook posts to /-/reload. The default,
+  #           because the symlink flip is what stops the ruler reading a tree
+  #           half written.
+  # configMap an existing ConfigMap is mounted. There is no exec hook, so
+  #           nothing reloads unless you add a reloader through
+  #           extraContainers.
+  delivery: git-sync
+
+  # Directory inside the repository, or inside the ConfigMap's mount, holding
+  # the rule files. Empty means the root of either.
+  subdirectory: rules
+
+  configMap:
+    # Name of the ConfigMap holding the rule files. Required when delivery is
+    # configMap.
+    name: ""
+
+  gitSync:
+    image:
+      repository: registry.k8s.io/git-sync/git-sync
+      tag: v4.4.0
+      pullPolicy: IfNotPresent
+    # Repository holding the rule files. Required when delivery is git-sync.
+    repo: ""
+    # Branch, tag or commit to check out.
+    ref: main
+    # How long between sync attempts. This is the first half of the lag
+    # between a merge and a page; the second is one reload.
+    period: 30s
+    # History to fetch. 1 is the current commit and nothing else.
+    depth: 1
+    # Name of a Secret holding git credentials. It is mounted at /etc/git-secret
+    # on the sidecar and nothing else: which of git-sync's credential flags read
+    # it is yours to say in extraArgs, for example
+    # ["--ssh", "--ssh-key-file=/etc/git-secret/ssh"].
+    credentialsSecret: ""
+    # Any further git-sync flags, for example ["--sparse-checkout-file=..."].
+    extraArgs: []
+    resources: {}
+    securityContext:
+      allowPrivilegeEscalation: false
+      capabilities:
+        drop: ["ALL"]
+      # git-sync writes git's own state outside the volume it syncs into, so
+      # its root filesystem is writable where the ruler's is not.
+      readOnlyRootFilesystem: false
+
+# Sources the ruler evaluates against, templated into a sources file. Every
+# field a source takes is reviewable configuration except the password, which
+# is read out of a mounted Secret: no value in this chart holds one.
+#
+# sources:
+#   - name: traces_eu
+#     labels:
+#       region: eu-west
+#     address: clickhouse-eu.data:9000
+#     database: otel
+#     username: ruler
+#     passwordSecret:
+#       name: ruler-clickhouse
+#       key: password
+#     table: otel_traces
+#     timestamp_column: Timestamp
+#     evaluation_delay: 1m
+#     max_rows: 10000
+sources: []
+
+# The other path: a Secret holding the whole sources file, templated by
+# nothing. This is for the topology where the sources file is the platform
+# team's own artifact, owned through CODEOWNERS rather than restated here.
+# Setting this and `sources` together is refused.
+sourcesSecret:
+  name: ""
+  key: sources.yaml
+
+# Policy file contents, mounted as a small object and passed as --config. Empty
+# means no policy file, so every check keeps its default severity.
+#
+# policy: |
+#   checks:
+#     rule/cost: error
+policy: ""
+
+# Further containers in the pod. This is where a reloader sidecar goes when
+# delivery is configMap.
+extraContainers: []
+
+# Further volumes and mounts on the ruler container, for a delivery this chart
+# does not template.
+extraVolumes: []
+extraVolumeMounts: []
+
+service:
+  type: ClusterIP
+  port: 9090
+  annotations: {}
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+resources: {}
+  # requests:
+  #   cpu: 100m
+  #   memory: 128Mi
+  # limits:
+  #   memory: 512Mi
+
+# Readiness fails when no rules are loaded or no source answers, which is what
+# stops a rollout replacing working replicas with broken ones. Liveness only
+# asks whether the process is serving.
+readinessProbe:
+  initialDelaySeconds: 5
+  periodSeconds: 10
+  timeoutSeconds: 3
+  failureThreshold: 3
+livenessProbe:
+  initialDelaySeconds: 15
+  periodSeconds: 20
+  timeoutSeconds: 3
+  failureThreshold: 3
+
+# The image declares a non-numeric user, which kubelet cannot check against
+# runAsNonRoot, so the UID is stated here. 100:101 is the `ruler` user
+# Dockerfile.goreleaser creates.
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 100
+  runAsGroup: 101
+  fsGroup: 101
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop: ["ALL"]
+  readOnlyRootFilesystem: true
+
+podAnnotations: {}
+podLabels: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}
+topologySpreadConstraints: []
