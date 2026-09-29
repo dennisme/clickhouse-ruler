@@ -1,0 +1,47 @@
+# A policy file, three replicas, and two sources sharing one password Secret.
+alertmanagerURL: https://alertmanager.example.com
+replicaCount: 3
+rules:
+  gitSync:
+    repo: https://github.com/example/alert-rules
+    period: 5m
+    depth: 0
+policy: |
+  checks:
+    rule/cost: error
+    rule/annotations: warn
+ruler:
+  logLevel: debug
+  extraArgs:
+    - --recheck-interval=1h
+sources:
+  - name: traces
+    labels:
+      region: eu-west
+    address: clickhouse-a.data:9000
+    database: otel
+    username: ruler
+    passwordSecret:
+      name: ruler-clickhouse
+      key: password
+    table: otel_traces
+    timestamp_column: Timestamp
+  - name: logs
+    labels:
+      region: eu-west
+    address: clickhouse-b.data:9000
+    database: otel
+    username: ruler
+    passwordSecret:
+      name: ruler-clickhouse
+      key: password
+    table: otel_logs
+    timestamp_column: Timestamp
+    max_execution_time: 30s
+topologySpreadConstraints:
+  - maxSkew: 1
+    topologyKey: kubernetes.io/hostname
+    whenUnsatisfiable: ScheduleAnyway
+    labelSelector:
+      matchLabels:
+        app.kubernetes.io/name: clickhouse-ruler

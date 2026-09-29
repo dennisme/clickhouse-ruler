@@ -1,0 +1,6 @@
+.DS_Store
+.git/
+.gitignore
+*.tgz
+# Values used only to render the chart in CI.
+ci/

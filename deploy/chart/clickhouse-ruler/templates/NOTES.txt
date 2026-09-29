@@ -1,0 +1,24 @@
+{{ include "clickhouse-ruler.fullname" . }} is installed.
+
+Rules are read from {{ include "clickhouse-ruler.rulesPath" . }}.
+{{ if eq .Values.rules.delivery "git-sync" }}
+Delivery is git-sync from {{ .Values.rules.gitSync.repo }} at {{ .Values.rules.gitSync.ref }},
+every {{ .Values.rules.gitSync.period }}. The chain is merge, sync, symlink flip,
+exec hook, reload, so a merged rule starts running one sync period plus one
+reload after it lands.
+{{- else }}
+Delivery is the ConfigMap {{ .Values.rules.configMap.name }}. A ConfigMap mount has no
+exec hook, so nothing posts to /-/reload on its own: add a reloader through
+extraContainers, or send SIGHUP yourself.
+{{- end }}
+
+Watch two series to know what is running:
+
+  clickhouse_ruler_config_last_reload_successful          0 means the ruler
+      refused the files it read and kept the ones it had. Urgent, and a hazard
+      ahead of the next restart.
+  time() - clickhouse_ruler_config_last_reload_timestamp_seconds
+      how old the rules this ruler is evaluating are.
+
+  kubectl --namespace {{ .Release.Namespace }} port-forward svc/{{ include "clickhouse-ruler.fullname" . }} {{ .Values.service.port }}
+  curl http://127.0.0.1:{{ .Values.service.port }}/metrics

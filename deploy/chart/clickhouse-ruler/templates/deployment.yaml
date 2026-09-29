@@ -1,0 +1,233 @@
+{{- include "clickhouse-ruler.validate" . -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "clickhouse-ruler.fullname" . }}
+  labels:
+    {{- include "clickhouse-ruler.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "clickhouse-ruler.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      # A checksum per object this chart templates, so changing one rolls the
+      # pods rather than leaving them running what they loaded.
+      #
+      # The rule files are deliberately not among them. They change constantly,
+      # a restart re-serves every pending alert's full `for` (spec 12.2), and a
+      # reload is the cheaper answer that keeps that state. Nothing the chart
+      # only names by reference is here either, because its contents are not
+      # readable at render time: an existing rules ConfigMap, a password Secret,
+      # or a Secret holding the whole sources file.
+      annotations:
+        {{- if .Values.sources }}
+        checksum/sources: {{ include (print $.Template.BasePath "/configmap-sources.yaml") . | sha256sum }}
+        {{- end }}
+        {{- if .Values.policy }}
+        checksum/policy: {{ include (print $.Template.BasePath "/configmap-policy.yaml") . | sha256sum }}
+        {{- end }}
+        {{- if eq .Values.rules.delivery "git-sync" }}
+        checksum/reload-hook: {{ include (print $.Template.BasePath "/configmap-reload-hook.yaml") . | sha256sum }}
+        {{- end }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "clickhouse-ruler.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "clickhouse-ruler.serviceAccountName" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if eq .Values.rules.delivery "git-sync" }}
+      # The ruler refuses to start on a rules path it cannot read, and an empty
+      # volume is one. One sync before the ruler's first load turns a crash loop
+      # of unknown length into a pod that waits for its rules. No exec hook
+      # here: there is nothing listening yet.
+      initContainers:
+        - name: git-sync-init
+          image: "{{ .Values.rules.gitSync.image.repository }}:{{ .Values.rules.gitSync.image.tag }}"
+          imagePullPolicy: {{ .Values.rules.gitSync.image.pullPolicy }}
+          args:
+            {{- include "clickhouse-ruler.gitSyncArgs" . | nindent 12 }}
+            - --one-time
+          {{- with .Values.rules.gitSync.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.rules.gitSync.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            {{- include "clickhouse-ruler.gitSyncVolumeMounts" . | nindent 12 }}
+      {{- end }}
+      containers:
+        - name: ruler
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - run
+            - --rules={{ include "clickhouse-ruler.rulesPath" . }}
+            - --sources={{ include "clickhouse-ruler.sourcesPath" . }}
+            - --alertmanager={{ required "alertmanagerURL is required" .Values.alertmanagerURL }}
+            - --listen=:{{ .Values.ruler.port }}
+            - --log-level={{ .Values.ruler.logLevel }}
+            {{- if .Values.policy }}
+            - --config={{ include "clickhouse-ruler.policyPath" . }}
+            {{- end }}
+            # On, where the binary's own default is off. The default delivery is
+            # a sidecar's exec hook, and a hook cannot send a signal into
+            # another container, so a chart that left this off would ship a
+            # rules directory nothing ever reloads (spec 8.1, 10.2).
+            - --enable-reload-endpoint
+            {{- with .Values.ruler.extraArgs }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.ruler.port }}
+              protocol: TCP
+          readinessProbe:
+            httpGet:
+              path: /-/ready
+              port: http
+            {{- toYaml .Values.readinessProbe | nindent 12 }}
+          livenessProbe:
+            httpGet:
+              path: /-/healthy
+              port: http
+            {{- toYaml .Values.livenessProbe | nindent 12 }}
+          {{- with .Values.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: sources
+              mountPath: {{ include "clickhouse-ruler.configDir" . }}/sources
+              readOnly: true
+            {{- if .Values.policy }}
+            - name: policy
+              mountPath: {{ include "clickhouse-ruler.configDir" . }}/policy
+              readOnly: true
+            {{- end }}
+            {{- if eq .Values.rules.delivery "git-sync" }}
+            - name: rules
+              mountPath: {{ include "clickhouse-ruler.gitSyncRoot" . }}
+              readOnly: true
+            {{- else }}
+            - name: rules
+              mountPath: {{ include "clickhouse-ruler.configDir" . }}/rules
+              readOnly: true
+            {{- end }}
+            {{- range $name := include "clickhouse-ruler.passwordSecretNames" . | fromJsonArray }}
+            - name: password-{{ $name }}
+              mountPath: {{ include "clickhouse-ruler.passwordSecretDir" (dict "ctx" $ "name" $name) }}
+              readOnly: true
+            {{- end }}
+            {{- with .Values.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+
+        {{- if eq .Values.rules.delivery "git-sync" }}
+        # Keeps the synced tree current and posts to /-/reload after each new
+        # commit. The symlink flip is what stops the ruler reading a tree half
+        # written (spec 10.2).
+        - name: git-sync
+          image: "{{ .Values.rules.gitSync.image.repository }}:{{ .Values.rules.gitSync.image.tag }}"
+          imagePullPolicy: {{ .Values.rules.gitSync.image.pullPolicy }}
+          args:
+            {{- include "clickhouse-ruler.gitSyncArgs" . | nindent 12 }}
+            - --period={{ .Values.rules.gitSync.period }}
+            - --exechook-command={{ include "clickhouse-ruler.reloadScript" . }}
+          {{- with .Values.rules.gitSync.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.rules.gitSync.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            {{- include "clickhouse-ruler.gitSyncVolumeMounts" . | nindent 12 }}
+            - name: reload-hook
+              mountPath: {{ dir (include "clickhouse-ruler.reloadScript" .) }}
+              readOnly: true
+        {{- end }}
+
+        {{- with .Values.extraContainers }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+
+      volumes:
+        - name: sources
+          {{- if .Values.sourcesSecret.name }}
+          secret:
+            secretName: {{ .Values.sourcesSecret.name }}
+            items:
+              - key: {{ .Values.sourcesSecret.key }}
+                path: sources.yaml
+          {{- else }}
+          configMap:
+            name: {{ include "clickhouse-ruler.fullname" . }}-sources
+          {{- end }}
+        {{- if .Values.policy }}
+        - name: policy
+          configMap:
+            name: {{ include "clickhouse-ruler.fullname" . }}-policy
+        {{- end }}
+        {{- if eq .Values.rules.delivery "git-sync" }}
+        - name: rules
+          emptyDir: {}
+        - name: reload-hook
+          configMap:
+            name: {{ include "clickhouse-ruler.fullname" . }}-reload-hook
+            defaultMode: 0755
+        {{- with .Values.rules.gitSync.credentialsSecret }}
+        - name: git-credentials
+          secret:
+            secretName: {{ . }}
+        {{- end }}
+        {{- else }}
+        - name: rules
+          configMap:
+            name: {{ required "rules.configMap.name is required when rules.delivery is configMap" .Values.rules.configMap.name }}
+        {{- end }}
+        {{- range $name := include "clickhouse-ruler.passwordSecretNames" . | fromJsonArray }}
+        - name: password-{{ $name }}
+          secret:
+            secretName: {{ $name }}
+        {{- end }}
+        {{- with .Values.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

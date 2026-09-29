@@ -1,0 +1,29 @@
+{{- include "clickhouse-ruler.validate" . -}}
+{{- if .Values.sources }}
+{{/*
+The templated sources file. A ConfigMap rather than a Secret because nothing
+secret reaches it: every field here is reviewable configuration and a password
+is a path into a mounted Secret (spec 6.2).
+
+Keys are copied through verbatim, so a source in values is a source in the
+file, and the only rewrite is passwordSecret becoming password_file.
+*/}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "clickhouse-ruler.fullname" . }}-sources
+  labels:
+    {{- include "clickhouse-ruler.labels" . | nindent 4 }}
+data:
+  sources.yaml: |
+    sources:
+    {{- range $s := .Values.sources }}
+      - name: {{ $s.name | quote }}
+      {{- with omit $s "name" "passwordSecret" }}
+      {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $s.passwordSecret }}
+        password_file: {{ printf "%s/%s" (include "clickhouse-ruler.passwordSecretDir" (dict "ctx" $ "name" .name)) (default "password" .key) }}
+      {{- end }}
+    {{- end }}
+{{- end }}

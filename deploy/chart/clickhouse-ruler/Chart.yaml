@@ -1,0 +1,21 @@
+apiVersion: v2
+name: clickhouse-ruler
+description: Prometheus-style alert rules evaluated as ClickHouse SQL, checked before they run
+type: application
+home: https://dennisme.github.io/clickhouse-ruler/
+sources:
+  - https://github.com/dennisme/clickhouse-ruler
+maintainers:
+  - name: dennisme
+    url: https://github.com/dennisme
+keywords:
+  - clickhouse
+  - alerting
+  - prometheus
+  - alertmanager
+
+# Both are replaced at release time, so the chart version and the tool version
+# are one number (spec 10.2). The value here is what a render from a checkout
+# reports.
+version: 0.0.0
+appVersion: "0.0.0"
