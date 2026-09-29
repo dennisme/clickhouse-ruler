@@ -1,0 +1,168 @@
+# Runs the action in this repository, against rules that fail on purpose.
+#
+# Without this the first run of the published action is in a consumer's
+# repository, and a green build here says nothing about whether the action works
+# (spec 12.7). The path filter is deliberate and is the opposite of what 10.3
+# asks for on a rules repository: there the checker is a required status and
+# must report on every pull request, while here it is a test of the wiring.
+name: action
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - action/**
+      - internal/lint/**
+      - cmd/ruler/**
+      - .github/workflows/action.yaml
+  pull_request:
+    paths:
+      - action/**
+      - internal/lint/**
+      - cmd/ruler/**
+      - .github/workflows/action.yaml
+
+permissions:
+  contents: read
+
+jobs:
+  # The checker this pull request builds, rather than the last release: a change
+  # to internal/lint has to be what the action runs, or this job tests history.
+  this-checkout:
+    name: the checker in this checkout
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build ruler
+        run: go build -o "$RUNNER_TEMP/ruler" ./cmd/ruler
+
+      # Annotations on the diff, which is what a contributor sees. The fixtures
+      # carry one error, so the step fails and the run continues to the
+      # assertion below.
+      - name: Check the fixtures
+        id: check
+        continue-on-error: true
+        uses: ./action
+        with:
+          binary: ${{ runner.temp }}/ruler
+          rules: action/testdata/rules
+          sources: action/testdata/sources.yaml
+
+      - name: The fixtures must have failed
+        env:
+          OUTCOME: ${{ steps.check.outcome }}
+          COUNT: ${{ steps.check.outputs.count }}
+        run: |
+          set -euo pipefail
+          if [ "$OUTCOME" != failure ]; then
+            echo "::error::the action passed on rules that fail on purpose"
+            exit 1
+          fi
+          echo "the action reported $COUNT finding(s) and failed, as it should"
+
+      # The feed the summary comment reads. Checked here as its own case so a
+      # broken JSON output fails this workflow rather than the comment step.
+      - name: Check the fixtures as JSON
+        id: json
+        continue-on-error: true
+        uses: ./action
+        with:
+          binary: ${{ runner.temp }}/ruler
+          rules: action/testdata/rules
+          sources: action/testdata/sources.yaml
+          format: json
+
+      - name: The JSON must parse and name the checks
+        env:
+          FINDINGS: ${{ steps.json.outputs.findings }}
+        run: |
+          set -euo pipefail
+          jq -e 'length > 0' "$FINDINGS" >/dev/null
+          jq -e 'any(.[]; .check == "rule/expr" and .severity == "error")' "$FINDINGS" >/dev/null
+          jq -e 'all(.[]; .severity | test("^(off|warning|error)$"))' "$FINDINGS" >/dev/null
+
+  # The summary comment, which is the one part that needs a token and an API.
+  # A pull request only: there is nothing to comment on for a push to main, and
+  # a fork's token cannot write, which the action reports as a notice rather
+  # than a failure.
+  comment:
+    name: the summary comment
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+
+    # Beyond the workflow's own. The comment is the only thing that needs it.
+    permissions:
+      contents: read
+      pull-requests: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build ruler
+        run: go build -o "$RUNNER_TEMP/ruler" ./cmd/ruler
+
+      - name: Check the fixtures and comment
+        id: check
+        continue-on-error: true
+        uses: ./action
+        with:
+          binary: ${{ runner.temp }}/ruler
+          rules: action/testdata/rules
+          sources: action/testdata/sources.yaml
+          comment: "true"
+
+      - name: One comment, updated rather than appended
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          FORK: ${{ github.event.pull_request.head.repo.fork }}
+        run: |
+          set -euo pipefail
+          if [ "$FORK" = "true" ]; then
+            echo "a fork pull request cannot comment, which is the documented behaviour"
+            exit 0
+          fi
+
+          count=$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR/comments" --paginate \
+            --jq '[.[] | select(.body | startswith("<!-- clickhouse-ruler -->"))] | length')
+          if [ "$count" != 1 ]; then
+            echo "::error::found $count summary comments, want exactly one updated in place"
+            exit 1
+          fi
+
+  # The download path, which is a supply chain step: the checksums file is
+  # verified before anything is executed. Proven against a published release,
+  # because that is the only thing the archive names exist for.
+  published-release:
+    name: the published release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check the fixtures with a downloaded ruler
+        id: check
+        continue-on-error: true
+        uses: ./action
+        with:
+          version: v0.1.0
+          rules: action/testdata/rules
+          sources: action/testdata/sources.yaml
+
+      - name: The download must have run the checks
+        env:
+          OUTCOME: ${{ steps.check.outcome }}
+        run: |
+          set -euo pipefail
+          if [ "$OUTCOME" != failure ]; then
+            echo "::error::the downloaded ruler passed on rules that fail on purpose"
+            exit 1
+          fi

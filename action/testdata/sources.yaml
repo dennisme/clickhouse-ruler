@@ -1,0 +1,11 @@
+# Fixtures for the workflow that runs this action against this repository. The
+# address is never reached: the workflow runs the offline checks only, and an
+# online run would need a cluster nobody is going to stand up to lint a fixture.
+sources:
+  - name: otel_traces
+    labels: {team: payments}
+    address: 127.0.0.1:9000
+    database: otel
+    username: ruler
+    table: otel_traces
+    timestamp_column: Timestamp

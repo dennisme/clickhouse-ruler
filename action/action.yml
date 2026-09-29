@@ -1,0 +1,295 @@
+# The pull request checker (spec 10.3).
+#
+# Composite and shell. Not a Node action: it would add npm, a committed bundle
+# and a second dependency tree to a repository whose whole dependency list is
+# three Go modules. Not a Docker action either: an image pull per job for no
+# isolation benefit, since what runs is a static binary.
+#
+# What this owns is the wiring, and nothing else. Every check, and the decision
+# about which rules a change affects, lives in the binary, so anything this
+# does in CI is reachable by hand on a laptop.
+#
+# Permissions:
+#   contents: read        the offline checks and the inline annotations
+#   pull-requests: write  additionally needed by `comment: true`
+#
+# A pull request from a fork gets neither a writable token nor secrets, so it
+# cannot run the online checks or post a comment. That is correct behaviour, and
+# the comment step says so rather than failing the run.
+name: clickhouse-ruler check
+description: Validate ClickHouse alert rules on a pull request, with inline annotations and one summary comment.
+
+inputs:
+  rules:
+    description: Path to the rules directory to check.
+    required: true
+  sources:
+    description: Path to the sources file.
+    default: sources.yaml
+  config:
+    description: Path to a policy file. Defaults to ruler.yaml beside the rules directory if present.
+    default: ""
+  format:
+    description: >-
+      Output format for the log: github for inline annotations on the diff, text,
+      or json.
+    default: github
+  changed-since:
+    description: >-
+      Report only findings in files that differ from the merge base with this git
+      reference, such as origin/main. Needs a checkout deep enough to reach the
+      merge base. Empty checks the whole directory.
+    default: ""
+  online:
+    description: >-
+      Also run the checks that need a ClickHouse connection, connecting as each
+      source's own user. Needs network access to the cluster and the credentials
+      in the sources file, which a fork pull request does not get.
+    default: "false"
+  version:
+    description: >-
+      The release to run, such as v1.2.3. Defaults to the tag this action was
+      called with, which is why a floating major tag needs this set: a release
+      asset is named after the full version and v1 cannot name one.
+    default: ""
+  binary:
+    description: >-
+      Path to an already-built ruler binary, which skips the download entirely.
+      This repository's own workflow uses it so a pull request tests its own
+      checker rather than the last release.
+    default: ""
+  comment:
+    description: >-
+      Post one summary comment on the pull request, updated in place on each
+      push rather than appended to. Needs pull-requests: write.
+    default: "false"
+  github-token:
+    description: Token used to read and write the summary comment.
+    default: ${{ github.token }}
+
+outputs:
+  findings:
+    description: Path to the JSON findings file, empty unless the run produced one.
+    value: ${{ steps.check.outputs.findings }}
+  count:
+    description: How many findings were reported.
+    value: ${{ steps.check.outputs.count }}
+
+runs:
+  using: composite
+  steps:
+    # The download is a supply chain step, so nothing is executed before the
+    # release checksums file has been checked against what arrived.
+    - name: Install ruler
+      id: install
+      shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+        BINARY: ${{ inputs.binary }}
+        ACTION_REF: ${{ github.action_ref }}
+        REPO: dennisme/clickhouse-ruler
+        # Only for resolving a floating tag to a release. Unauthenticated, the
+        # API allows 60 calls an hour per address, and a shared runner address
+        # can have spent them before this job starts.
+        TOKEN: ${{ inputs.github-token }}
+      run: |
+        set -euo pipefail
+
+        if [ -n "$BINARY" ]; then
+          echo "ruler=$BINARY" >>"$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        version="${VERSION:-$ACTION_REF}"
+        case "$version" in
+          # A full release names its own assets.
+          v[0-9]*.[0-9]*.[0-9]*) ;;
+
+          # A floating major tag cannot: an asset is named after the full
+          # version. The release the tag moved to is the newest one under that
+          # major, so that is what runs, and pinning the full version instead
+          # is what stops a release from changing what a workflow does.
+          v[0-9]*)
+            url="https://api.github.com/repos/$REPO/releases?per_page=100"
+            if [ -n "$TOKEN" ]; then
+              releases=$(curl --fail --silent --show-error --location \
+                --header "Accept: application/vnd.github+json" \
+                --header "Authorization: Bearer $TOKEN" "$url")
+            else
+              releases=$(curl --fail --silent --show-error --location \
+                --header "Accept: application/vnd.github+json" "$url")
+            fi
+
+            # Newest first, which is the order the API returns and the order
+            # releases are made in.
+            version=$(printf '%s' "$releases" |
+              jq --raw-output --arg major "$version." '
+                [.[] | select(.prerelease == false and .draft == false)
+                     | select(.tag_name | startswith($major))]
+                | first | .tag_name // empty
+              ')
+            if [ -z "$version" ]; then
+              echo "::error::no release under $ACTION_REF, pin a full version such as v1.2.3"
+              exit 1
+            fi
+            echo "::notice::$ACTION_REF resolved to $version"
+            ;;
+
+          *)
+            echo "::error::set the version input to a release, such as v1.2.3:" \
+              "'$version' is not one, which is what a branch or a commit gives"
+            exit 1
+            ;;
+        esac
+
+        case "$(uname -s)" in
+          Linux) os=Linux ;;
+          Darwin) os=Darwin ;;
+          *) echo "::error::unsupported runner $(uname -s)"; exit 1 ;;
+        esac
+        case "$(uname -m)" in
+          x86_64 | amd64) arch=x86_64 ;;
+          arm64 | aarch64) arch=arm64 ;;
+          *) echo "::error::unsupported architecture $(uname -m)"; exit 1 ;;
+        esac
+
+        dir="$(mktemp -d)"
+        archive="clickhouse-ruler_${version#v}_${os}_${arch}.tar.gz"
+        base="https://github.com/$REPO/releases/download/$version"
+
+        curl --fail --silent --show-error --location -o "$dir/$archive" "$base/$archive"
+        curl --fail --silent --show-error --location -o "$dir/checksums.txt" "$base/checksums.txt"
+
+        # --ignore-missing so the one archive that was downloaded is checked
+        # rather than every platform's. macOS runners carry shasum instead.
+        cd "$dir"
+        if command -v sha256sum >/dev/null 2>&1; then
+          sha256sum --check --ignore-missing checksums.txt
+        else
+          shasum --algorithm 256 --check --ignore-missing checksums.txt
+        fi
+
+        tar -xzf "$archive" ruler
+        echo "ruler=$dir/ruler" >>"$GITHUB_OUTPUT"
+
+    # One run in the requested format, which is what lands in the log and, in
+    # github mode, on the diff. The exit code is held rather than propagated so
+    # the comment below still gets posted on a failing run.
+    - name: Check rules
+      id: check
+      shell: bash
+      env:
+        RULER: ${{ steps.install.outputs.ruler }}
+        RULES: ${{ inputs.rules }}
+        SOURCES: ${{ inputs.sources }}
+        CONFIG: ${{ inputs.config }}
+        FORMAT: ${{ inputs.format }}
+        CHANGED_SINCE: ${{ inputs.changed-since }}
+        ONLINE: ${{ inputs.online }}
+        COMMENT: ${{ inputs.comment }}
+      run: |
+        set -uo pipefail
+
+        args=(check --sources "$SOURCES")
+        [ -n "$CONFIG" ] && args+=(--config "$CONFIG")
+        [ -n "$CHANGED_SINCE" ] && args+=(--changed-since "$CHANGED_SINCE")
+        [ "$ONLINE" = "true" ] && args+=(--online)
+
+        findings="$RUNNER_TEMP/ruler-findings.json"
+
+        if [ "$FORMAT" = json ]; then
+          "$RULER" "${args[@]}" --format json "$RULES" | tee "$findings"
+          code=${PIPESTATUS[0]}
+        else
+          "$RULER" "${args[@]}" --format "$FORMAT" "$RULES"
+          code=$?
+
+          # A second pass only when a comment is wanted and the log format is
+          # not already the feed it reads. It repeats the work, which with
+          # --online means the queries run twice, and that is the price of
+          # asking for two different outputs of one run.
+          if [ "$COMMENT" = "true" ]; then
+            "$RULER" "${args[@]}" --format json "$RULES" >"$findings" || true
+          fi
+        fi
+
+        if [ -s "$findings" ]; then
+          echo "findings=$findings" >>"$GITHUB_OUTPUT"
+          echo "count=$(jq length "$findings")" >>"$GITHUB_OUTPUT"
+        else
+          echo "findings=" >>"$GITHUB_OUTPUT"
+          echo "count=0" >>"$GITHUB_OUTPUT"
+        fi
+        echo "code=$code" >>"$GITHUB_OUTPUT"
+
+    # One comment, updated in place. Appending one per push turns a branch with
+    # a few iterations into a thread nobody reads, and the marker below is how
+    # the next run finds the comment it wrote last time.
+    #
+    # Skipped on a fork, where the token is read only whatever the workflow
+    # asked for. Nothing is raised to work around that: pull_request_target
+    # would run a fork's code against the base repository with a write token,
+    # which is not worth a comment (spec 7.10).
+    - name: Comment
+      if: ${{ inputs.comment == 'true' && github.event_name == 'pull_request' }}
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        FINDINGS: ${{ steps.check.outputs.findings }}
+        PR: ${{ github.event.pull_request.number }}
+        FORK: ${{ github.event.pull_request.head.repo.fork }}
+        REPO: ${{ github.repository }}
+      run: |
+        set -euo pipefail
+
+        if [ "$FORK" = "true" ]; then
+          echo "::notice::a fork pull request has no writable token, so the summary is in the log rather than a comment"
+          exit 0
+        fi
+        if [ -z "$FINDINGS" ]; then
+          echo "::notice::no findings file to summarise"
+          exit 0
+        fi
+
+        marker='<!-- clickhouse-ruler -->'
+        body="$RUNNER_TEMP/ruler-comment.md"
+
+        {
+          echo "$marker"
+          errors=$(jq '[.[] | select(.severity == "error")] | length' "$FINDINGS")
+          warnings=$(jq '[.[] | select(.severity == "warning")] | length' "$FINDINGS")
+
+          if [ "$errors" = 0 ] && [ "$warnings" = 0 ]; then
+            echo "## clickhouse-ruler: no findings"
+          else
+            echo "## clickhouse-ruler: $errors error(s), $warnings warning(s)"
+            echo
+            echo "| Severity | Rule | Check | Finding |"
+            echo "|---|---|---|---|"
+            # The docs link goes on the check name, which is the thing a reader
+            # cannot look up without it (spec 7.8).
+            jq --raw-output '
+              .[] |
+              "| \(.severity) | `\(.file):\(.line)`\(if .subject then " " + .subject else "" end) | \(if .docs then "[`" + .check + "`](" + .docs + ")" else "`" + .check + "`" end) | \(.text | gsub("\n"; " ") | gsub("\\|"; "\\\\|")) |"
+            ' "$FINDINGS"
+          fi
+        } >"$body"
+
+        id=$(gh api "repos/$REPO/issues/$PR/comments" --paginate \
+          --jq "map(select(.body | startswith(\"$marker\"))) | last | .id // empty")
+
+        if [ -n "$id" ]; then
+          gh api --method PATCH "repos/$REPO/issues/comments/$id" -F body=@"$body" >/dev/null
+        else
+          gh api --method POST "repos/$REPO/issues/$PR/comments" -F body=@"$body" >/dev/null
+        fi
+
+    # The findings decide the outcome, and the comment above has been posted by
+    # the time this fails.
+    - name: Report the outcome
+      shell: bash
+      env:
+        CODE: ${{ steps.check.outputs.code }}
+      run: |
+        set -euo pipefail
+        exit "$CODE"
