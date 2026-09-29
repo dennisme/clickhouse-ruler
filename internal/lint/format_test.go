@@ -2,6 +2,7 @@ package lint
 
 import (
 	"encoding/json"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -173,5 +174,114 @@ func TestBothFormatsLinkTheCheck(t *testing.T) {
 		if !strings.Contains(sb.String(), DocsURL("rule/expr")) {
 			t.Errorf("%s output does not link the check:\n%s", format, sb.String())
 		}
+	}
+}
+
+// dataRows counts the table's findings, leaving out the heading and the
+// divider, which also begin with a pipe.
+func dataRows(table string) int {
+	n := 0
+	for _, line := range strings.Split(table, "\n") {
+		if strings.HasPrefix(line, "| error |") || strings.HasPrefix(line, "| warning |") {
+			n++
+		}
+	}
+	return n
+}
+
+// The markdown table is what a pull request comment carries, and it is built
+// here rather than in the action for the reason FormatSummary already exists
+// here: a table and its cell escaping are the same problem whoever reads it,
+// and one written in shell is one no test can reach (spec 10.3).
+func TestFormatMarkdown(t *testing.T) {
+	var sb strings.Builder
+	if err := FormatMarkdown(&sb, sample(), ""); err != nil {
+		t.Fatalf("FormatMarkdown: %v", err)
+	}
+	got := sb.String()
+
+	// The counts are the first thing read, and they are what a reader checks
+	// against the build they are looking at.
+	if !strings.Contains(got, "1 error, 1 warning") {
+		t.Errorf("heading should count each severity, got:\n%s", got)
+	}
+	if rows := dataRows(got); rows != 2 {
+		t.Errorf("want one row per finding, got %d:\n%s", rows, got)
+	}
+	if !strings.Contains(got, "`rules/payments/latency.yaml:12`") {
+		t.Errorf("a location with no link prefix is plain, got:\n%s", got)
+	}
+	if !strings.Contains(got, "[`rule/expr`]("+DocsURL("rule/expr")+")") {
+		t.Errorf("the check should link its documentation, got:\n%s", got)
+	}
+	if !strings.Contains(got, "HighP99Latency") {
+		t.Errorf("the subject names the rule the finding belongs to, got:\n%s", got)
+	}
+}
+
+// A link to the line is what saves a reader searching for the rule. The prefix
+// carries the commit, which the binary cannot know: where a file is served from
+// is a fact about the host, not about the rules.
+func TestFormatMarkdownLinksTheLine(t *testing.T) {
+	var sb strings.Builder
+	prefix := "https://github.com/o/r/blob/abc123/"
+	if err := FormatMarkdown(&sb, sample(), prefix); err != nil {
+		t.Fatalf("FormatMarkdown: %v", err)
+	}
+
+	want := "[`rules/payments/latency.yaml:12`](" + prefix + "rules/payments/latency.yaml#L12)"
+	if got := sb.String(); !strings.Contains(got, want) {
+		t.Errorf("want a link to the line:\n%s\ngot:\n%s", want, got)
+	}
+}
+
+// A pipe ends a cell early and shifts every value after it under the wrong
+// heading. A newline ends the row.
+func TestFormatMarkdownEscapesCells(t *testing.T) {
+	problems := []Problem{{
+		File: "a.yaml", Line: 1, Check: "rule/expr", Severity: SeverityError,
+		Text: "one | two\nthree",
+	}}
+
+	var sb strings.Builder
+	if err := FormatMarkdown(&sb, problems, ""); err != nil {
+		t.Fatalf("FormatMarkdown: %v", err)
+	}
+
+	got := sb.String()
+	if rows := dataRows(got); rows != 1 {
+		t.Errorf("the finding must stay one row, got %d:\n%s", rows, got)
+	}
+	if !strings.Contains(got, `one \| two three`) {
+		t.Errorf("a pipe should be escaped and a newline flattened, got:\n%s", got)
+	}
+}
+
+// The common case on a green pull request. A comment saying nothing was found
+// is how a reader tells the checks ran from the checks being skipped.
+func TestFormatMarkdownNoFindings(t *testing.T) {
+	var sb strings.Builder
+	if err := FormatMarkdown(&sb, nil, ""); err != nil {
+		t.Fatalf("FormatMarkdown: %v", err)
+	}
+	if got := sb.String(); !strings.Contains(got, "No findings") {
+		t.Errorf("want a green result stated, got:\n%s", got)
+	}
+}
+
+// A path the repository cannot spell gets no link rather than a broken one: an
+// absolute path outside the working directory names a directory on one machine.
+func TestFormatMarkdownSkipsALinkItCannotBuild(t *testing.T) {
+	problems := []Problem{{
+		File: filepath.Join(t.TempDir(), "rules", "a.yaml"), Line: 3,
+		Check: "rule/expr", Severity: SeverityError, Text: "text",
+	}}
+
+	var sb strings.Builder
+	if err := FormatMarkdown(&sb, problems, "https://github.com/o/r/blob/abc123/"); err != nil {
+		t.Fatalf("FormatMarkdown: %v", err)
+	}
+	if got := sb.String(); strings.Contains(got, "https://github.com/o/r/blob") {
+		t.Errorf("want no link for an unspellable path, got:\n%s", got)
 	}
 }

@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -150,4 +152,100 @@ func escapeProperty(s string) string {
 		":", "%3A",
 		",", "%2C",
 	).Replace(s)
+}
+
+// findingColumns are the headings of the markdown table, in the order they are
+// read: what it is, where it is, what raised it, and what to do.
+var findingColumns = []string{"Severity", "Rule", "Check", "Finding"}
+
+// FormatMarkdown writes the findings as a markdown table, for a pull request
+// comment. Posting it is the workflow's job, not the ruler's, the same split
+// FormatSummary makes for the cost table (spec 7.10, 10.3).
+//
+// linkPrefix is a URL a finding's path is appended to, such as
+// https://github.com/owner/repo/blob/<commit>/, which turns each location into
+// a link to the line. Empty prints the location plainly, which is what a run on
+// a laptop wants: where a file is served from is a fact about the host, and the
+// ruler knows nothing about hosts.
+func FormatMarkdown(w io.Writer, problems []Problem, linkPrefix string) error {
+	var errors, warnings int
+	for _, p := range problems {
+		switch p.Severity {
+		case SeverityError:
+			errors++
+		case SeverityWarning:
+			warnings++
+		case SeverityOff:
+		}
+	}
+
+	if len(problems) == 0 {
+		// Stated rather than left blank. An empty comment reads as a checker
+		// that did not run, which is the one thing a green result must not
+		// look like.
+		_, err := fmt.Fprintln(w, "No findings.")
+		return err
+	}
+
+	header := fmt.Sprintf("%s, %s\n\n", plural(errors, "error"), plural(warnings, "warning"))
+	header += "| " + strings.Join(findingColumns, " | ") + " |\n"
+	header += "| " + strings.Repeat("--- | ", len(findingColumns)-1) + "--- |\n"
+	if _, err := io.WriteString(w, header); err != nil {
+		return err
+	}
+
+	for _, p := range problems {
+		location := fmt.Sprintf("%s:%d", p.File, p.Line)
+		rule := "`" + location + "`"
+		if path, ok := repoPath(p.File); ok && linkPrefix != "" {
+			rule = fmt.Sprintf("[`%s`](%s%s#L%d)", location, linkPrefix, path, p.Line)
+		}
+		if p.Subject != "" {
+			rule += " " + escapeCell(p.Subject)
+		}
+
+		check := "`" + p.Check + "`"
+		if url := DocsURL(p.Check); url != "" {
+			check = fmt.Sprintf("[`%s`](%s)", p.Check, url)
+		}
+
+		cells := []string{p.Severity.String(), rule, check, escapeCell(p.Text)}
+		if _, err := fmt.Fprintf(w, "| %s |\n", strings.Join(cells, " | ")); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// repoPath is the finding's path as the repository spells it, which is what a
+// link appends to its prefix.
+//
+// A finding carries the path the loader walked, so a rules argument given as an
+// absolute path produces one, and a URL built from that names a directory on
+// the runner rather than a file anybody can open. Such a path is linked only
+// when it sits under the working directory, which is the checkout when a
+// workflow runs it; anything else is printed without a link rather than with a
+// broken one.
+func repoPath(file string) (string, bool) {
+	if !filepath.IsAbs(file) {
+		return filepath.ToSlash(strings.TrimPrefix(file, "./")), true
+	}
+
+	wd, err := os.Getwd()
+	if err != nil {
+		return "", false
+	}
+	rel, err := filepath.Rel(wd, file)
+	if err != nil || strings.HasPrefix(rel, "..") {
+		return "", false
+	}
+	return filepath.ToSlash(rel), true
+}
+
+// plural counts a severity the way the heading reads it.
+func plural(n int, noun string) string {
+	if n == 1 {
+		return fmt.Sprintf("%d %s", n, noun)
+	}
+	return fmt.Sprintf("%d %ss", n, noun)
 }

@@ -72,8 +72,11 @@ outputs:
     description: Path to the JSON findings file, empty unless the run produced one.
     value: ${{ steps.check.outputs.findings }}
   count:
-    description: How many findings were reported.
+    description: How many findings were reported, empty unless the format was json.
     value: ${{ steps.check.outputs.count }}
+  report:
+    description: Path to the markdown findings table, empty unless a comment was asked for.
+    value: ${{ steps.check.outputs.report }}
 
 runs:
   using: composite
@@ -187,6 +190,11 @@ runs:
         CHANGED_SINCE: ${{ inputs.changed-since }}
         ONLINE: ${{ inputs.online }}
         COMMENT: ${{ inputs.comment }}
+        # The head commit rather than the branch: a link to a branch moves with
+        # the next push and stops pointing at the line the finding was about.
+        HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        SERVER_URL: ${{ github.server_url }}
+        REPO: ${{ github.repository }}
       run: |
         set -uo pipefail
 
@@ -197,37 +205,53 @@ runs:
         # it is captured rather than fatal, and the last step is what fails.
         set +e
 
-        args=(check --sources "$SOURCES")
+        report="$RUNNER_TEMP/ruler-report.md"
+        findings="$RUNNER_TEMP/ruler-findings.json"
+
+        # Removed rather than overwritten. A job may use this action more than
+        # once, and a file left by the previous call would be reported as this
+        # call's findings.
+        rm -f "$report" "$findings"
+
+        args=(check --sources "$SOURCES" --format "$FORMAT")
         [ -n "$CONFIG" ] && args+=(--config "$CONFIG")
         [ -n "$CHANGED_SINCE" ] && args+=(--changed-since "$CHANGED_SINCE")
         [ "$ONLINE" = "true" ] && args+=(--online)
 
-        findings="$RUNNER_TEMP/ruler-findings.json"
-
-        if [ "$FORMAT" = json ]; then
-          "$RULER" "${args[@]}" --format json "$RULES" | tee "$findings"
-          code=${PIPESTATUS[0]}
-        else
-          "$RULER" "${args[@]}" --format "$FORMAT" "$RULES"
-          code=$?
-
-          # A second pass only when a comment is wanted and the log format is
-          # not already the feed it reads. It repeats the work, which with
-          # --online means the queries run twice, and that is the price of
-          # asking for two different outputs of one run.
-          if [ "$COMMENT" = "true" ]; then
-            "$RULER" "${args[@]}" --format json "$RULES" >"$findings" || true
+        # The comment body comes out of the same run as the log, so the checks
+        # are never run twice, which with --online would mean every query twice.
+        # The link prefix is the one thing the binary cannot know: where a file
+        # is served from is a fact about the host.
+        if [ "$COMMENT" = "true" ]; then
+          args+=(--markdown "$report")
+          if [ -n "$HEAD_SHA" ]; then
+            args+=(--link-prefix "$SERVER_URL/$REPO/blob/$HEAD_SHA/")
           fi
         fi
 
-        if [ -s "$findings" ]; then
-          echo "findings=$findings" >>"$GITHUB_OUTPUT"
-          echo "count=$(jq length "$findings")" >>"$GITHUB_OUTPUT"
+        if [ "$FORMAT" = json ]; then
+          "$RULER" "${args[@]}" "$RULES" | tee "$findings"
+          code=${PIPESTATUS[0]}
         else
-          echo "findings=" >>"$GITHUB_OUTPUT"
-          echo "count=0" >>"$GITHUB_OUTPUT"
+          "$RULER" "${args[@]}" "$RULES"
+          code=$?
         fi
-        echo "code=$code" >>"$GITHUB_OUTPUT"
+
+        {
+          echo "code=$code"
+          if [ -s "$findings" ]; then
+            echo "findings=$findings"
+            echo "count=$(jq length "$findings")"
+          else
+            echo "findings="
+            echo "count="
+          fi
+          if [ -s "$report" ]; then
+            echo "report=$report"
+          else
+            echo "report="
+          fi
+        } >>"$GITHUB_OUTPUT"
 
     # One comment, updated in place. Appending one per push turns a branch with
     # a few iterations into a thread nobody reads, and the marker below is how
@@ -242,14 +266,10 @@ runs:
       shell: bash
       env:
         GH_TOKEN: ${{ inputs.github-token }}
-        FINDINGS: ${{ steps.check.outputs.findings }}
+        REPORT: ${{ steps.check.outputs.report }}
         PR: ${{ github.event.pull_request.number }}
         FORK: ${{ github.event.pull_request.head.repo.fork }}
         REPO: ${{ github.repository }}
-        # The head commit rather than the branch: a link to a branch moves with
-        # the next push and stops pointing at the line the finding was about.
-        HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        SERVER_URL: ${{ github.server_url }}
       run: |
         set -euo pipefail
 
@@ -257,43 +277,21 @@ runs:
           echo "::notice::a fork pull request has no writable token, so the summary is in the log rather than a comment"
           exit 0
         fi
-        if [ -z "$FINDINGS" ]; then
-          echo "::notice::no findings file to summarise"
+        if [ -z "$REPORT" ]; then
+          echo "::notice::the checks wrote no report to comment"
           exit 0
         fi
 
+        # The marker is how the next run finds the comment this one wrote. The
+        # table itself is the binary's, built and tested in Go beside the cost
+        # table, so nothing here parses a finding (spec 10.3).
         marker='<!-- clickhouse-ruler -->'
         body="$RUNNER_TEMP/ruler-comment.md"
-
         {
           echo "$marker"
-          errors=$(jq '[.[] | select(.severity == "error")] | length' "$FINDINGS")
-          warnings=$(jq '[.[] | select(.severity == "warning")] | length' "$FINDINGS")
-
-          if [ "$errors" = 0 ] && [ "$warnings" = 0 ]; then
-            echo "## clickhouse-ruler: no findings"
-          else
-            echo "## clickhouse-ruler: $errors error(s), $warnings warning(s)"
-            echo
-            echo "| Severity | Rule | Check | Finding |"
-            echo "|---|---|---|---|"
-            # Two links per row, and each answers a different question. The
-            # location links to the line at this pull request's head commit, so
-            # a reader lands on the rule rather than searching for it. The docs
-            # link goes on the check name, which is the thing a reader cannot
-            # look up without it (spec 7.8).
-            #
-            # A finding's path is whatever the rules argument spelled, so the
-            # workspace prefix and a leading ./ come off before it can name a
-            # file in the repository.
-            jq --raw-output \
-              --arg blob "$SERVER_URL/$REPO/blob/$HEAD_SHA/" \
-              --arg workspace "$GITHUB_WORKSPACE/" '
-              .[] |
-              (.file | ltrimstr($workspace) | ltrimstr("./")) as $path |
-              "| \(.severity) | [`\($path):\(.line)`](\($blob)\($path)#L\(.line))\(if .subject then " " + .subject else "" end) | \(if .docs then "[`" + .check + "`](" + .docs + ")" else "`" + .check + "`" end) | \(.text | gsub("\n"; " ") | gsub("\\|"; "\\\\|")) |"
-            ' "$FINDINGS"
-          fi
+          echo "## clickhouse-ruler"
+          echo
+          cat "$REPORT"
         } >"$body"
 
         id=$(gh api "repos/$REPO/issues/$PR/comments" --paginate \

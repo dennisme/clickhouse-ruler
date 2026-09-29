@@ -95,6 +95,11 @@ func check(args []string, stdout, stderr io.Writer) int {
 		"how far back -backfill reaches")
 	backfillStep := fs.Duration("backfill-step", 0,
 		"the gap between the evaluations -backfill replays, defaulting to the rule's group interval")
+	markdown := fs.String("markdown", "",
+		"write the findings as a markdown table to this path, - for stdout, for a pull request comment")
+	linkPrefix := fs.String("link-prefix", "",
+		"URL a finding's path is appended to in the markdown table, such as "+
+			"https://github.com/owner/repo/blob/<commit>/, which links each finding to its line")
 	summary := fs.String("summary", "",
 		"write a markdown table of what each rule reads to this path, - for stdout, which needs -online")
 
@@ -109,6 +114,15 @@ func check(args []string, stdout, stderr io.Writer) int {
 
 	if err := lint.Format(io.Discard, *format, nil); err != nil {
 		printf(stderr, "%s\n", err)
+		return exitUsage
+	}
+
+	// stdout in every format but text belongs to a machine: the workflow runner
+	// parses each line as a command and json is one document, so a table there
+	// is a stray annotation per row or a document that will not parse.
+	if *markdown == "-" && *format != lint.FormatText {
+		printf(stderr, "--markdown - needs --format=%s: stdout already carries the %s output\n",
+			lint.FormatText, *format)
 		return exitUsage
 	}
 
@@ -178,6 +192,15 @@ func check(args []string, stdout, stderr io.Writer) int {
 			printf(stderr, "%s\n", filter.Note)
 		}
 		problems = filter.Keep(problems)
+	}
+
+	// Written before the log format, so a workflow gets the annotations and the
+	// comment body from one run of the checks rather than two (spec 10.3).
+	if *markdown != "" {
+		if err := writeReport(*markdown, *linkPrefix, problems, stdout); err != nil {
+			printf(stderr, "%s\n", err)
+			return exitUsage
+		}
 	}
 
 	if err := lint.Format(stdout, *format, problems); err != nil {

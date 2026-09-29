@@ -88,8 +88,30 @@ token, which is not worth a comment.
 
 | Output | What it carries |
 |---|---|
-| `findings` | Path to the JSON findings file, empty unless the run produced one |
-| `count` | How many findings were reported |
+| `findings` | Path to the JSON findings file, empty unless `format: json` |
+| `count` | How many findings were reported, empty unless `format: json` |
+| `report` | Path to the markdown findings table, empty unless `comment: true` |
+
+## What the comment carries
+
+The table is the binary's, written by `ruler check --markdown`, so it is built
+and tested in Go beside the cost table rather than assembled here. Each finding
+links twice: the location to that line at the pull request's head commit, and
+the check name to its documentation page.
+
+One run produces both the annotations and the table, so asking for a comment
+never runs the checks twice, which with `online: true` would mean every query
+twice. By hand:
+
+```bash
+ruler check --sources sources.yaml \
+  --markdown report.md \
+  --link-prefix "https://github.com/o/r/blob/$(git rev-parse HEAD)/" \
+  ./rules/
+```
+
+A path the repository cannot spell carries no link rather than a broken one, so
+pass `rules` as a relative path.
 
 ## What this repository tests
 

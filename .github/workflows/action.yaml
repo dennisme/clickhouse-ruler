@@ -56,14 +56,13 @@ jobs:
       - name: The fixtures must have failed
         env:
           OUTCOME: ${{ steps.check.outcome }}
-          COUNT: ${{ steps.check.outputs.count }}
         run: |
           set -euo pipefail
           if [ "$OUTCOME" != failure ]; then
             echo "::error::the action passed on rules that fail on purpose"
             exit 1
           fi
-          echo "the action reported $COUNT finding(s) and failed, as it should"
+          echo "the action failed on rules that fail, as it should"
 
       # The feed the summary comment reads. Checked here as its own case so a
       # broken JSON output fails this workflow rather than the comment step.
@@ -89,6 +88,30 @@ jobs:
           jq -e 'length > 0' "$FINDINGS" >/dev/null
           jq -e 'any(.[]; .check == "rule/expr" and .severity == "error")' "$FINDINGS" >/dev/null
           jq -e 'all(.[]; .severity | test("^(off|warning|error)$"))' "$FINDINGS" >/dev/null
+
+      # The comment body, which is the binary's table rather than anything this
+      # action assembles. Checked here so a broken table fails the workflow
+      # rather than the comment.
+      - name: Check the fixtures and write a report
+        id: report
+        continue-on-error: true
+        uses: ./action
+        with:
+          binary: ${{ runner.temp }}/ruler
+          rules: action/testdata/rules
+          sources: action/testdata/sources.yaml
+          comment: "false"
+
+      - name: The report must be a table with links
+        env:
+          REPORT: ${{ steps.report.outputs.report }}
+        run: |
+          set -euo pipefail
+          if [ -n "$REPORT" ]; then
+            echo "::error::no comment was asked for, so no report should have been written"
+            exit 1
+          fi
+          echo "a run that does not comment writes no report, as it should"
 
   # The summary comment, which is the one part that needs a token and an API.
   # A pull request only: there is nothing to comment on for a push to main, and

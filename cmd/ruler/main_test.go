@@ -413,3 +413,76 @@ func TestCheckSummaryNeedsOnline(t *testing.T) {
 		t.Error("a summary file was written for a run that never connected")
 	}
 }
+
+// The comment body, written beside the annotations in one run. Two runs of the
+// same checks to get two outputs is what the action used to need, and with
+// --online that repeats every query (spec 10.3).
+func TestCheckWritesTheMarkdownReport(t *testing.T) {
+	dir := fixture(t, brokenRule, "")
+	path := filepath.Join(dir, "report.md")
+
+	code, stdout, _ := runCheck(t, "check",
+		"--sources", filepath.Join(dir, "sources.yaml"),
+		"--format", "github",
+		"--markdown", path,
+		"--link-prefix", "https://github.com/o/r/blob/abc123/",
+		filepath.Join(dir, "rules"))
+
+	if code != exitFinding {
+		t.Errorf("exit = %d, want exitFinding\n%s", code, stdout)
+	}
+
+	// Annotations still go to stdout, which is what GitHub renders on the diff.
+	if !strings.HasPrefix(stdout, "::error file=") {
+		t.Errorf("the log should still carry the annotations, got:\n%s", stdout)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	report := string(data)
+	if !strings.Contains(report, "| error |") {
+		t.Errorf("the report should carry the finding as a row, got:\n%s", report)
+	}
+
+	// The fixture is a temporary directory outside this package, so its paths
+	// cannot be spelled the way a repository would and carry no link. A URL
+	// built from them would name a directory on one machine (spec 10.3).
+	if strings.Contains(report, "https://github.com/o/r/blob/abc123/") {
+		t.Errorf("a path outside the working directory must not be linked, got:\n%s", report)
+	}
+}
+
+// - is stdout, the same spelling --summary already uses.
+func TestCheckWritesTheMarkdownReportToStdout(t *testing.T) {
+	dir := fixture(t, brokenRule, "")
+
+	_, stdout, _ := runCheck(t, "check",
+		"--sources", filepath.Join(dir, "sources.yaml"),
+		"--markdown", "-",
+		filepath.Join(dir, "rules"))
+
+	if !strings.Contains(stdout, "| error |") {
+		t.Errorf("want the table on stdout, got:\n%s", stdout)
+	}
+}
+
+// A table on stdout in github mode would be read as annotations, one stray
+// command per row.
+func TestCheckRefusesTheReportOnStdoutInGitHubMode(t *testing.T) {
+	dir := fixture(t, brokenRule, "")
+
+	code, _, stderr := runCheck(t, "check",
+		"--sources", filepath.Join(dir, "sources.yaml"),
+		"--format", "github",
+		"--markdown", "-",
+		filepath.Join(dir, "rules"))
+
+	if code != exitUsage {
+		t.Errorf("exit = %d, want exitUsage", code)
+	}
+	if !strings.Contains(stderr, "--markdown") {
+		t.Errorf("the refusal should name the flag, got: %s", stderr)
+	}
+}

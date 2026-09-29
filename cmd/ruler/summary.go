@@ -96,3 +96,27 @@ func writeSummary(path string, rows []lint.SummaryRow, stdout io.Writer) error {
 	}
 	return f.Close()
 }
+
+// writeReport puts the findings table where the workflow asked for it, the same
+// way writeSummary puts the cost table: a path rather than a posted comment,
+// because posting needs a token and an API and the workflow already has both.
+// "-" is stdout, for a person running the command by hand (spec 10.3).
+func writeReport(path, linkPrefix string, problems []lint.Problem, stdout io.Writer) error {
+	if path == "-" {
+		if err := lint.FormatMarkdown(stdout, problems, linkPrefix); err != nil {
+			return fmt.Errorf("writing the findings report: %w", err)
+		}
+		return nil
+	}
+
+	f, err := os.Create(path) //nolint:gosec // an operator-supplied path is the input
+	if err != nil {
+		return fmt.Errorf("writing the findings report: %w", err)
+	}
+	defer func() { _ = f.Close() }()
+
+	if err := lint.FormatMarkdown(f, problems, linkPrefix); err != nil {
+		return fmt.Errorf("writing the findings report: %w", err)
+	}
+	return f.Close()
+}
