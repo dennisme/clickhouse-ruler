@@ -128,4 +128,6 @@ jobs:
             --values "$CHART"/ci/monitoring-values.yaml --set replicaCount=2
           refuses "a shutdown timeout of zero" \
             --values "$CHART"/ci/minimal-values.yaml --set ruler.shutdownTimeoutSeconds=0
+          refuses "an image digest that is not one" \
+            --values "$CHART"/ci/minimal-values.yaml --set image.digest=sha256:latest
           exit $status

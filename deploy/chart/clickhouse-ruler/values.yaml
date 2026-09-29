@@ -9,6 +9,11 @@ image:
   # Empty means the chart's appVersion, which is the tool version the chart was
   # released with. Pin a tag here to run a different one.
   tag: ""
+  # A digest, `sha256:...`, which is what makes the image immutable: a tag can
+  # be moved to different bytes and a digest cannot. Set it and the tag above
+  # is not used, so `ruler version` is the only thing left saying which release
+  # is running.
+  digest: ""
   pullPolicy: IfNotPresent
 
 # Names of Secrets holding registry credentials, for a private mirror of the

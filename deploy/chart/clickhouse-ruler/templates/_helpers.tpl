@@ -49,6 +49,18 @@ read: the root also holds git's own state.
 {{- end -}}
 
 {{/*
+The image to run. A digest wins over the tag, because pinning by digest and
+then resolving a tag beside it would run bytes neither value names.
+*/}}
+{{- define "clickhouse-ruler.image" -}}
+{{- if .Values.image.digest -}}
+{{ .Values.image.repository }}@{{ .Values.image.digest }}
+{{- else -}}
+{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}
+{{- end -}}
+{{- end -}}
+
+{{/*
 Directory a named password Secret is mounted at. One directory per Secret, so
 several sources sharing one Secret share one mount.
 */}}
