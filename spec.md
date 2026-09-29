@@ -284,12 +284,13 @@ That is the property we are copying. Everything else follows from it.
    its wiring down to checksum verification, tag discipline, permissions and the
    JSON feed behind the summary comment. All of it ships.
 
-   The binary half is three flags: `--format=github` emits the workflow commands
-   GitHub renders on a diff, `--format=json` is the feed the summary comment
-   reads, and `--changed-since` is the changed-file expansion 10.3 puts in the
-   binary rather than in the action. Each is reachable by hand, which is the
-   property 10.1 asks for: the action can only wire together flags a laptop
-   already has.
+   The binary half is four flags: `--format=github` emits the workflow commands
+   GitHub renders on a diff, `--markdown` writes the comment's table beside
+   them in the same run, `--format=json` is the feed for anyone integrating the
+   checks elsewhere, and `--changed-since` is the changed-file expansion 10.3
+   puts in the binary rather than in the action. Each is reachable by hand,
+   which is the property 10.1 asks for: the action can only wire together flags
+   a laptop already has.
 
    `action/action.yml` is the wiring. It verifies the release checksums file
    before executing anything, runs the checks, and updates one summary comment

@@ -1423,10 +1423,21 @@ than appending one per push. That belongs in the action, which already runs
 inside GitHub's own environment, and it keeps a GitHub client out of a service
 whose dependencies are otherwise ClickHouse and Alertmanager.
 
-The split that makes it possible: `--format=json` emits the findings as an
-array, and the action reads that to build the comment. The same output serves
-anyone integrating the checks elsewhere (10.1), which is an argument for it
-existing independent of the comment.
+The split that makes it possible is two outputs rather than one. `--markdown`
+writes the comment body, a table with a row per finding, beside the annotations
+in the same run: asking for a comment never runs the checks twice, which with
+`--online` would mean every query twice. `--format=json` emits the findings as
+an array for anyone integrating the checks elsewhere (10.1), which is an
+argument for it existing whether or not a comment is posted.
+
+The table belongs to the binary and not to the action for the same reason the
+cost table does (7.10). A markdown table and its cell escaping are the same
+problem whoever reads it, a second one written in shell is a second one to keep
+right, and shell in an action is code no test in this repository can reach. What
+the action adds is the one thing the binary cannot know: the URL a path is
+appended to, which is where the files are served from rather than anything about
+the rules. A path the repository cannot spell is printed without a link rather
+than with a broken one.
 
 Two things about that array are contract rather than convenience. A severity
 is its name, `warning` or `error`, never the number: the numeric order exists
