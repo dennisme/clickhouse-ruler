@@ -1,0 +1,117 @@
+# Renders the chart over every combination of values that matters and validates
+# the output against the Kubernetes schemas. No cluster: this catches the
+# ordinary breakage cheaply. What it cannot prove is the chain, that a commit
+# reaches the sidecar and the ruler reloads, which wants a real cluster and is
+# its own slice (spec 10.2).
+name: helm
+
+on:
+  push:
+    tags:
+      - v*
+    branches:
+      - main
+    paths:
+      - deploy/chart/**
+      - deploy/examples/**
+      - .github/workflows/helm.yaml
+  pull_request:
+    paths:
+      - deploy/chart/**
+      - deploy/examples/**
+      - .github/workflows/helm.yaml
+
+permissions:
+  contents: read
+
+env:
+  CHART: deploy/chart/clickhouse-ruler
+  # The version the manifests are checked against. Nothing in the chart is
+  # newer than this, so it is the floor rather than the target.
+  KUBERNETES_VERSION: 1.31.0
+
+jobs:
+  render:
+    name: render and validate
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Both majors, because the chart is apiVersion v2 and most people still
+        # install with helm 3.
+        helm: [v3.16.2, v4.3.0]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: ${{ matrix.helm }}
+
+      - name: Setup kubeconform
+        env:
+          KUBECONFORM_VERSION: v0.8.0
+        run: |
+          curl --silent --show-error --fail --location \
+            "https://github.com/yannh/kubeconform/releases/download/${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz" \
+            | tar -xz -C /usr/local/bin kubeconform
+          kubeconform -v
+
+      - name: helm lint
+        run: |
+          status=0
+          for values in "$CHART"/ci/*.yaml deploy/examples/*.yaml; do
+            echo "::group::$values"
+            helm lint "$CHART" --values "$values" || status=1
+            echo "::endgroup::"
+          done
+          exit $status
+
+      # The ci/ files cover the combinations, and the examples are rendered too
+      # because they are what the manual tells people to install with.
+      - name: helm template and kubeconform
+        run: |
+          status=0
+          for values in "$CHART"/ci/*.yaml deploy/examples/*.yaml; do
+            echo "::group::$values"
+            if helm template ruler "$CHART" --values "$values" > rendered.yaml; then
+              kubeconform -strict -summary \
+                -kubernetes-version "$KUBERNETES_VERSION" rendered.yaml || status=1
+            else
+              status=1
+            fi
+            echo "::endgroup::"
+          done
+          exit $status
+
+      # The schema and the template refusals are the reason a bad install fails
+      # at render instead of at boot, so a refusal that stopped refusing is a
+      # regression worth failing on.
+      - name: a bad install is refused
+        run: |
+          status=0
+          refuses() {
+            local what="$1"; shift
+            if helm template ruler "$CHART" "$@" >/dev/null 2>&1; then
+              echo "not refused: $what"
+              status=1
+            else
+              echo "refused: $what"
+            fi
+          }
+          one_source='sources=[{"name":"a","address":"h:9000","database":"d","username":"u","table":"t","timestamp_column":"ts"}]'
+          refuses "no alertmanagerURL" \
+            --set rules.gitSync.repo=https://example.com/rules --set-json "$one_source"
+          refuses "git-sync with no repo" \
+            --set alertmanagerURL=http://am:9093 --set-json "$one_source"
+          refuses "configMap with no name" \
+            --values "$CHART"/ci/minimal-values.yaml --set rules.delivery=configMap
+          refuses "sources and sourcesSecret together" \
+            --values "$CHART"/ci/git-sync-values.yaml --set sourcesSecret.name=whole
+          refuses "no sources at all" \
+            --set alertmanagerURL=http://am:9093 --set rules.gitSync.repo=https://example.com/rules
+          refuses "a password in a value" \
+            --values "$CHART"/ci/minimal-values.yaml --set 'sources[0].password=hunter2'
+          refuses "an unknown log level" \
+            --values "$CHART"/ci/minimal-values.yaml --set ruler.logLevel=verbose
+          exit $status
