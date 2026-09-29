@@ -932,6 +932,18 @@ raised when it is not, and that silence is the one failure this scope cannot
 afford: what makes a team-owned file safe is that it can only tighten, which
 stops being true when a typo quietly drops the setting.
 
+**A rules path built out of symlinks loads its rules exactly once.** The root is
+resolved through symlinks before it is walked, and a directory entry whose name
+begins with `..` is passed over. Both halves are load-bearing on a deployment
+that ships the tree rather than commits it, which 10.2 describes: one writer
+publishes a revision by pointing a symlink at it, and another keeps the real
+files in a hidden directory beside the symlinks that name them. An unresolved
+root is a single entry with no extension, which finds no rules and reports
+nothing; an unfiltered walk reaches the same rule twice, once through the
+symlink and once in the directory behind it, and reports each as the other's
+duplicate. Either way the tree a person can read is not the tree the loader
+saw, so this belongs to the loader rather than to whoever writes the chart.
+
 **Exemptions are the one thing that loosens, and they sit outside the merge.**
 A rule can be correct everywhere and still fail a check against one cluster:
 the capacity rules that read `system.parts` on the box where that user is
