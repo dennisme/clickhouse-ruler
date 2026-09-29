@@ -1,0 +1,34 @@
+# Everything this chart can render for an operator: a ServiceMonitor, a
+# disruption budget across three replicas, a priority class, and a shutdown
+# timeout the grace period has to follow.
+alertmanagerURL: http://alertmanager.monitoring:9093
+replicaCount: 3
+rules:
+  gitSync:
+    repo: https://github.com/example/alert-rules
+ruler:
+  shutdownTimeoutSeconds: 90
+priorityClassName: platform-critical
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 2
+serviceMonitor:
+  enabled: true
+  interval: 15s
+  scrapeTimeout: 10s
+  labels:
+    release: kube-prometheus-stack
+  metricRelabelings:
+    - sourceLabels: [__name__]
+      regex: go_.*
+      action: drop
+sources:
+  - name: traces
+    address: clickhouse.data:9000
+    database: otel
+    username: ruler
+    passwordSecret:
+      name: ruler-clickhouse
+      key: password
+    table: otel_traces
+    timestamp_column: Timestamp

@@ -4,8 +4,10 @@
 #   kubectl create secret generic ruler-clickhouse \
 #     --namespace monitoring --from-literal=password='...'
 #
+#   curl -sSLO https://raw.githubusercontent.com/dennisme/clickhouse-ruler/main/deploy/examples/git-sync.yaml
+#
 #   helm install ruler oci://ghcr.io/dennisme/charts/clickhouse-ruler \
-#     --namespace monitoring --values deploy/examples/git-sync.yaml
+#     --namespace monitoring --values git-sync.yaml
 #
 # A merged rule starts running one sync period plus one reload later, so with
 # the period below that is under a minute. Nothing watches the filesystem: the

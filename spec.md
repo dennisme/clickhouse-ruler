@@ -251,20 +251,27 @@ That is the property we are copying. Everything else follows from it.
    separately from reload, and whether the answer is per-file tolerance, a
    narrower fixed-at-error list, or an operator flag that is off by default.
 
-6. **How a merged rule reaches a running ruler.** Decided, and what is left is
-   artifacts. A rule's life is pull request, approval, deployment, running, alert
-   sent, and the deployment step was the one nothing specified: how a merged rule
-   file gets onto the disk the ruler reads, what sends the `SIGHUP`, and how long
-   a fix takes to reach a page. 10.2 now answers all three. A sidecar delivers the
-   files and triggers the reload, the ruler watches nothing, and the lag is the
+6. **How a merged rule reaches a running ruler.** Decided and built. A rule's
+   life is pull request, approval, deployment, running, alert sent, and the
+   deployment step was the one nothing specified: how a merged rule file gets
+   onto the disk the ruler reads, what sends the `SIGHUP`, and how long a fix
+   takes to reach a page. 10.2 answers all three. A sidecar delivers the files
+   and triggers the reload, the ruler watches nothing, and the lag is the
    sidecar's sync period plus one reload.
 
-   The artifacts are still owed. A Helm chart, so the answer to "how do I run
-   this" is a command rather than a paragraph, and deployment examples beside it:
-   the git-sync sidecar 10.2 chose as the default, a ConfigMap mount for a small
-   estate, and the compose stack this repository already runs as the local case.
-   The chart is also what proves the decision, because a symlinked rules root and
-   a ConfigMap mount are both layouts the loader has to read exactly once.
+   The artifacts are there: a Helm chart, so the answer to "how do I run this" is
+   a command rather than a paragraph, and a values file per delivery beside it,
+   the git-sync sidecar 10.2 chose as the default and a ConfigMap mount for a
+   small estate. The chart also proves the decision, because a symlinked rules
+   root and a ConfigMap mount are both layouts the loader has to read exactly
+   once.
+
+   What the chart does not carry is a `PrometheusRule` or the dashboards, and
+   10.2 says why each is left out rather than pending. The claim that is only
+   rendered rather than run is the chain itself: CI templates the chart and
+   validates the manifests, and nothing yet proves on a cluster that a commit
+   reaches the sidecar and the ruler reloads. That wants the stack in 9.1 and is
+   its own slice.
 
    One smaller thing on the same chain, and it belongs to 7 below rather than
    here: there is no CI example that gates a merge. `docs/running.md` shows

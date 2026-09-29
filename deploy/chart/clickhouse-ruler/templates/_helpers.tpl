@@ -49,6 +49,18 @@ read: the root also holds git's own state.
 {{- end -}}
 
 {{/*
+The image to run. A digest wins over the tag, because pinning by digest and
+then resolving a tag beside it would run bytes neither value names.
+*/}}
+{{- define "clickhouse-ruler.image" -}}
+{{- if .Values.image.digest -}}
+{{ .Values.image.repository }}@{{ .Values.image.digest }}
+{{- else -}}
+{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}
+{{- end -}}
+{{- end -}}
+
+{{/*
 Directory a named password Secret is mounted at. One directory per Secret, so
 several sources sharing one Secret share one mount.
 */}}
@@ -127,6 +139,37 @@ which allows no source key the sources file does not have.
 {{- if and (not .Values.sources) (not .Values.sourcesSecret.name) -}}
 {{- fail "no sources: set sources, or sourcesSecret.name to a Secret holding the whole sources file" -}}
 {{- end -}}
+{{- end -}}
+
+{{/*
+A budget that allows no eviction at all blocks node maintenance rather than
+shaping it, and the drain it blocks is reported by whatever is draining rather
+than here. Percentages are left to the API server, which understands them.
+*/}}
+{{- define "clickhouse-ruler.validateDisruptionBudget" -}}
+{{- $pdb := .Values.podDisruptionBudget -}}
+{{- if and $pdb.minAvailable $pdb.maxUnavailable -}}
+{{- fail "set either podDisruptionBudget.minAvailable or podDisruptionBudget.maxUnavailable, not both" -}}
+{{- end -}}
+{{- if and (not $pdb.minAvailable) (not $pdb.maxUnavailable) -}}
+{{- fail "podDisruptionBudget.enabled needs one of minAvailable or maxUnavailable" -}}
+{{- end -}}
+{{- if and $pdb.minAvailable (not (kindIs "string" $pdb.minAvailable)) -}}
+{{- if ge (float64 $pdb.minAvailable) (float64 .Values.replicaCount) -}}
+{{- fail "podDisruptionBudget.minAvailable is at least replicaCount, which blocks every eviction rather than shaping it" -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+How long the pod gets to stop. The ruler drains in-flight evaluations for
+--shutdown-timeout and then gives the HTTP surface five more seconds, so a
+grace period equal to the timeout has kubelet sending SIGKILL exactly as the
+drain ends: the evaluation is cut off anyway and the warning that says so may
+never be written. Ten seconds covers the HTTP shutdown and leaves slack.
+*/}}
+{{- define "clickhouse-ruler.terminationGracePeriodSeconds" -}}
+{{- add .Values.ruler.shutdownTimeoutSeconds 10 -}}
 {{- end -}}
 
 {{/*

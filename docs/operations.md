@@ -3,7 +3,11 @@
 What to watch, what the logs mean, what refuses to start, what a reload
 refuses, and how to find the ruler's queries on the cluster.
 
-The metrics below are the ones the ruler exposes on `/metrics`. Two Grafana
+The metrics below are the ones the ruler exposes on `/metrics`, which
+something has to scrape before any of it is visible: the Helm chart templates a
+`ServiceMonitor` when you ask for one, and
+[what the chart does for an operator](deployment.md#what-the-chart-does-for-an-operator)
+covers that and the rest of what it sets around the pod. Two Grafana
 dashboards built from them ship in
 [`deploy/grafana/dashboards`](https://github.com/dennisme/clickhouse-ruler/tree/main/deploy/grafana/dashboards):
 one for operating the ruler, one for rule authors.
@@ -704,7 +708,10 @@ Prometheus without that series behaves exactly the way described above.
 What to do about it:
 
 - **Reload rather than restart.** `SIGHUP` keeps every pending alert whose
-  name, labels and source are unchanged.
+  name, labels and source are unchanged. On the Helm chart this is the
+  difference between a rule change, which reaches the ruler as a reload, and a
+  `helm upgrade` that edits the pod template, which rolls the pods and pays
+  everything on this page.
 - **Keep a deploy shorter than an alert's expiry** and no firing alert lapses
   across it.
 - **Expect a restart to delay a page by one `for`**, and do not deploy the

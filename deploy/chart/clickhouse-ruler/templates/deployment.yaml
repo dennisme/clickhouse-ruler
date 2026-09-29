@@ -41,6 +41,10 @@ spec:
         {{- end }}
     spec:
       serviceAccountName: {{ include "clickhouse-ruler.serviceAccountName" . }}
+      terminationGracePeriodSeconds: {{ include "clickhouse-ruler.terminationGracePeriodSeconds" . }}
+      {{- with .Values.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
@@ -74,7 +78,7 @@ spec:
       {{- end }}
       containers:
         - name: ruler
-          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          image: "{{ include "clickhouse-ruler.image" . }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           args:
             - run
@@ -83,6 +87,10 @@ spec:
             - --alertmanager={{ required "alertmanagerURL is required" .Values.alertmanagerURL }}
             - --listen=:{{ .Values.ruler.port }}
             - --log-level={{ .Values.ruler.logLevel }}
+            # Paired with terminationGracePeriodSeconds, which is this plus the
+            # time the HTTP surface takes after it. Setting it in extraArgs
+            # instead changes the drain and leaves the grace period behind it.
+            - --shutdown-timeout={{ .Values.ruler.shutdownTimeoutSeconds }}s
             {{- if .Values.policy }}
             - --config={{ include "clickhouse-ruler.policyPath" . }}
             {{- end }}

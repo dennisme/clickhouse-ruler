@@ -12,6 +12,13 @@ exec hook, so nothing posts to /-/reload on its own: add a reloader through
 extraContainers, or send SIGHUP yourself.
 {{- end }}
 
+{{ if not .Values.serviceMonitor.enabled }}
+Nothing is scraping this yet. The expressions on the operations page need a
+Prometheus reading http://{{ include "clickhouse-ruler.fullname" . }}:{{ .Values.service.port }}/metrics:
+set serviceMonitor.enabled if yours is run by the Prometheus Operator, or add
+the target the way your Prometheus takes it.
+{{- end }}
+
 Watch two series to know what is running:
 
   clickhouse_ruler_config_last_reload_successful          0 means the ruler

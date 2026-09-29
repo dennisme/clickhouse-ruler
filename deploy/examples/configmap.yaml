@@ -4,8 +4,10 @@
 #   kubectl create configmap alert-rules \
 #     --namespace monitoring --from-file=rules/
 #
+#   curl -sSLO https://raw.githubusercontent.com/dennisme/clickhouse-ruler/main/deploy/examples/configmap.yaml
+#
 #   helm install ruler oci://ghcr.io/dennisme/charts/clickhouse-ruler \
-#     --namespace monitoring --values deploy/examples/configmap.yaml
+#     --namespace monitoring --values configmap.yaml
 #
 # A ConfigMap mount has no exec hook, so nothing here would ever ask the ruler
 # to re-read its files. That is what the reloader sidecar below is for: it

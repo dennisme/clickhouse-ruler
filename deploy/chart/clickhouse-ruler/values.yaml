@@ -9,6 +9,11 @@ image:
   # Empty means the chart's appVersion, which is the tool version the chart was
   # released with. Pin a tag here to run a different one.
   tag: ""
+  # A digest, `sha256:...`, which is what makes the image immutable: a tag can
+  # be moved to different bytes and a digest cannot. Set it and the tag above
+  # is not used, so `ruler version` is the only thing left saying which release
+  # is running.
+  digest: ""
   pullPolicy: IfNotPresent
 
 # Names of Secrets holding registry credentials, for a private mirror of the
@@ -34,9 +39,15 @@ ruler:
   port: 9090
   # debug, info, warn or error.
   logLevel: info
+  # How long an in-flight evaluation gets to finish once shutdown starts. The
+  # pod's terminationGracePeriodSeconds is this plus ten, so raising it for a
+  # slow evaluation raises both. Seconds rather than a duration, because Helm
+  # cannot read a Go duration and a second knob could disagree with this one.
+  shutdownTimeoutSeconds: 30
   # Any further `ruler run` flags, passed through verbatim, for example
   # ["--recheck-interval=1h"]. The reload endpoint is already on and does not
-  # belong here.
+  # belong here, and neither does --shutdown-timeout: setting it here changes
+  # the drain without moving the grace period behind it.
   extraArgs: []
 
 # How rule files reach the ruler's disk, and what asks it to re-read them. The
@@ -144,6 +155,38 @@ serviceAccount:
   create: true
   name: ""
   annotations: {}
+
+# Scrape configuration for a Prometheus run by the Prometheus Operator. Off by
+# default: the kind belongs to those CRDs, so a cluster without them fails the
+# whole install on an object the ruler does not need in order to run. Nothing
+# on the operations page works until something scrapes this port, by whichever
+# route your Prometheus takes.
+serviceMonitor:
+  enabled: false
+  interval: 30s
+  scrapeTimeout: 10s
+  # Labels the Prometheus in question selects its ServiceMonitors by, for
+  # example {release: kube-prometheus-stack}.
+  labels: {}
+  annotations: {}
+  relabelings: []
+  metricRelabelings: []
+
+# What a node drain may take at once. A ruler keeps every pending alert's
+# progress in memory, so a drain that evicts every replica together sends each
+# of them back through its full `for`. Off by default, because a budget that
+# allows no eviction blocks node maintenance rather than shaping it.
+#
+# Set one of these, not both.
+podDisruptionBudget:
+  enabled: false
+  minAvailable: 1
+  maxUnavailable: null
+
+# Scheduling priority. Empty means the cluster's default, and the class names
+# are the cluster's to define. The component that reports an outage is a poor
+# choice for the first one evicted by it.
+priorityClassName: ""
 
 resources: {}
   # requests:
