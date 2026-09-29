@@ -81,14 +81,27 @@ func Load(dir string, sources *source.File, root *policy.Policy) (*Set, []lint.P
 	set := &Set{Dir: dir}
 	var problems []lint.Problem
 
-	files, policies, err := ruleFiles(dir)
+	// A deployment publishes a revision of the rules by naming it with a
+	// symlink, so the path handed to the ruler is a link at a directory rather
+	// than the directory (spec 10.2). filepath.WalkDir does not follow one: it
+	// would see a single entry with no extension and find no rules at all.
+	// Resolved here rather than in the walk, because the team policy scope of a
+	// finding is decided by walking directories up to this one.
+	tree, err := filepath.EvalSymlinks(filepath.Clean(dir))
 	if err != nil {
 		return set, []lint.Problem{
 			lint.NewProblem(dir, 0, lint.CheckRulesetDirectory, lint.SeverityError, err.Error()),
 		}
 	}
 
-	l := &loader{dir: filepath.Clean(dir), sources: sources, root: root}
+	files, policies, err := ruleFiles(tree)
+	if err != nil {
+		return set, []lint.Problem{
+			lint.NewProblem(dir, 0, lint.CheckRulesetDirectory, lint.SeverityError, err.Error()),
+		}
+	}
+
+	l := &loader{dir: tree, sources: sources, root: root}
 	problems = append(problems, l.readTeamPolicies(policies)...)
 
 	for _, path := range files {
@@ -184,6 +197,14 @@ func ruleFiles(dir string) (rules, policies []string, err error) {
 			return err
 		}
 		if d.IsDir() {
+			// A revision mounted rather than published keeps its real files in
+			// a hidden directory that the symlinks at the root name, so
+			// descending into it reads every rule a second time and reports
+			// each as the other's duplicate (spec 10.2). Never the root
+			// itself, which an operator may have named as `..` or `../rules`.
+			if path != root && strings.HasPrefix(d.Name(), "..") {
+				return fs.SkipDir
+			}
 			return nil
 		}
 		if ext := filepath.Ext(path); ext != ".yaml" && ext != ".yml" {

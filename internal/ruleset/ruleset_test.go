@@ -335,3 +335,85 @@ func TestLoadDoesNotParseReservedNamesAsRules(t *testing.T) {
 		t.Fatalf("expected the three rules, got %d", len(set.Rules))
 	}
 }
+
+// A deployment that publishes a revision of the rules points a symlink at it,
+// so the path the ruler is handed is the symlink rather than the directory
+// (spec 10.2). Walked unresolved it is one entry with no extension, which
+// finds no rule files and reports nothing about having found none.
+func TestLoadResolvesASymlinkedRoot(t *testing.T) {
+	real, err := filepath.Abs(filepath.Join("testdata", "rules"))
+	if err != nil {
+		t.Fatalf("resolving the fixture: %v", err)
+	}
+
+	link := filepath.Join(t.TempDir(), "current")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatalf("linking the revision: %v", err)
+	}
+
+	want, _ := Load(real, loadSources(t), nil)
+	if len(want.Rules) == 0 {
+		t.Fatalf("the fixture holds no rules, so this proves nothing")
+	}
+
+	set, problems := Load(link, loadSources(t), nil)
+
+	if len(set.Rules) != len(want.Rules) {
+		t.Errorf("rules through the symlink = %d, want %d", len(set.Rules), len(want.Rules))
+	}
+	for _, p := range problems {
+		if p.Severity == lint.SeverityError {
+			t.Errorf("unexpected error: %s", p)
+		}
+	}
+}
+
+// The other writer keeps the real files in a hidden directory and fills the
+// root with symlinks naming them, which is how a mounted revision stays atomic
+// (spec 10.2). Walked without passing over the hidden directory, every rule is
+// reached twice and each is reported as the other's duplicate.
+func TestLoadReadsAMountedRevisionOnce(t *testing.T) {
+	dir := t.TempDir()
+	const revision = "..2026_09_28_12_00_00.1234"
+
+	if err := os.Mkdir(filepath.Join(dir, revision), 0o750); err != nil {
+		t.Fatalf("making the revision: %v", err)
+	}
+	want, _ := Load(filepath.Join("testdata", "rules"), loadSources(t), nil)
+	if len(want.Rules) == 0 {
+		t.Fatalf("the fixture holds no rules, so this proves nothing")
+	}
+
+	// The keys of a mounted object are file names, so the tree the fixture
+	// keeps in team directories arrives flat.
+	for _, name := range []string{
+		filepath.Join("payments", "latency.yaml"),
+		filepath.Join("search", "errors.yaml"),
+	} {
+		data, err := os.ReadFile(filepath.Join("testdata", "rules", name))
+		if err != nil {
+			t.Fatalf("reading the fixture: %v", err)
+		}
+		base := filepath.Base(name)
+		if err := os.WriteFile(filepath.Join(dir, revision, base), data, 0o600); err != nil {
+			t.Fatalf("writing the revision: %v", err)
+		}
+		if err := os.Symlink(filepath.Join("..data", base), filepath.Join(dir, base)); err != nil {
+			t.Fatalf("linking a rule file: %v", err)
+		}
+	}
+	if err := os.Symlink(revision, filepath.Join(dir, "..data")); err != nil {
+		t.Fatalf("linking the revision: %v", err)
+	}
+
+	set, problems := Load(dir, loadSources(t), nil)
+
+	if len(set.Rules) != len(want.Rules) {
+		t.Errorf("rules in the mount = %d, want %d", len(set.Rules), len(want.Rules))
+	}
+	for _, p := range problems {
+		if p.Check == "rule/duplicate-alert" {
+			t.Errorf("a rule was read through the symlink and again behind it: %s", p)
+		}
+	}
+}
