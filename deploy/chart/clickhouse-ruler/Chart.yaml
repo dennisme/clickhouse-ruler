@@ -14,6 +14,24 @@ keywords:
   - prometheus
   - alertmanager
 
+# The floor the manifests are written against, and what CI validates them
+# with. `policy/v1` PodDisruptionBudget and the probe fields used here are all
+# older than this; the number is where the chart stops being tested rather than
+# where it stops working.
+kubeVersion: ">=1.25.0-0"
+
+annotations:
+  artifacthub.io/license: Apache-2.0
+  artifacthub.io/links: |
+    - name: Documentation
+      url: https://dennisme.github.io/clickhouse-ruler/
+    - name: Deployment topologies
+      url: https://dennisme.github.io/clickhouse-ruler/deployment/
+    - name: Operating the ruler
+      url: https://dennisme.github.io/clickhouse-ruler/operations/
+  artifacthub.io/containsSecurityUpdates: "false"
+  artifacthub.io/prerelease: "true"
+
 # Both are replaced at release time, so the chart version and the tool version
 # are one number (spec 10.2). The value here is what a render from a checkout
 # reports.
