@@ -29,6 +29,10 @@ env:
   # The version the manifests are checked against. Nothing in the chart is
   # newer than this, so it is the floor rather than the target.
   KUBERNETES_VERSION: 1.31.0
+  # The ServiceMonitor is not a Kubernetes kind, so validating it needs the
+  # Prometheus Operator's own schema. Without this the object renders and
+  # nothing checks it, which is the failure the render job exists to catch.
+  CRD_SCHEMAS: https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json
 
 jobs:
   render:
@@ -76,7 +80,9 @@ jobs:
             echo "::group::$values"
             if helm template ruler "$CHART" --values "$values" > rendered.yaml; then
               kubeconform -strict -summary \
-                -kubernetes-version "$KUBERNETES_VERSION" rendered.yaml || status=1
+                -kubernetes-version "$KUBERNETES_VERSION" \
+                -schema-location default -schema-location "$CRD_SCHEMAS" \
+                rendered.yaml || status=1
             else
               status=1
             fi
@@ -114,4 +120,12 @@ jobs:
             --values "$CHART"/ci/minimal-values.yaml --set 'sources[0].password=hunter2'
           refuses "an unknown log level" \
             --values "$CHART"/ci/minimal-values.yaml --set ruler.logLevel=verbose
+          refuses "a disruption budget set two ways" \
+            --values "$CHART"/ci/monitoring-values.yaml --set podDisruptionBudget.maxUnavailable=1
+          refuses "a disruption budget set no way" \
+            --values "$CHART"/ci/monitoring-values.yaml --set podDisruptionBudget.minAvailable=null
+          refuses "a disruption budget that blocks every eviction" \
+            --values "$CHART"/ci/monitoring-values.yaml --set replicaCount=2
+          refuses "a shutdown timeout of zero" \
+            --values "$CHART"/ci/minimal-values.yaml --set ruler.shutdownTimeoutSeconds=0
           exit $status
