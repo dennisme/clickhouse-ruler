@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -239,14 +240,67 @@ func TestCheckRejectsUnknownFormat(t *testing.T) {
 
 	code, _, stderr := runCheck(t, "check",
 		"--sources", filepath.Join(dir, "sources.yaml"),
-		"--format", "json",
+		"--format", "xml",
 		filepath.Join(dir, "rules"))
 
 	if code == 0 {
 		t.Error("exit = 0, want non-zero for an unknown format")
 	}
-	if !strings.Contains(stderr, "json") {
+	if !strings.Contains(stderr, "xml") {
 		t.Errorf("error should name the bad format, got: %s", stderr)
+	}
+}
+
+// The feed the summary comment reads (spec 10.3). Stdout is one JSON document,
+// so anything else printed there stops it parsing.
+func TestCheckJSONFormat(t *testing.T) {
+	dir := fixture(t, brokenRule, "")
+
+	code, stdout, _ := runCheck(t, "check",
+		"--sources", filepath.Join(dir, "sources.yaml"),
+		"--format", "json",
+		filepath.Join(dir, "rules"))
+
+	if code != exitFinding {
+		t.Errorf("exit = %d, want exitFinding\n%s", code, stdout)
+	}
+
+	var findings []struct {
+		Check    string `json:"check"`
+		Severity string `json:"severity"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &findings); err != nil {
+		t.Fatalf("stdout is not JSON: %v\n%s", err, stdout)
+	}
+
+	var found bool
+	for _, f := range findings {
+		if f.Check == "rule/expr" && f.Severity == "error" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected a rule/expr error finding, got:\n%s", stdout)
+	}
+}
+
+// Same reason as github mode: the explanation is for a human, and on stdout it
+// would sit inside the JSON document a consumer parses.
+func TestCheckExplainStaysOffStdoutInJSONMode(t *testing.T) {
+	dir := fixture(t, bareRule, "")
+
+	_, stdout, stderr := runCheck(t, "check",
+		"--sources", filepath.Join(dir, "sources.yaml"),
+		"--format", "json",
+		"--explain",
+		filepath.Join(dir, "rules"))
+
+	var findings []any
+	if err := json.Unmarshal([]byte(stdout), &findings); err != nil {
+		t.Fatalf("stdout is not JSON: %v\n%s", err, stdout)
+	}
+	if !strings.Contains(stderr, "labels/required") {
+		t.Errorf("explanation should be on stderr, got: %s", stderr)
 	}
 }
 

@@ -1,6 +1,7 @@
 package lint
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"strings"
@@ -10,10 +11,11 @@ import (
 const (
 	FormatText   = "text"
 	FormatGitHub = "github"
+	FormatJSON   = "json"
 )
 
 // Formats lists every supported format, for flag help and validation.
-var Formats = []string{FormatText, FormatGitHub}
+var Formats = []string{FormatText, FormatGitHub, FormatJSON}
 
 // Format writes findings in the named format.
 func Format(w io.Writer, format string, problems []Problem) error {
@@ -22,6 +24,8 @@ func Format(w io.Writer, format string, problems []Problem) error {
 		return formatText(w, problems)
 	case FormatGitHub:
 		return formatGitHub(w, problems)
+	case FormatJSON:
+		return formatJSON(w, problems)
 	default:
 		return fmt.Errorf("unknown format %q, want one of %s", format, strings.Join(Formats, ", "))
 	}
@@ -77,6 +81,53 @@ func formatGitHub(w io.Writer, problems []Problem) error {
 		}
 	}
 	return nil
+}
+
+// jsonProblem is the published shape of a finding, which is deliberately not
+// the Problem struct itself.
+//
+// Two differences, and both are the point. A severity is its name: the numbers
+// order a policy merge (spec 7.7) and are ours to rearrange, which stops being
+// true the moment a consumer parses them. And the documentation link is
+// carried rather than left to be constructed, the same link the other two
+// formats print, because a check name a reader cannot look up turns their own
+// finding into a question for whoever owns policy (spec 7.8).
+type jsonProblem struct {
+	File       string `json:"file"`
+	Line       int    `json:"line"`
+	Subject    string `json:"subject,omitempty"`
+	Check      string `json:"check"`
+	Severity   string `json:"severity"`
+	Text       string `json:"text"`
+	Docs       string `json:"docs,omitempty"`
+	PolicyFile string `json:"policy_file,omitempty"`
+	PolicyLine int    `json:"policy_line,omitempty"`
+}
+
+// formatJSON writes the findings as one array, which is what the summary
+// comment in spec 10.3 reads and what anyone integrating the checks elsewhere
+// gets for free (spec 10.1).
+func formatJSON(w io.Writer, problems []Problem) error {
+	// Never nil. An empty array is something a consumer can iterate, where
+	// `null` makes every reader special-case the green build.
+	out := make([]jsonProblem, 0, len(problems))
+	for _, p := range problems {
+		out = append(out, jsonProblem{
+			File:       p.File,
+			Line:       p.Line,
+			Subject:    p.Subject,
+			Check:      p.Check,
+			Severity:   p.Severity.String(),
+			Text:       p.Text,
+			Docs:       DocsURL(p.Check),
+			PolicyFile: p.PolicyFile,
+			PolicyLine: p.PolicyLine,
+		})
+	}
+
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", "  ")
+	return enc.Encode(out)
 }
 
 // escapeData protects the message body. A literal newline would end the

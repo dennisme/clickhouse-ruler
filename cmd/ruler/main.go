@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -78,7 +79,8 @@ func check(args []string, stdout, stderr io.Writer) int {
 
 	sourcesPath := fs.String("sources", "sources.yaml", "path to the sources file")
 	configPath := fs.String("config", "", "path to a policy file, defaults to ruler.yaml beside the rules directory if present")
-	format := fs.String("format", lint.FormatText, "output format: text or github")
+	format := fs.String("format", lint.FormatText,
+		"output format: "+strings.Join(lint.Formats, ", "))
 	explain := fs.Bool("explain", false, "print each rule's resolved policy and where every setting came from")
 	online := fs.Bool("online", false,
 		"also run the checks that need a ClickHouse connection, connecting as each source's own user")
@@ -169,11 +171,12 @@ func check(args []string, stdout, stderr io.Writer) int {
 		return exitUsage
 	}
 	if *explain {
-		// stdout belongs to the workflow runner in github mode, where every
-		// line is parsed as a command. The explanation is for a human, so it
-		// goes to stderr rather than becoming stray annotations on the diff.
+		// stdout belongs to a machine in every format but text: the workflow
+		// runner parses each line as a command, and json is one document. The
+		// explanation is for a human, so it goes to stderr rather than
+		// becoming stray annotations on the diff or breaking the parse.
 		out := stdout
-		if *format == lint.FormatGitHub {
+		if *format != lint.FormatText {
 			out = stderr
 		}
 		explainSet(out, set)
