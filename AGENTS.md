@@ -172,6 +172,10 @@ hook and a CI check. Allowed types: `feat`, `fix`, `doc`, `perf`, `ref`,
 
 Never bypass a pre-commit hook. Do not commit unless asked to.
 
+Subjects end up in the release notes, which GitHub generates per pull request.
+[RELEASE.md](RELEASE.md) covers what a tag publishes and why the floating major
+tag moves.
+
 ## Status
 
 The project is early and has no external users, so names, flags and metrics can

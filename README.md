@@ -242,6 +242,9 @@ just integration-clean  # start ClickHouse, run integration tests, tear it down
 No mocked databases anywhere: integration tests run against real ClickHouse,
 with real SQL and real rows.
 
+[RELEASE.md](RELEASE.md) covers cutting a release: one `v*` tag publishes the
+archives, the image, the chart and the floating major tag.
+
 ## Design
 
 The full design, the research behind it, and the open questions are in
