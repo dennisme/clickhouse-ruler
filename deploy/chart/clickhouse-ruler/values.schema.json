@@ -70,7 +70,8 @@
       "type": "object",
       "required": [
         "port",
-        "logLevel"
+        "logLevel",
+        "shutdownTimeoutSeconds"
       ],
       "properties": {
         "port": {
@@ -85,6 +86,10 @@
             "warn",
             "error"
           ]
+        },
+        "shutdownTimeoutSeconds": {
+          "type": "integer",
+          "minimum": 1
         },
         "extraArgs": {
           "type": "array",
@@ -345,6 +350,69 @@
           "type": "object"
         }
       }
+    },
+    "serviceMonitor": {
+      "type": "object",
+      "required": [
+        "enabled"
+      ],
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "interval": {
+          "type": "string"
+        },
+        "scrapeTimeout": {
+          "type": "string"
+        },
+        "labels": {
+          "type": "object"
+        },
+        "annotations": {
+          "type": "object"
+        },
+        "relabelings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "metricRelabelings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      }
+    },
+    "podDisruptionBudget": {
+      "type": "object",
+      "required": [
+        "enabled"
+      ],
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "minAvailable": {
+          "type": [
+            "integer",
+            "string",
+            "null"
+          ]
+        },
+        "maxUnavailable": {
+          "type": [
+            "integer",
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "priorityClassName": {
+      "type": "string"
     },
     "resources": {
       "type": "object"

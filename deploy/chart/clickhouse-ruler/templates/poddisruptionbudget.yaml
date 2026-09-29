@@ -1,0 +1,25 @@
+{{- if .Values.podDisruptionBudget.enabled }}
+{{- include "clickhouse-ruler.validateDisruptionBudget" . -}}
+{{/*
+What this protects is state rather than availability. A ruler holds every
+pending alert's ActiveAt in memory, so a drain that takes every replica at once
+sends each of them back through its full `for` (spec 12.2), which is the thing
+running more than one was meant to cover.
+*/}}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "clickhouse-ruler.fullname" . }}
+  labels:
+    {{- include "clickhouse-ruler.labels" . | nindent 4 }}
+spec:
+  {{- with .Values.podDisruptionBudget.minAvailable }}
+  minAvailable: {{ . }}
+  {{- end }}
+  {{- with .Values.podDisruptionBudget.maxUnavailable }}
+  maxUnavailable: {{ . }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "clickhouse-ruler.selectorLabels" . | nindent 6 }}
+{{- end }}

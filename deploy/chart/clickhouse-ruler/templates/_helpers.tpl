@@ -130,6 +130,37 @@ which allows no source key the sources file does not have.
 {{- end -}}
 
 {{/*
+A budget that allows no eviction at all blocks node maintenance rather than
+shaping it, and the drain it blocks is reported by whatever is draining rather
+than here. Percentages are left to the API server, which understands them.
+*/}}
+{{- define "clickhouse-ruler.validateDisruptionBudget" -}}
+{{- $pdb := .Values.podDisruptionBudget -}}
+{{- if and $pdb.minAvailable $pdb.maxUnavailable -}}
+{{- fail "set either podDisruptionBudget.minAvailable or podDisruptionBudget.maxUnavailable, not both" -}}
+{{- end -}}
+{{- if and (not $pdb.minAvailable) (not $pdb.maxUnavailable) -}}
+{{- fail "podDisruptionBudget.enabled needs one of minAvailable or maxUnavailable" -}}
+{{- end -}}
+{{- if and $pdb.minAvailable (not (kindIs "string" $pdb.minAvailable)) -}}
+{{- if ge (float64 $pdb.minAvailable) (float64 .Values.replicaCount) -}}
+{{- fail "podDisruptionBudget.minAvailable is at least replicaCount, which blocks every eviction rather than shaping it" -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+How long the pod gets to stop. The ruler drains in-flight evaluations for
+--shutdown-timeout and then gives the HTTP surface five more seconds, so a
+grace period equal to the timeout has kubelet sending SIGKILL exactly as the
+drain ends: the evaluation is cut off anyway and the warning that says so may
+never be written. Ten seconds covers the HTTP shutdown and leaves slack.
+*/}}
+{{- define "clickhouse-ruler.terminationGracePeriodSeconds" -}}
+{{- add .Values.ruler.shutdownTimeoutSeconds 10 -}}
+{{- end -}}
+
+{{/*
 git-sync's flags, shared by the init container that populates the volume and the
 sidecar that keeps it current. The exec hook is not here: it belongs only to the
 sidecar, because at init time there is no ruler listening to reload.
