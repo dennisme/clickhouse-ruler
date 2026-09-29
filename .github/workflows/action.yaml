@@ -82,6 +82,10 @@ jobs:
           FINDINGS: ${{ steps.json.outputs.findings }}
         run: |
           set -euo pipefail
+          if [ -z "$FINDINGS" ]; then
+            echo "::error::the action wrote no findings file, so its check step never reached its outputs"
+            exit 1
+          fi
           jq -e 'length > 0' "$FINDINGS" >/dev/null
           jq -e 'any(.[]; .check == "rule/expr" and .severity == "error")' "$FINDINGS" >/dev/null
           jq -e 'all(.[]; .severity | test("^(off|warning|error)$"))' "$FINDINGS" >/dev/null

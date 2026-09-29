@@ -190,6 +190,13 @@ runs:
       run: |
         set -uo pipefail
 
+        # `shell: bash` runs with -e, which would end this step the moment ruler
+        # reports a finding: before the outputs below are written, and before
+        # the comment step runs at all, since a composite action stops at its
+        # first failing step. The exit code is what is being measured here, so
+        # it is captured rather than fatal, and the last step is what fails.
+        set +e
+
         args=(check --sources "$SOURCES")
         [ -n "$CONFIG" ] && args+=(--config "$CONFIG")
         [ -n "$CHANGED_SINCE" ] && args+=(--changed-since "$CHANGED_SINCE")
@@ -292,4 +299,7 @@ runs:
         CODE: ${{ steps.check.outputs.code }}
       run: |
         set -euo pipefail
-        exit "$CODE"
+
+        # Empty would mean the step above never reached its outputs, which is a
+        # failure of this action rather than a clean run.
+        exit "${CODE:-1}"
