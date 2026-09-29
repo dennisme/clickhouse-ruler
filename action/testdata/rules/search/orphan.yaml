@@ -1,0 +1,23 @@
+# Deliberately broken the other way: the selector matches no source in
+# sources.yaml, so this rule would never be evaluated by any ruler holding this
+# file. A warning rather than an error, which is what proves the action reports
+# both severities rather than only the blocking one.
+groups:
+  - name: latency
+    interval: 1m
+    rules:
+      - alert: SearchIsSlow
+        sources:
+          team: search
+        expr: |
+          SELECT ServiceName, max(Duration) / 1e6 AS value
+          FROM otel.otel_traces
+          WHERE Timestamp >= {{ .From }} AND Timestamp < {{ .To }}
+          GROUP BY ServiceName
+          HAVING value > 1000
+        window: 5m
+        labels:
+          team: search
+          severity: warning
+        annotations:
+          summary: "{{ .ServiceName }} is slow"

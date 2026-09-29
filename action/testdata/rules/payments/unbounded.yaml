@@ -1,0 +1,21 @@
+# Deliberately broken: the query has no upper time bound, so every evaluation
+# scans without limit. rule/expr is fixed at error, so this is what makes the
+# workflow's run fail and the annotation appear on the diff.
+groups:
+  - name: refunds
+    interval: 1m
+    rules:
+      - alert: RefundsAreFailing
+        sources:
+          team: payments
+        expr: |
+          SELECT ServiceName, count() AS value
+          FROM otel.otel_traces
+          WHERE Timestamp >= {{ .From }}
+          GROUP BY ServiceName
+        window: 5m
+        labels:
+          team: payments
+          severity: warning
+        annotations:
+          summary: "refunds are failing in {{ .ServiceName }}"

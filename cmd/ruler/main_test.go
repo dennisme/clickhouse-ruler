@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -239,14 +240,67 @@ func TestCheckRejectsUnknownFormat(t *testing.T) {
 
 	code, _, stderr := runCheck(t, "check",
 		"--sources", filepath.Join(dir, "sources.yaml"),
-		"--format", "json",
+		"--format", "xml",
 		filepath.Join(dir, "rules"))
 
 	if code == 0 {
 		t.Error("exit = 0, want non-zero for an unknown format")
 	}
-	if !strings.Contains(stderr, "json") {
+	if !strings.Contains(stderr, "xml") {
 		t.Errorf("error should name the bad format, got: %s", stderr)
+	}
+}
+
+// The feed the summary comment reads (spec 10.3). Stdout is one JSON document,
+// so anything else printed there stops it parsing.
+func TestCheckJSONFormat(t *testing.T) {
+	dir := fixture(t, brokenRule, "")
+
+	code, stdout, _ := runCheck(t, "check",
+		"--sources", filepath.Join(dir, "sources.yaml"),
+		"--format", "json",
+		filepath.Join(dir, "rules"))
+
+	if code != exitFinding {
+		t.Errorf("exit = %d, want exitFinding\n%s", code, stdout)
+	}
+
+	var findings []struct {
+		Check    string `json:"check"`
+		Severity string `json:"severity"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &findings); err != nil {
+		t.Fatalf("stdout is not JSON: %v\n%s", err, stdout)
+	}
+
+	var found bool
+	for _, f := range findings {
+		if f.Check == "rule/expr" && f.Severity == "error" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected a rule/expr error finding, got:\n%s", stdout)
+	}
+}
+
+// Same reason as github mode: the explanation is for a human, and on stdout it
+// would sit inside the JSON document a consumer parses.
+func TestCheckExplainStaysOffStdoutInJSONMode(t *testing.T) {
+	dir := fixture(t, bareRule, "")
+
+	_, stdout, stderr := runCheck(t, "check",
+		"--sources", filepath.Join(dir, "sources.yaml"),
+		"--format", "json",
+		"--explain",
+		filepath.Join(dir, "rules"))
+
+	var findings []any
+	if err := json.Unmarshal([]byte(stdout), &findings); err != nil {
+		t.Fatalf("stdout is not JSON: %v\n%s", err, stdout)
+	}
+	if !strings.Contains(stderr, "labels/required") {
+		t.Errorf("explanation should be on stderr, got: %s", stderr)
 	}
 }
 
@@ -357,5 +411,78 @@ func TestCheckSummaryNeedsOnline(t *testing.T) {
 	}
 	if _, err := os.Stat(out); err == nil {
 		t.Error("a summary file was written for a run that never connected")
+	}
+}
+
+// The comment body, written beside the annotations in one run. Two runs of the
+// same checks to get two outputs is what the action used to need, and with
+// --online that repeats every query (spec 10.3).
+func TestCheckWritesTheMarkdownReport(t *testing.T) {
+	dir := fixture(t, brokenRule, "")
+	path := filepath.Join(dir, "report.md")
+
+	code, stdout, _ := runCheck(t, "check",
+		"--sources", filepath.Join(dir, "sources.yaml"),
+		"--format", "github",
+		"--markdown", path,
+		"--link-prefix", "https://github.com/o/r/blob/abc123/",
+		filepath.Join(dir, "rules"))
+
+	if code != exitFinding {
+		t.Errorf("exit = %d, want exitFinding\n%s", code, stdout)
+	}
+
+	// Annotations still go to stdout, which is what GitHub renders on the diff.
+	if !strings.HasPrefix(stdout, "::error file=") {
+		t.Errorf("the log should still carry the annotations, got:\n%s", stdout)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	report := string(data)
+	if !strings.Contains(report, "| error |") {
+		t.Errorf("the report should carry the finding as a row, got:\n%s", report)
+	}
+
+	// The fixture is a temporary directory outside this package, so its paths
+	// cannot be spelled the way a repository would and carry no link. A URL
+	// built from them would name a directory on one machine (spec 10.3).
+	if strings.Contains(report, "https://github.com/o/r/blob/abc123/") {
+		t.Errorf("a path outside the working directory must not be linked, got:\n%s", report)
+	}
+}
+
+// - is stdout, the same spelling --summary already uses.
+func TestCheckWritesTheMarkdownReportToStdout(t *testing.T) {
+	dir := fixture(t, brokenRule, "")
+
+	_, stdout, _ := runCheck(t, "check",
+		"--sources", filepath.Join(dir, "sources.yaml"),
+		"--markdown", "-",
+		filepath.Join(dir, "rules"))
+
+	if !strings.Contains(stdout, "| error |") {
+		t.Errorf("want the table on stdout, got:\n%s", stdout)
+	}
+}
+
+// A table on stdout in github mode would be read as annotations, one stray
+// command per row.
+func TestCheckRefusesTheReportOnStdoutInGitHubMode(t *testing.T) {
+	dir := fixture(t, brokenRule, "")
+
+	code, _, stderr := runCheck(t, "check",
+		"--sources", filepath.Join(dir, "sources.yaml"),
+		"--format", "github",
+		"--markdown", "-",
+		filepath.Join(dir, "rules"))
+
+	if code != exitUsage {
+		t.Errorf("exit = %d, want exitUsage", code)
+	}
+	if !strings.Contains(stderr, "--markdown") {
+		t.Errorf("the refusal should name the flag, got: %s", stderr)
 	}
 }

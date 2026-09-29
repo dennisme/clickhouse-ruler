@@ -1364,6 +1364,21 @@ Three rules it has to follow:
   silently checks nothing is the failure mode that makes a green build
   meaningless.
 
+How that lands as behaviour: `--changed-since <ref>` resolves the merge base
+of `HEAD` and `ref`, takes every path that differs between the merge base and
+the work tree, and adds the files git does not track yet, because a rule
+written and not yet committed is exactly the rule an author wants checked. The
+sources file and any `ruler.yaml` in that set widen the run to everything. A
+base that will not resolve, a shallow checkout or a directory that is not a
+repository all widen it too, and say on stderr which of those happened.
+
+Filtering narrows the findings, not the reading. The loader still walks the
+whole tree, because the binding and the duplicate checks are answers about the
+tree rather than about a file, and a finding is then kept when it belongs to a
+changed file. So the filter can only ever drop a finding a full run would also
+have reported, never invent one, and the online checks a filtered run pays for
+are the same ones an unfiltered run pays for.
+
 Filtering is off unless asked for. `ruler check` with no flag checks the whole
 directory, because that is what the loader does at startup, and a CI run whose
 scope quietly differs from the loader's is a rule that passes review and fails
@@ -1378,9 +1393,21 @@ that belong in the spec rather than in whoever writes it:
 - **The download is verified.** A composite action that fetches a release
   binary and executes it is a supply chain step. Releases publish a checksums
   file; the action checks it before running anything.
-- **Tags are disciplined.** The action version should equal the tool version,
-  which means a release moves the floating major tag. Without that, everyone
-  pinned to `@v1` runs whatever the tag pointed at the day they wrote it.
+- **Tags are disciplined.** The action version equals the tool version, so a
+  release moves the floating major tag. Without that, everyone pinned to `@v1`
+  runs whatever the tag pointed at the day they wrote it. The release workflow
+  moves it, last, once the binaries and the chart are published, and never for
+  a prerelease.
+
+  Which leaves the action having to accept a tag that cannot name a release
+  asset, because an asset carries the full version and `v1` is not one. It
+  resolves the newest release under that major and says which one it picked.
+  A branch is not a release and is refused: the alternative is a checker whose
+  version nobody can state, gating a merge.
+
+  Divergence stays possible on purpose. The version input names any release, so
+  a consumer can hold the binary back while taking the action forward, which is
+  the direction the floor below allows.
 
 Not a Node action: it would add npm, a committed bundle, and a second
 dependency tree to a repository whose entire dependency list is three Go
@@ -1396,10 +1423,29 @@ than appending one per push. That belongs in the action, which already runs
 inside GitHub's own environment, and it keeps a GitHub client out of a service
 whose dependencies are otherwise ClickHouse and Alertmanager.
 
-The split that makes it possible: the binary can emit its findings as JSON,
-and the action reads that to build the comment. The same output serves anyone
-integrating the checks elsewhere (10.1), which is an argument for it existing
-independent of the comment.
+The split that makes it possible is two outputs rather than one. `--markdown`
+writes the comment body, a table with a row per finding, beside the annotations
+in the same run: asking for a comment never runs the checks twice, which with
+`--online` would mean every query twice. `--format=json` emits the findings as
+an array for anyone integrating the checks elsewhere (10.1), which is an
+argument for it existing whether or not a comment is posted.
+
+The table belongs to the binary and not to the action for the same reason the
+cost table does (7.10). A markdown table and its cell escaping are the same
+problem whoever reads it, a second one written in shell is a second one to keep
+right, and shell in an action is code no test in this repository can reach. What
+the action adds is the one thing the binary cannot know: the URL a path is
+appended to, which is where the files are served from rather than anything about
+the rules. A path the repository cannot spell is printed without a link rather
+than with a broken one.
+
+Two things about that array are contract rather than convenience. A severity
+is its name, `warning` or `error`, never the number: the numeric order exists
+so policy merging can take a maximum across scopes (7.7), and publishing it
+would turn an internal ordering into something a consumer parses and we can no
+longer reorder. And every finding carries its documentation link, the same one
+the other two formats print, because a check name a reader cannot look up is
+the author's problem turned into a question for whoever owns policy (7.8).
 
 #### What the action exposes
 

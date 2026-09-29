@@ -78,3 +78,36 @@ jobs:
           echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io \
             --username "${{ github.actor }}" --password-stdin
           helm push "$chart" oci://ghcr.io/dennisme/charts
+
+      # The floating major tag, moved only once everything above succeeded.
+      #
+      # Without this, everyone pinned to @v1 runs whatever the tag pointed at
+      # the day it was created, which for a checker means a pull request gated
+      # by rules nobody can see the version of (spec 10.3).
+      #
+      # Force, because moving a tag is the whole point, and last, because a tag
+      # moved past a failed chart push would advertise a release that is not
+      # there.
+      - name: Move the floating major tag
+        run: |
+          set -euo pipefail
+          version="$GITHUB_REF_NAME"
+
+          # A prerelease is not what @v1 should hand to somebody who did not ask
+          # for it.
+          case "$version" in
+            *-*)
+              echo "::notice::$version is a prerelease, leaving the floating tag where it is"
+              exit 0
+              ;;
+            v[0-9]*.[0-9]*.[0-9]*) ;;
+            *)
+              echo "::notice::$version is not a full version, leaving the floating tag where it is"
+              exit 0
+              ;;
+          esac
+
+          major="${version%%.*}"
+          git tag --force "$major" "$GITHUB_SHA"
+          git push --force origin "refs/tags/$major"
+          echo "$major now points at $version"

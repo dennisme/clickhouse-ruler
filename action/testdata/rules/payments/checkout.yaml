@@ -1,0 +1,21 @@
+# The rule that passes, so a run that reports findings everywhere is visibly
+# different from one that cannot read the directory at all.
+groups:
+  - name: checkout
+    interval: 1m
+    rules:
+      - alert: CheckoutIsSlow
+        sources:
+          team: payments
+        expr: |
+          SELECT ServiceName, max(Duration) / 1e6 AS value
+          FROM otel.otel_traces
+          WHERE Timestamp >= {{ .From }} AND Timestamp < {{ .To }}
+          GROUP BY ServiceName
+          HAVING value > 1000
+        window: 5m
+        labels:
+          team: payments
+          severity: warning
+        annotations:
+          summary: "{{ .ServiceName }} is slow"

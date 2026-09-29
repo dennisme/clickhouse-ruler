@@ -134,6 +134,30 @@ The same version, commit and Go version are labels on
 from the outside. [Running it](running.md) covers that metric and the rest of
 what the ruler exposes.
 
+## Which version to check rules with
+
+`ruler check` in CI and the ruler in the cluster run the same validation from
+the same package, which holds only while they are the same version. Skew has a
+safe direction and an unsafe one. A checker newer than the fleet blocks a rule
+the rulers would have accepted: noisy, and nobody is paged for it. A checker
+older than the fleet passes a rule a ruler then refuses, and because a refused
+reading refuses a start, that lands as a replica that cannot come back.
+
+So the requirement is a floor rather than a pin to the newest release: **the
+checker must be at least as new as the oldest ruler still running.** During a
+rollout two versions are live and the floor is the older of them.
+
+That number is a query rather than something to remember. `version` is a label
+on `clickhouse_ruler_build_info`, so over the fleet:
+
+```text
+min by (version) (clickhouse_ruler_build_info)
+```
+
+Pin the checker to at least that, rather than to the newest release: a release
+that adds a check turns every open pull request red without anyone touching a
+rule, and whoever upgrades the rulers is who should decide when that happens.
+
 ## The Helm chart
 
 The chart is an OCI artifact beside the image, at the same version:
