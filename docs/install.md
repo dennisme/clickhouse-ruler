@@ -134,11 +134,26 @@ The same version, commit and Go version are labels on
 from the outside. [Running it](running.md) covers that metric and the rest of
 what the ruler exposes.
 
+## The Helm chart
+
+The chart is an OCI artifact beside the image, at the same version:
+
+```sh
+helm install ruler oci://ghcr.io/dennisme/charts/clickhouse-ruler \
+  --namespace monitoring --values my-values.yaml
+```
+
+So `--version 1.2.3` installs the chart that runs the `1.2.3` image, and one
+number answers which of either is deployed. It runs the ruler with a git-sync
+sidecar by default, which is what delivers the rules and asks the ruler to
+re-read them. [How a rule reaches the ruler](deployment.md#how-a-rule-reaches-the-ruler)
+covers what the chart decides and what it leaves to you.
+
 ## What is not here
 
-No Helm chart and no package manager repositories. There is a compose stack in
-the repository, but it exists to develop and test against a real ClickHouse
-rather than to deploy from; `just compose-up` is documented in
+No package manager repositories. There is a compose stack in the repository, but
+it exists to develop and test against a real ClickHouse rather than to deploy
+from; `just compose-up` is documented in
 [AGENTS.md](https://github.com/dennisme/clickhouse-ruler/blob/main/AGENTS.md).
 For running it for real, [deployment topologies](deployment.md) is the page
 that covers the shapes, and each of them is this binary or this image.
