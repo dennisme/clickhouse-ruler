@@ -279,22 +279,39 @@ That is the property we are copying. Everything else follows from it.
    and nothing shows `ruler check` as a required status or what `--format=github`
    renders as in the diff.
 
-7. **Nothing in this repository runs the action.** Open, and a gap between a
-   decided design and a shipped one. 7.1 chose a composite action in `action/`
-   consumed as `dennisme/clickhouse-ruler/action@v1`, and 10.3 settled its
-   wiring down to checksum verification, tag discipline, permissions and the
-   JSON feed behind the summary comment. The binary half of that is built:
-   `ruler check --format=github` emits the workflow commands GitHub renders on
-   a diff. The rest is not. There is no `action/` directory, no
-   `--changed-since` for the changed-file expansion 10.3 puts in the binary,
-   and no JSON output for the comment to read.
+7. **The pull request checker.** Built. 7.1 chose a composite action in
+   `action/` consumed as `dennisme/clickhouse-ruler/action@v1`, and 10.3 settled
+   its wiring down to checksum verification, tag discipline, permissions and the
+   JSON feed behind the summary comment. All of it ships.
 
-   What is missing beyond the action itself is something that exercises it here.
-   A rules directory of fixtures, some deliberately failing, and a workflow
-   running the action against them when those files or the checker change, so
-   the wiring is regression-tested rather than described. Without it the first
-   run of `@v1` is in a consumer's repository, and a green build in this one
-   says nothing about whether the action works.
+   The binary half is three flags: `--format=github` emits the workflow commands
+   GitHub renders on a diff, `--format=json` is the feed the summary comment
+   reads, and `--changed-since` is the changed-file expansion 10.3 puts in the
+   binary rather than in the action. Each is reachable by hand, which is the
+   property 10.1 asks for: the action can only wire together flags a laptop
+   already has.
+
+   `action/action.yml` is the wiring. It verifies the release checksums file
+   before executing anything, runs the checks, and updates one summary comment
+   in place rather than appending one per push. It owns five inputs the binary
+   does not have, and each is wiring rather than behaviour: which release to
+   run, a prebuilt binary to run instead, the rules path, whether to comment,
+   and the token. A test reads the inputs back and fails on any other one that
+   is not a `ruler check` flag, so the property survives the next edit.
+
+   What exercises it here is `action/testdata`, a rules directory that fails on
+   purpose, and the `action` workflow. Three jobs, because there are three ways
+   this breaks: the checker in the checkout, so a change to `internal/lint` is
+   what the action runs; the summary comment, which needs a token and an API;
+   and a checksum-verified download of a published release, which is the only
+   thing the archive names exist for. Each asserts the run failed on rules that
+   fail, because an action that silently passes is the failure worth catching.
+
+   Tag discipline is code rather than intention now: the release workflow moves
+   the floating major tag once the binaries and the chart are published, never
+   for a prerelease, and the action resolves such a tag to the newest release
+   under that major. A branch is refused, because a checker whose version
+   nobody can state is not one to gate a merge on.
 
 ---
 
