@@ -1262,6 +1262,65 @@ Neither is a reason to run one ruler instead of three. They are reasons the
 deduplicated alerts can disagree about *when*, never about *what*, and an
 operator should know that before they are paged about it.
 
+#### What the chart ships beside the ruler
+
+A chart that installs the process and nothing else leaves two things to
+whoever installs it, and both of them are the difference between a ruler that
+is running and a ruler somebody can operate: something has to scrape it, and
+the pod has to be allowed to stop the way the process expects to.
+
+**Scraping is opt-in because a CRD is not a dependency the chart can assume.**
+Everything on the operations page (8.7) is an expression against `/metrics`,
+and none of it works until a Prometheus is pointed at the port. The usual
+answer is a `ServiceMonitor`, which is an object the Prometheus Operator
+defines: render one on a cluster that does not have the operator installed and
+the whole install fails, on a resource the ruler itself does not need. So the
+chart templates it and leaves it off, which is the only default that renders
+everywhere. It carries the interval, the scrape timeout and relabelings,
+because a monitor nobody can tune is one somebody deletes and rewrites.
+
+Scrape annotations were the other candidate and are declined. They are a
+convention rather than an interface: nothing honours `prometheus.io/scrape`
+unless a scrape config was written to read it, so a chart putting them on by
+default writes configuration for a reader that may not exist, and reads as
+though scraping is handled when it is not. A value people can set is the same
+annotation without the claim.
+
+**The grace period has to outlast the drain, and by default it does not.**
+`--shutdown-timeout` gives an in-flight evaluation 30 seconds to finish, then
+the HTTP surface gets five more. Kubernetes' default
+`terminationGracePeriodSeconds` is also 30, so on the defaults kubelet's
+`SIGKILL` lands exactly as the drain ends: the evaluation is cut off anyway,
+and `shutdown timeout expired with evaluations still running` (8.4), the one
+line that reports it, may never be written. The chart derives the grace period
+from the timeout rather than letting the two defaults collide, and the timeout
+is a value in seconds rather than a Go duration because Helm cannot parse one
+and a second knob that can disagree with the first is the bug this is fixing.
+
+**A disruption budget is the other half of running more than one.** The
+highly available topology above is several rulers with no shared state, and
+12.2 is what a restart costs: every pending alert serves its `for` again, and a
+condition that clears inside that second `for` never pages. A drain that takes
+every replica at once therefore loses exactly what the replicas were for. The
+budget is opt-in because a `minAvailable` of one on a single-replica release
+blocks the drain instead of shaping it, and a chart that made node maintenance
+fail by default would be worse than the thing it prevents.
+
+`priorityClassName` is the same argument at the node rather than at the drain:
+the component that reports the outage should not be the first one evicted by
+it. The chart carries the field and sets nothing, because the class names are
+the cluster's.
+
+**Two things are deliberately not packaged yet.** The dashboards in
+`deploy/grafana/dashboards` stay files to import: Helm reads only what is inside
+the chart directory, so packaging them means either a second copy to drift or a
+chart that renders differently from a checkout than from the registry, which is
+a poor trade for an object imported once. And no `PrometheusRule` ships. Every
+threshold on the operations page is stated next to the reasoning for it, and an
+alert file carrying the thresholds without the reasoning is what gets silenced
+at 3am and never re-enabled. Shipping one is its own decision, with its own
+argument about which of those signals belong to whoever operates the ruler.
+
 ### 10.3 Checking a pull request
 
 Two decisions, both of which look like implementation detail and are not.
