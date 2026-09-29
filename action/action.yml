@@ -246,6 +246,10 @@ runs:
         PR: ${{ github.event.pull_request.number }}
         FORK: ${{ github.event.pull_request.head.repo.fork }}
         REPO: ${{ github.repository }}
+        # The head commit rather than the branch: a link to a branch moves with
+        # the next push and stops pointing at the line the finding was about.
+        HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        SERVER_URL: ${{ github.server_url }}
       run: |
         set -euo pipefail
 
@@ -273,11 +277,21 @@ runs:
             echo
             echo "| Severity | Rule | Check | Finding |"
             echo "|---|---|---|---|"
-            # The docs link goes on the check name, which is the thing a reader
-            # cannot look up without it (spec 7.8).
-            jq --raw-output '
+            # Two links per row, and each answers a different question. The
+            # location links to the line at this pull request's head commit, so
+            # a reader lands on the rule rather than searching for it. The docs
+            # link goes on the check name, which is the thing a reader cannot
+            # look up without it (spec 7.8).
+            #
+            # A finding's path is whatever the rules argument spelled, so the
+            # workspace prefix and a leading ./ come off before it can name a
+            # file in the repository.
+            jq --raw-output \
+              --arg blob "$SERVER_URL/$REPO/blob/$HEAD_SHA/" \
+              --arg workspace "$GITHUB_WORKSPACE/" '
               .[] |
-              "| \(.severity) | `\(.file):\(.line)`\(if .subject then " " + .subject else "" end) | \(if .docs then "[`" + .check + "`](" + .docs + ")" else "`" + .check + "`" end) | \(.text | gsub("\n"; " ") | gsub("\\|"; "\\\\|")) |"
+              (.file | ltrimstr($workspace) | ltrimstr("./")) as $path |
+              "| \(.severity) | [`\($path):\(.line)`](\($blob)\($path)#L\(.line))\(if .subject then " " + .subject else "" end) | \(if .docs then "[`" + .check + "`](" + .docs + ")" else "`" + .check + "`" end) | \(.text | gsub("\n"; " ") | gsub("\\|"; "\\\\|")) |"
             ' "$FINDINGS"
           fi
         } >"$body"
