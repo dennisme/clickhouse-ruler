@@ -81,6 +81,8 @@ func check(args []string, stdout, stderr io.Writer) int {
 	configPath := fs.String("config", "", "path to a policy file, defaults to ruler.yaml beside the rules directory if present")
 	format := fs.String("format", lint.FormatText,
 		"output format: "+strings.Join(lint.Formats, ", "))
+	changedSince := fs.String("changed-since", "",
+		"only report findings in files that differ from the merge base with this git reference")
 	explain := fs.Bool("explain", false, "print each rule's resolved policy and where every setting came from")
 	online := fs.Bool("online", false,
 		"also run the checks that need a ClickHouse connection, connecting as each source's own user")
@@ -164,6 +166,18 @@ func check(args []string, stdout, stderr io.Writer) int {
 				return exitUsage
 			}
 		}
+	}
+
+	// After every check has run, because the loader walks the whole tree and
+	// the checks about a pair or a tree are answers about the tree. Narrowing
+	// here can only drop a finding a full run would also have reported, and
+	// the exit code below follows what is left (spec 10.3).
+	if *changedSince != "" {
+		filter := lint.ChangedSince(dir, *changedSince, []string{*sourcesPath, *configPath})
+		if filter.Note != "" {
+			printf(stderr, "%s\n", filter.Note)
+		}
+		problems = filter.Keep(problems)
 	}
 
 	if err := lint.Format(stdout, *format, problems); err != nil {
