@@ -334,11 +334,14 @@ file changed, so CI has nothing to run and a reload has nothing to re-read.
 Its sibling below, [a source that does not meet the
 contract](#a-source-that-does-not-meet-the-contract), is the one that is yours.
 
-Two things feed it, on two clocks. Every evaluation of a rule is compared
-against the one before it, which costs no query and answers within one group
-interval. Alongside that a slow pass re-checks each rule against recent data on
+Three things feed it. Every evaluation of a rule is compared against the one
+before it, which costs no query and answers within one group interval. Alongside
+that a slow pass re-checks each rule against recent data on
 `--recheck-interval`, which costs one bounded query per rule per source and
-answers the one question no evaluation can.
+answers the one question no evaluation can. The third runs once per reading and
+is [a rule that loaded with a
+finding](#a-rule-that-loaded-with-a-finding), which is a different kind of
+problem: not a rule that broke after review, but one that was never reviewed.
 
 Read it by its labels, not by its value:
 
@@ -429,6 +432,45 @@ Each feed clears only its own checks, so an evaluation cannot blank the
 re-check pass's answer and the pass cannot blank an evaluation's. That also means
 a `rule/attribute-key` finding outlives a fix by up to one `--recheck-interval`:
 nothing re-asks until the pass runs again.
+
+### A rule that loaded with a finding
+
+```promql
+clickhouse_ruler_problem{check=~"rule/expr|rule/settings|rule/name|rule/protected-label|yaml/unknown-field|yaml/type|annotations/protected"} > 0
+```
+
+**Trouble as soon as it appears, and the fix is a pull request.** These are
+findings that block a merge. The ruler loads the rule anyway and raises this, so
+seeing it means a file reached a running ruler without the checker stopping it:
+either `ruler check` is not wired into that repository's CI, or somebody merged
+past a failing run. Start by asking why the checker did not run, then fix the
+rule. It clears on the next reload once the file is fixed.
+
+The rule keeps evaluating and keeps paging in the meantime, which is the point:
+refusing to start would have taken every other team's alerts down with it.
+
+Two of these cost money on the cluster rather than only being wrong, so they are
+worth finding first:
+
+| Check | What it costs while it runs |
+|---|---|
+| `rule/expr` | The query has no `{{ .From }}` or `{{ .To }}`, so it scans without a time bound on every evaluation, at the group's interval, forever. On a large table this is the most expensive thing a single rule can do. |
+| `rule/settings` | The query carries its own `SETTINGS` clause, which replaces the limits the ruler sends with every evaluation. The row cap, the execution timeout and the memory ceiling configured on the source no longer apply to it. |
+
+Both land on whoever owns the cluster rather than whoever wrote the rule, and
+neither shows up as a ruler problem: the ruler stays healthy while ClickHouse
+pays. Find what they actually cost with [what one rule cost last
+night](#what-one-rule-cost-last-night), which reads `system.query_log` by the
+rule's `log_comment`, and compare it against the other rules on that cluster.
+
+The remaining checks are wrong rather than expensive. `rule/name` is two rules
+sharing an alert name in one group, which report into one metric series.
+`rule/protected-label` is a query producing a label the ruler owns: the ruler
+wins the label, so the page still routes correctly, and the column is dropped.
+`yaml/unknown-field` and `yaml/type` mean part of the file was not understood
+and was skipped, so the rule is running with less configuration than its author
+wrote. `annotations/protected` is a rule setting a `ruler_*` annotation, which
+the ruler overwrites when a template fails.
 
 ### A source that does not meet the contract
 
@@ -571,14 +613,16 @@ database survive, because you need them, and the password does not.
 
 Two refusals look like an outage and are the design working.
 
-**An error-severity finding stops the ruler.** `refusing to start: at least
-one rule failed a correctness check` on stderr, and exit code 1. The same
-checks run in CI and at startup, so a rule that slipped past a pull request
-still cannot run. A rule that fails a correctness check cannot do its job: it
-will not parse, has no identity, has nothing to query, scans without a time
-bound, or breaks routing. Fix the rule, or re-run `ruler check` to see the
-finding with its line number. Correctness checks cannot be softened by
-policy, which is what makes this refusal trustworthy.
+**A file nobody can read stops the ruler.** `refusing to start: at least one
+file could not be read` on stderr, and exit code 1. That is a file which is not
+valid YAML, or a rules directory that cannot be listed, and it is the whole
+list. Re-run `ruler check` to see the finding with its line number.
+
+Nothing else refuses, and that is deliberate. A rule that fails any other
+correctness check still loads, because a ruler that will not start pages nobody
+while a rule that loaded against its author's intent still pages somebody. Those
+findings block the merge instead, and the running ruler says so: see
+[a rule that loaded with a finding](#a-rule-that-loaded-with-a-finding).
 
 **A source failing the user contract is refused on its own.** `refusing a
 source that failed the user contract` in the log, and the ruler carries on.
@@ -633,16 +677,19 @@ A reload is all or nothing. Every way it can fail leaves the ruler evaluating
 exactly what it was evaluating before the signal, and raises the refused-reload
 gauge above.
 
-**An error-severity finding refuses the whole reading.** Including the files in
-it that are fine: a rules tree is loaded as a tree, and half of one is not a
-configuration anybody wrote down. This is the same bar `ruler check` and startup
-apply, so a rule that would fail CI cannot be reloaded into a running ruler
-either. A warning is reported and the reload proceeds.
+**A file that cannot be read refuses the whole reading.** A file that is not
+valid YAML, a missing sources file, a policy file that will not parse, a rules
+directory that has gone. Including the files in the reading that are fine: a
+rules tree is loaded as a tree, and half of one is not a configuration anybody
+wrote down. The running configuration is kept, because a reload is not an
+opportunity to leave the ruler evaluating nothing.
 
-**A file that cannot be read refuses it too.** A missing sources file, a policy
-file that will not parse, a rules directory that has gone: the running
-configuration is kept, because a reload is not an opportunity to leave the ruler
-evaluating nothing.
+**Every other finding is reported and the reload proceeds**, at any severity.
+This is the same bar startup applies, and it is lower than the bar `ruler check`
+applies in CI on purpose: the checker is where a bad rule is meant to be stopped,
+and a ruler refusing to reload over a rule that already merged would punish every
+other team's alerts for one file. What reaches a running ruler anyway is raised
+on the problem gauge below.
 
 **A source failing the user contract is still refused on its own**, exactly as
 at startup, and the rest of the reload proceeds. A reload is where a revoked

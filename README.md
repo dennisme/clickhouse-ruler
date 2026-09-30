@@ -95,7 +95,9 @@ ruler run --rules ./rules --sources ./rules/sources.yaml \
 the query is and reads no rows, `--sample` reads rows and implies `--online`,
 and `--backfill` replays each rule over a past range and implies `--online`
 too. Neither of the two that read rows implies the other.
-An error-severity finding refuses to start the ruler.
+A file the ruler cannot read refuses to start it. Every other finding loads and
+is raised on `clickhouse_ruler_problem`, because a ruler that will not start
+pages nobody.
 
 ## Install
 
