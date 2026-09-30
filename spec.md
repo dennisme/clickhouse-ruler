@@ -226,30 +226,44 @@ That is the property we are copying. Everything else follows from it.
    per source, so the finding clears on the source that raised it rather than on
    any source that rendered (6.5).
 
-5. **Whether one bad file may refuse a whole reading.** Open, and the thing to
-   settle before anybody depends on this. An error-severity finding refuses
-   everything the ruler read, which on a reload keeps the running version and at
-   startup means the process does not start (7.6). That is the right call for a
-   rule that cannot alert, and it is a hard one to defend for a supplemental
-   annotation: `annotations/protected` is fixed at `error`, so one team writing
-   `ruler_error:` in one rule stops a second team's reviewed alert edit from
-   reaching a cluster that syncs on merge, and takes a restarted ruler down with
-   it. The annotation is context for a human reading the page, not routing and
-   not the condition, and the blast radius does not match.
+5. **Whether one bad file may refuse a whole reading.** Decided, and it turned
+   out to be two questions wearing one name. A check's severity says who has to
+   be involved to unblock a contributor (7.6). Whether a finding stops the ruler
+   reading the files at all is a separate property, and fusing the two is what
+   made this entry hard: `annotations/protected` is fixed at `error` because an
+   annotation a responder reads is worth a repo owner's attention, and that same
+   `error` was taking a restarted ruler down over a name collision in a field
+   that does not route.
 
-   The arguments both ways: an omitted file is alerts that silently stop
-   existing, which is the failure this tool exists to prevent, and it is worst at
-   cold start where the process would come up ready while missing a file's worth
-   of paging. Against that, CI is where this is meant to be caught, so the
-   refusal only ever fires when CI did not run or somebody merged past it, and
-   punishing every other rule in the checkout for that is a shared-fate coupling
-   nobody chose. Also unresolved: "the offending file" is well defined for the
-   single-file checks and not for `rule/duplicate-alert`, `rule/source-match` or
-   `ruleset/directory`, which are findings about two files or a tree.
+   Severity stays where it is. What is new is that a finding refuses a start only
+   when there is nothing to read, which is `yaml/syntax` and `ruleset/directory`
+   and nothing else. Every other finding blocks a merge, loads, and raises
+   `clickhouse_ruler_problem` so the ruler says out loud what got past CI. 11 has
+   the decision and the reasoning; 7.6 has the check table's half of it and 8.2
+   the gauge's.
 
-   What to work through before deciding: each refusal case on its own, cold start
-   separately from reload, and whether the answer is per-file tolerance, a
-   narrower fixed-at-error list, or an operator flag that is off by default.
+   **What the upstream rulers settle, and what they do not.** Prometheus and
+   vmalert both refuse a start and tolerate a reload, and both refuse the whole
+   reading rather than the file at fault, so the asymmetry and the granularity in
+   11 are precedent rather than invention. Neither has grown a per-file
+   tolerance, in rulers old enough that the demand would have reached them, which
+   is why dropping a file was never the answer here either: a rules tree is
+   loaded as a tree. That also disposes of "the offending file" having no good
+   meaning for `rule/duplicate-alert`, `rule/source-match` or
+   `ruleset/directory`, since nothing needs the term once dropping a file is off
+   the table.
+
+   Where they stop helping is the check this entry was really about. Neither
+   reserves an annotation namespace, so nothing upstream corresponds to
+   `annotations/protected` and no precedent was available. The nearest thing is
+   `-rule.validateTemplates`, which is template parsing rather than a reserved
+   name, so it corresponds to `annotations/template`: on by default there and
+   `warn` here, which makes this ruler the more permissive of the two on that
+   check rather than the stricter.
+
+   They differ on reporting rather than on refusing, and there the findings model
+   here was already ahead: vmalert accumulates a failure per file and returns all
+   of them, Prometheus stops at the first bad file.
 
 6. **How a merged rule reaches a running ruler.** Decided and built. A rule's
    life is pull request, approval, deployment, running, alert sent, and the
@@ -393,3 +407,9 @@ Done. The README is a front door again, and `how-it-works`, `running` and
 - [ClickHouse discussion 60267, on exposing the SQL parser as a library](https://github.com/ClickHouse/ClickHouse/discussions/60267)
 - [AfterShip/clickhouse-sql-parser](https://github.com/AfterShip/clickhouse-sql-parser)
 - [ClickHouse EXPLAIN reference](https://clickhouse.com/docs/sql-reference/statements/explain)
+- [Prometheus recording rules, on validating rule files and applying changes only if all rule files are well-formatted](https://prometheus.io/docs/prometheus/latest/configuration/recording_rules/)
+- [Prometheus rule manager, restoring the previous rule set when a load fails](https://github.com/prometheus/prometheus/blob/main/rules/manager.go)
+- [Prometheus startup and reload path, including `--config.auto-reload` and the config checksum](https://github.com/prometheus/prometheus/blob/main/cmd/prometheus/main.go)
+- [vmalert](https://docs.victoriametrics.com/vmalert/)
+- [vmalert startup and reload path, including `-rule.validateTemplates` and `-configCheckInterval`](https://github.com/VictoriaMetrics/VictoriaMetrics/blob/master/app/vmalert/main.go)
+- [vmalert rule parsing, accumulating a failure per file](https://github.com/VictoriaMetrics/VictoriaMetrics/blob/master/app/vmalert/config/config.go)

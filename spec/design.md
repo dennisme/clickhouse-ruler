@@ -237,6 +237,16 @@ and the source name. A query returning either as a column cannot rename its
 own alert or merge two clusters' alerts, because an identity that query data
 can set is a routing hazard.
 
+`team` is written last for the same reason, and it was added when
+`rule/protected-label` stopped refusing a start (7.6, 11). A rule may still set
+`team` in its `labels`, which is a value in a file that shows up in a diff and
+can be enumerated; a result column named `team` cannot be either, and it decides
+which route the page takes and which team the gauge names. Until the check
+refused the whole reading, the refusal was the only thing standing between a
+query alias and the routing of somebody else's page. So the ruler wins the label
+and raises `clickhouse_ruler_problem`, which is what leaves the check free to
+block a merge without also being a routing hazard.
+
 **Nothing is inferred from the directory.** An alert's labels are what the
 rule file writes down, and a path never becomes one. A rules tree can be laid
 out per team, per service, or flat, and the layout changes only who

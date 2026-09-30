@@ -16,6 +16,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/dennisme/clickhouse-ruler/internal/alert"
 	"github.com/dennisme/clickhouse-ruler/internal/lint"
 	"github.com/dennisme/clickhouse-ruler/internal/policy"
 	"github.com/dennisme/clickhouse-ruler/internal/rule"
@@ -438,14 +439,18 @@ func protectedLabels(file string, r rule.Rule, matched []source.Source) []lint.P
 	// protected; a matched source's alert_labels are protected for the rules
 	// that reach it, because a query cannot know better than the ruler which
 	// cluster it ran on (spec 6.3.1).
-	protected := map[string]bool{"alertname": true, "source": true, "team": true}
+	protected := map[string]bool{
+		alert.LabelAlertname: true,
+		alert.LabelSource:    true,
+		alert.LabelTeam:      true,
+	}
 	for _, src := range matched {
 		for k := range src.Labels {
 			protected[k] = true
 		}
 	}
 
-	for _, key := range []string{"alertname", "source"} {
+	for _, key := range []string{alert.LabelAlertname, alert.LabelSource} {
 		if _, ok := r.Labels[key]; ok {
 			add(r.LineOf("labels."+key, "labels"),
 				"labels may not set %q: an alert's identity comes from its name and its source", key)

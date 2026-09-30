@@ -39,11 +39,10 @@ func TestRunRequiresRulesAndAlertmanagerFlags(t *testing.T) {
 	}
 }
 
-// The same correctness bar as `ruler check`: a rule that cannot run at all
-// must not be allowed to start a ruler that would silently never evaluate
-// it (spec 7.6).
-func TestRunRefusesToStartOnAnErrorSeverityFinding(t *testing.T) {
-	dir := fixture(t, brokenRule, "")
+// A file nobody can read is the whole of what stops a start. The ruler would
+// otherwise come up holding a configuration nobody wrote down (spec 7.6).
+func TestRunRefusesToStartOnAnUnreadableFile(t *testing.T) {
+	dir := fixture(t, unreadableRule, "")
 
 	code, stderr := runRunCmd(t, "run",
 		"--rules", filepath.Join(dir, "rules"),
@@ -53,8 +52,8 @@ func TestRunRefusesToStartOnAnErrorSeverityFinding(t *testing.T) {
 	if code != exitFinding {
 		t.Errorf("exit = %d, want exitFinding\n%s", code, stderr)
 	}
-	if !strings.Contains(stderr, "rule/expr") {
-		t.Errorf("expected the rule/expr finding on stderr, got:\n%s", stderr)
+	if !strings.Contains(stderr, "yaml/syntax") {
+		t.Errorf("expected the yaml/syntax finding on stderr, got:\n%s", stderr)
 	}
 	if !strings.Contains(stderr, "refusing to start") {
 		t.Errorf("expected a refusal message, got:\n%s", stderr)

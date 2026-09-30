@@ -265,7 +265,7 @@ func checksFromPolicy(p *policy.Policy, r ruleset.Rule, src source.Source) query
 	// matched (spec 6.3.1).
 	c.KnownLabels = labelNames(r.Labels, src.Labels, alert.LabelAlertname, alert.LabelSource)
 	c.ProtectedLabels = labelNames(nil, src.Labels,
-		alert.LabelAlertname, alert.LabelSource, "team")
+		alert.LabelAlertname, alert.LabelSource, alert.LabelTeam)
 
 	if tf := p.For(lint.CheckRuleTableFunction); tf.Severity != lint.SeverityOff {
 		c.AllowedTableFunctions = tf.Keys

@@ -7,10 +7,12 @@ ruler run --rules ./rules --sources ./rules/sources.yaml \
   --alertmanager http://localhost:9093
 ```
 
-An error-severity finding refuses to start. A warning is printed and the ruler
-runs anyway. A source failing the user contract at error severity is refused
-on its own instead: its rules stop evaluating and every other source carries
-on.
+A file that is not valid YAML refuses to start, and so does a rules directory
+that cannot be read. Every other finding is printed and the ruler runs anyway,
+raising `clickhouse_ruler_problem` for anything that should have blocked the
+merge, because a ruler that will not start pages nobody. A source failing the
+user contract at error severity is refused on its own: its rules stop
+evaluating and every other source carries on.
 
 `ruler check` stays offline unless it is asked not to. `--online` runs the
 checks that need a connection, connecting as each source's own user, because

@@ -614,7 +614,9 @@ its job:
   Alertmanager routes on labels, so nothing here misroutes, and the field is
   still what a responder reads: `summary` and its neighbours are what an
   Alertmanager template builds a PagerDuty title out of. Off would restore the
-  silent overwrite the check exists to stop (6.5).
+  silent overwrite the check exists to stop (6.5). It does not refuse a start,
+  because `ruler_error` saves an Alertmanager template a step rather than being
+  the operational signal, which is the metrics: see the two axes below.
 - `rule/settings`. The clause replaces the limits the ruler sends with every
   evaluation, so softening this check would soften every cost control behind
   it at once (7.3). The tier 1 checks that cannot be configured for a
@@ -636,6 +638,46 @@ check name is (7.8). The consequence to be aware of is that `ruler check
 --online` against an unreachable cluster exits 0, with a warning per rule: a job
 that reads only the exit code cannot tell that from a clean run, which is why the
 run page says so.
+
+**Not configurable is not the same as refusing a reading, and that is a second
+axis.** Severity answers who has to be involved to unblock a contributor. Whether
+a finding stops the ruler reading the files at all is a different question, and
+the two were one property until 12.5 was worked through. Fusing them meant
+`annotations/protected` took a restarted ruler down over a name collision in a
+field that does not route, which is a blast radius nobody chose.
+
+A finding refuses a reading when there is nothing to read, and that is
+`yaml/syntax` and `ruleset/directory`. Everything else on the fixed list above
+blocks a merge, loads, and raises `clickhouse_ruler_problem` under its own check
+name so the ruler says out loud what got past the checker (8.2). The reason is
+the one 11 keeps returning to: a ruler that will not start pages nobody, so
+refusing costs every alert in the checkout while loading costs one rule behaving
+as written rather than as intended.
+
+`RefusesReading` on the check table is where this is stated, beside `Fixed` and
+`Always`, for the same reason those are: it is a per-check fact, the generated
+pages print it, and a call site is the wrong place to decide it. Two checks carry
+it. A check that is fixed at `error` and does not carry it is the normal case
+rather than an exception.
+
+**Unknown fields are enforced at the merge, not at the start.** The schema stays
+strict: the reader walks the YAML by hand and reports an unrecognised key as a
+finding with a line number, which is what lets the checker point at it in a diff.
+What a strict schema must not do is refuse a start, because 10.2 has rule files
+and the binary deploying independently, so a ruler rolled back behind files using
+a field the older binary does not know would fail to come up over our own
+strictness. `yaml/type` travels with `yaml/unknown-field` for the same reason,
+since a field of the wrong shape leaves the reader able to skip that node and read
+the rest.
+
+**Two fixed checks cost somebody who is not the author, and they are documented
+rather than excepted.** A rule missing `{{ .From }}` or `{{ .To }}` scans
+unbounded on every evaluation, and a rule with its own `SETTINGS` replaces the
+limits the ruler sends (7.3). The bill goes to whoever owns the cluster. They load
+like the rest, and what keeps that from being a foot gun is owed in two places:
+the gauge names the check, the team and the file, and the operations page says
+what each costs and how to see it (8.7). A signal nobody was told to watch is the
+same as no signal.
 
 Convention checks carry a configurable severity of `error`, `warn` or `off`,
 and where they take a list of keys that list is configurable too:

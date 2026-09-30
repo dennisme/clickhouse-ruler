@@ -13,6 +13,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
+	"github.com/dennisme/clickhouse-ruler/internal/lint"
 	"github.com/dennisme/clickhouse-ruler/internal/notify"
 	"github.com/dennisme/clickhouse-ruler/internal/scheduler"
 )
@@ -137,16 +138,15 @@ func TestStartupRecordsTheConfigReloadMetrics(t *testing.T) {
 	}
 }
 
-// Spec 7.6: an error-severity finding means the ruler refuses the file and
-// keeps the previous version of it. The rules that were running stay running,
+// Spec 7.6: a file nobody can read refuses the reading, and the ruler keeps
+// the previous version of it. The rules that were running stay running,
 // because a reload is not an opportunity to leave the ruler evaluating nothing.
-func TestReloadRefusedByAnErrorFindingKeepsTheRunningRules(t *testing.T) {
+func TestReloadRefusedByAnUnreadableFileKeepsTheRunningRules(t *testing.T) {
 	dir := fixture(t, bareRule, reloadPolicy)
 	r := startRunner(t, dir)
 	stamped := testutil.ToFloat64(r.metrics.ConfigLastReloadTimestamp)
 
-	// A rule with no time bound on its query: rule/expr, always an error.
-	writeRuleFile(t, dir, "latency.yaml", brokenRule)
+	writeRuleFile(t, dir, "latency.yaml", unreadableRule)
 	err := r.reload(context.Background())
 
 	// The reason is returned as well as logged, because a reload asked for over
@@ -154,7 +154,7 @@ func TestReloadRefusedByAnErrorFindingKeepsTheRunningRules(t *testing.T) {
 	if err == nil {
 		t.Fatal("reload returned no error, want the refusal's reason for whoever asked")
 	}
-	if !strings.Contains(err.Error(), "correctness check") {
+	if !strings.Contains(err.Error(), "could not be read") {
 		t.Errorf("reload error = %q, want the reason the log line carries", err)
 	}
 
@@ -167,6 +167,56 @@ func TestReloadRefusedByAnErrorFindingKeepsTheRunningRules(t *testing.T) {
 	if got := testutil.ToFloat64(r.metrics.ConfigLastReloadTimestamp); got != stamped {
 		t.Errorf("clickhouse_ruler_config_last_reload_timestamp_seconds moved to %v on a refused reload, want %v: "+
 			"the timestamp is the age of what is running", got, stamped)
+	}
+}
+
+// A finding that blocks a merge is not a finding that stops the ruler. The
+// rule loads, because refusing costs every alert in the checkout and loading
+// costs one rule behaving as written rather than as intended (spec 7.6).
+func TestReloadLoadsARuleWhoseFindingOnlyBlocksAMerge(t *testing.T) {
+	dir := fixture(t, bareRule, reloadPolicy)
+	r := startRunner(t, dir)
+
+	// A second file whose query has no time bound: rule/expr, always an error,
+	// and one of the checks that no longer refuses a reading.
+	writeRuleFile(t, dir, "unbounded.yaml", brokenRule)
+
+	if err := r.reload(context.Background()); err != nil {
+		t.Fatalf("reload = %v, want the rule loaded: rule/expr blocks a merge, not a start", err)
+	}
+	if r.rules != 2 {
+		t.Errorf("rules loaded = %d, want 2: the finding should not have dropped the rule", r.rules)
+	}
+	if got := testutil.ToFloat64(r.metrics.ConfigLastReloadSuccessful); got != 1 {
+		t.Errorf("clickhouse_ruler_config_last_reload_successful = %v, want 1", got)
+	}
+}
+
+// The other half of loading a rule that should not have merged: the ruler has
+// to say so. Without this the rule runs and looks healthy (spec 7.6, 10.4).
+func TestReloadRaisesTheLoadFindingOnTheProblemGauge(t *testing.T) {
+	dir := fixture(t, bareRule, reloadPolicy)
+	r := startRunner(t, dir)
+
+	writeRuleFile(t, dir, "unbounded.yaml", brokenRule)
+	if err := r.reload(context.Background()); err != nil {
+		t.Fatalf("reload = %v", err)
+	}
+
+	// The loader resolves the rules root, and on macOS a temp dir is a symlink,
+	// so the label carries the resolved path rather than the one written to.
+	root, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// No team: this fixture's rule carries no team label, and `sources` is a
+	// selector rather than one. An empty team is the honest answer when no file
+	// says who owns the rule.
+	got := testutil.ToFloat64(r.metrics.Problem.WithLabelValues(
+		"HighLatency", lint.CheckRuleExpr, "error", "",
+		filepath.Join(root, "rules", "payments", "unbounded.yaml"), ""))
+	if got != 1 {
+		t.Errorf("clickhouse_ruler_problem for rule/expr = %v, want 1: the rule loaded with nobody told", got)
 	}
 }
 

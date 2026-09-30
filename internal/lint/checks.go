@@ -152,6 +152,20 @@ type Check struct {
 	// fire, which is the failure this tool exists to prevent (spec 7.6).
 	Fixed bool
 
+	// RefusesReading means a finding of this check stops the ruler reading the
+	// files at all: the process does not start, and a reload keeps the version
+	// already running. It is a separate axis from severity, which says who has
+	// to be involved to unblock a contributor. Only a file nobody can read
+	// carries it, because refusing costs every alert in the checkout while
+	// loading costs one rule behaving as written rather than as intended
+	// (spec 7.6).
+	//
+	// A check that is fixed at error and does not carry this is the normal
+	// case. Those findings block a merge, load, and are raised on
+	// clickhouse_ruler_problem so nothing that got past the checker runs
+	// silently.
+	RefusesReading bool
+
 	// Always is the severity a fixed check carries. Every one of them states it,
 	// because "not configurable" and "error" are different claims and the
 	// generated check pages print this one: `rule/inspect` is fixed and a
@@ -200,7 +214,7 @@ func (c Check) Configurable() bool { return !c.Fixed }
 // configurable.
 var checks = []Check{
 	{
-		Name: CheckYAMLSyntax, Spec: "7.3", Fixed: true, Always: SeverityError,
+		Name: CheckYAMLSyntax, Spec: "7.3", Fixed: true, RefusesReading: true, Always: SeverityError,
 		Summary: "the file is not valid YAML, so nothing in it could be read",
 	},
 	{
@@ -313,7 +327,7 @@ var checks = []Check{
 		Summary: "two rules whose alerts carry the same labels, so neither can be told from the other",
 	},
 	{
-		Name: CheckRulesetDirectory, Spec: "7.1", Fixed: true, Always: SeverityError,
+		Name: CheckRulesetDirectory, Spec: "7.1", Fixed: true, RefusesReading: true, Always: SeverityError,
 		Summary: "the rules directory could not be read",
 	},
 

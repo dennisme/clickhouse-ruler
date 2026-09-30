@@ -143,7 +143,7 @@ func runRun(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	// An error-severity finding refuses to start; a warning is reported above
 	// and the ruler runs anyway (spec 7.6).
 	if cfg.refused() {
-		printf(stderr, "refusing to start: at least one rule failed a correctness check\n")
+		printf(stderr, "refusing to start: at least one file could not be read\n")
 		return exitFinding
 	}
 

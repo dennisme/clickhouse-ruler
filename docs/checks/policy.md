@@ -18,8 +18,8 @@ soften the checks that police policy files.
 | [`policy/fixed-check`](#policy-fixed-check) | fixed, always `error` | none | [7.6](https://github.com/dennisme/clickhouse-ruler/blob/main/spec.md) |
 | [`policy/severity`](#policy-severity) | fixed, always `error` | none | [7.6](https://github.com/dennisme/clickhouse-ruler/blob/main/spec.md) |
 | [`policy/unknown-check`](#policy-unknown-check) | fixed, always `error` | none | [7.6](https://github.com/dennisme/clickhouse-ruler/blob/main/spec.md) |
-| [`ruleset/directory`](#ruleset-directory) | fixed, always `error` | none | [7.1](https://github.com/dennisme/clickhouse-ruler/blob/main/spec.md) |
-| [`yaml/syntax`](#yaml-syntax) | fixed, always `error` | none | [7.3](https://github.com/dennisme/clickhouse-ruler/blob/main/spec.md) |
+| [`ruleset/directory`](#ruleset-directory) | fixed, always `error`, refuses to load | none | [7.1](https://github.com/dennisme/clickhouse-ruler/blob/main/spec.md) |
+| [`yaml/syntax`](#yaml-syntax) | fixed, always `error`, refuses to load | none | [7.3](https://github.com/dennisme/clickhouse-ruler/blob/main/spec.md) |
 | [`yaml/type`](#yaml-type) | fixed, always `error` | none | [7.3](https://github.com/dennisme/clickhouse-ruler/blob/main/spec.md) |
 | [`yaml/unknown-field`](#yaml-unknown-field) | fixed, always `error` | none | [7.3](https://github.com/dennisme/clickhouse-ruler/blob/main/spec.md) |
 

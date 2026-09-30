@@ -82,6 +82,12 @@ const LabelSource = "source"
 // say which labels a query may not produce (spec 6.3.1).
 const LabelAlertname = "alertname"
 
+// LabelTeam names the team a page belongs to. A rule or a source may set it,
+// because both are reviewed files; a result column may not, because the route
+// tree is generated from the files and a value that appears only at query time
+// has nowhere to land (spec 6.3.1).
+const LabelTeam = "team"
+
 // State tracks the alert instances of a single rule against a single source.
 //
 // A rule matching several sources gets a State per source. They share nothing:
@@ -407,12 +413,21 @@ func (s *State) tracked() int {
 // reporting something untrue. alertname and source are written last because
 // they are the alert's identity, and an identity query data can set is a
 // routing hazard.
+//
+// team is the third the query may not set. It decides the route the page takes
+// and names the team on clickhouse_ruler_problem, and a value that exists only
+// at query time has no route in a tree generated from the files. A rule and a
+// source may both still set it: those are values in a reviewed file. The column
+// is dropped rather than overriding, and rule/protected-label reports it.
 func (s *State) labelsFor(smpl Sample) map[string]string {
 	labels := make(map[string]string, len(s.base)+len(smpl.Labels)+len(s.src.Labels)+2)
 	for k, v := range s.base {
 		labels[k] = v
 	}
 	for k, v := range smpl.Labels {
+		if k == LabelTeam {
+			continue
+		}
 		labels[k] = v
 	}
 	for k, v := range s.src.Labels {
