@@ -3,15 +3,6 @@
 Validates a repository of ClickHouse alert rules on a pull request: inline
 annotations on the diff, and one summary comment updated in place.
 
-Every check runs in the `ruler` binary, so anything this action does in CI is
-reachable by hand:
-
-```bash
-ruler check --sources sources.yaml --changed-since origin/main ./rules/
-```
-
-## Usage
-
 ```yaml
 name: rules
 
@@ -19,6 +10,7 @@ on: pull_request
 
 permissions:
   contents: read
+  pull-requests: write
 
 jobs:
   check:
@@ -26,92 +18,28 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          # Deep enough to reach the merge base, which is what changed-since
-          # compares against. A shallow checkout has none, so the action checks
-          # every rule and says so.
+          # The merge base is what changed-since compares against, and a
+          # shallow checkout has none.
           fetch-depth: 0
 
       - uses: dennisme/clickhouse-ruler/action@v1
         with:
           rules: ./rules
-          sources: ./sources.yaml
+          sources: ./rules/sources.yaml
           changed-since: origin/${{ github.base_ref }}
+          comment: true
 ```
 
-## Which version runs
+**[Checking a pull request](https://dennisme.github.io/clickhouse-ruler/pull-requests/)**
+is the manual: every input and output, the permissions each surface needs, which
+version runs, what a required status does and does not gate, and how to run the
+same thing without this action. `action.yml` is the wiring itself.
 
-A release moves the floating major tag, so `@v1` is the newest v1 release and
-gets bug fixes without an edit here. `@v1.2.3` pins one release, which is what
-stops a release that adds a check from turning every open pull request red.
-
-Either way the binary is the release the action's tag names. To run a different
-one, say an older checker while a fleet is mid-upgrade, name it:
-
-```yaml
-      - uses: dennisme/clickhouse-ruler/action@v1
-        with:
-          version: v1.1.0
-          rules: ./rules
-```
-
-A branch or a commit is not a release, so `@main` needs `version` set.
-
-## Permissions
-
-| Needed for | Permission |
-|---|---|
-| The offline checks and the inline annotations | `contents: read` |
-| The summary comment | `pull-requests: write` as well |
-
-A pull request from a fork gets neither a writable token nor secrets, so it
-cannot run the online checks or post a comment. The comment step reports that as
-a notice and the run carries on. Nothing here uses `pull_request_target` to work
-around it: that would run a fork's code against the base repository with a write
-token, which is not worth a comment.
-
-## Inputs
-
-| Input | Default | What it does |
-|---|---|---|
-| `rules` | required | The rules directory to check |
-| `sources` | `sources.yaml` | The sources file |
-| `config` | | A policy file, otherwise `ruler.yaml` beside the rules if present |
-| `format` | `github` | `github` for annotations on the diff, or `text`, or `json` |
-| `changed-since` | | Report only findings in files that differ from the merge base with this reference |
-| `online` | `false` | Also run the checks that need a ClickHouse connection |
-| `version` | the tag this action was called with | The release to download |
-| `binary` | | A prebuilt `ruler` to run instead, which skips the download |
-| `comment` | `false` | Post one summary comment, updated in place |
-| `github-token` | `${{ github.token }}` | Token for reading and writing the comment |
-
-## Outputs
-
-| Output | What it carries |
-|---|---|
-| `findings` | Path to the JSON findings file, empty unless `format: json` |
-| `count` | How many findings were reported, empty unless `format: json` |
-| `report` | Path to the markdown findings table, empty unless `comment: true` |
-
-## What the comment carries
-
-The table is the binary's, written by `ruler check --markdown`, so it is built
-and tested in Go beside the cost table rather than assembled here. Each finding
-links twice: the location to that line at the pull request's head commit, and
-the check name to its documentation page.
-
-One run produces both the annotations and the table, so asking for a comment
-never runs the checks twice, which with `online: true` would mean every query
-twice. By hand:
+Every check runs in the `ruler` binary, so nothing here is out of reach by hand:
 
 ```bash
-ruler check --sources sources.yaml \
-  --markdown report.md \
-  --link-prefix "https://github.com/o/r/blob/$(git rev-parse HEAD)/" \
-  ./rules/
+ruler check --sources sources.yaml --changed-since origin/main ./rules/
 ```
-
-A path the repository cannot spell carries no link rather than a broken one, so
-pass `rules` as a relative path.
 
 ## What this repository tests
 

@@ -1132,8 +1132,8 @@ all three files on `SIGHUP`. The observability in section 8 is complete.
 Hot reload is `SIGHUP` and nothing else: nothing watches the filesystem,
 because whoever rolled the files out is the only party that knows when they are
 complete. A reload is all or nothing, keeps the pending state of every rule that
-is still the same rule, and refuses a reading that fails a correctness check
-(7.6). What it does not do is notice a rule that became broken while nothing
+is still the same rule, and refuses a reading only where there is nothing to
+read (7.6). What it does not do is notice a rule that became broken while nothing
 changed on disk, which is 10.4's job rather than the signal's.
 
 Tier 3 backfill is in, behind `ruler check --backfill` (7.4).
@@ -1470,6 +1470,28 @@ annotations, and the summary comment additionally needs
 token nor secrets, so it cannot run the online checks or post a comment. That
 is correct behaviour, and 7.10 explains why `pull_request_target` is not the
 way around it.
+
+#### Where the checker is documented
+
+A fourth place describing this project, where 14 allows three. `action/`
+carries a README because GitHub renders it for whoever arrives from a `uses:`
+line in somebody else's workflow, and that reader needs orienting. What it must
+not carry is a second manual, which is what it had become: the inputs, the
+permissions split and the tag rules were stated there and in no other file, so
+the site's reader had to leave the site to configure the thing the site spends
+a section arguing for.
+
+The site is the manual, so the page is the home. `action/README.md` is
+orientation and a link: what the action is, the shortest workflow that works,
+and where the rest lives. The page owns the inputs, the permissions split, the
+tag discipline, what an annotation looks like once GitHub has rendered it, and
+what `ruler check` does and does not gate as a required status.
+
+The page repeats one thing the code decides, which is the input list, so a test
+reads `action.yml` and the page and fails when they disagree. Same gate 7.8
+puts on the check pages, for the same reason: an input renamed in the wiring and
+left alone on the page is a workflow somebody writes from the documentation and
+cannot run.
 
 #### The checker in CI and the rulers in the fleet
 

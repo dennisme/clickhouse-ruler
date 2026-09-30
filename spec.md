@@ -287,11 +287,12 @@ That is the property we are copying. Everything else follows from it.
    reaches the sidecar and the ruler reloads. That wants the stack in 9.1 and is
    its own slice.
 
-   One smaller thing on the same chain, and it belongs to 7 below rather than
-   here: there is no CI example that gates a merge. `docs/running.md` shows
+   One smaller thing on the same chain belonged to 7 below rather than here, and
+   is done. There was no CI example that gated a merge: `docs/running.md` showed
    `ruler check --online --summary` and the cost table as a pull request comment,
-   and nothing shows `ruler check` as a required status or what `--format=github`
-   renders as in the diff.
+   and nothing showed `ruler check` as a required status or what `--format=github`
+   renders as in the diff. The site has a page for it now, and 10.3 says why that
+   page rather than `action/README.md` is where the checker is documented.
 
 7. **The pull request checker.** Built. 7.1 chose a composite action in
    `action/` consumed as `dennisme/clickhouse-ruler/action@v1`, and 10.3 settled
@@ -327,6 +328,13 @@ That is the property we are copying. Everything else follows from it.
    for a prerelease, and the action resolves such a tag to the newest release
    under that major. A branch is refused, because a checker whose version
    nobody can state is not one to gate a merge on.
+
+   Documented now as well, which it was not when this entry first said it all
+   ships. `dennisme/clickhouse-ruler/action@v1` appeared in `action/README.md`
+   and in no other file in the tree: not the README, not the site, not the nav.
+   The one argument in 4 with no workaround anywhere was the one thing a reader
+   could not find, and a checker nobody can find gates nothing. 10.3 has the
+   decision about which file is its home and what that leaves in `action/`.
 
 ---
 
@@ -371,6 +379,13 @@ both directions.
 
 Done. The README is a front door again, and `how-it-works`, `running` and
 `comparison` are pages on the site.
+
+There is a fourth place, and it is not an exception to the rule above. `action/`
+carries a README of its own because GitHub renders it for whoever follows a
+`uses:` line into the directory, and a reader who arrives there is owed
+orientation rather than a redirect to a search box. It is a front door for one
+directory, the same job the README does for the repository, and 10.3 says what
+that allows it to say and what belongs on the site instead.
 
 ## 13. Sources
 

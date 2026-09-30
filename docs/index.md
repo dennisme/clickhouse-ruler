@@ -26,6 +26,9 @@ door and carries the status; everything longer than a screen lives here.
   database's job rather than a check's.
 - **[Install](install.md)** — a release archive, the container image, or
   `go install`, and how to tell which build you ended up with.
+- **[Checking a pull request](pull-requests.md)** — the action that gates a
+  merge, what an author sees on the diff, and what a required status does and
+  does not catch.
 - **[Running it](running.md)** — every flag, and the metrics and logs it
   exposes.
 - **[Operations](operations.md)** — what to watch with the number that means

@@ -111,7 +111,7 @@ sources:
 	// ruler, and a warning because the answer is read through row policies
 	// (spec 7.3, 8.2).
 	for _, want := range []string{
-		`team="recheck"`, `file="` + rulePath + `"`, `rule="RenamedAttribute"`, `severity="warning"`,
+		`team="recheck"`, `file="` + labelPath(t, rulePath) + `"`, `rule="RenamedAttribute"`, `severity="warning"`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("the raised gauge does not carry %s:\n%s", want, problemLines(body))

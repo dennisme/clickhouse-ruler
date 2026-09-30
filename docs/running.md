@@ -108,20 +108,17 @@ sentence that matters, "4.1 million rows every 30 seconds". The numbers are
 predictions, with the accuracy [`rule/cost`](checks/rule.md#rule-cost)
 describes, and a cell that is not a count says why rather than saying zero.
 
-Posting it is the workflow's job. The ruler writes a file; a job that can
+Posting it is the workflow's job. The ruler writes a file, and a job that can
 comment on a pull request already holds the token for it:
 
-```yaml
-- run: ruler check --online --sources rules/sources.yaml --summary cost.md rules/
-- run: gh pr comment "$PR" --body-file cost.md
-  env:
-    GH_TOKEN: ${{ github.token }}
-    PR: ${{ github.event.pull_request.number }}
+```bash
+ruler check --online --sources rules/sources.yaml --summary cost.md rules/
+gh pr comment "$PR" --body-file cost.md
 ```
 
-A workflow triggered from a fork gets a read-only token and no secrets, so it
-cannot reach the cluster and cannot post. That is the right behaviour rather
-than something to work around.
+[Checking a pull request](pull-requests.md) is the whole of that path: the
+action that runs it, and what a fork can and cannot do, which is reach no
+cluster and post nothing.
 
 | Flag | Default | What it does |
 | --- | --- | --- |

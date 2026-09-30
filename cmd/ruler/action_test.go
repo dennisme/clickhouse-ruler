@@ -77,3 +77,76 @@ func TestActionInputsAreCheckFlags(t *testing.T) {
 		}
 	}
 }
+
+// The action's inputs are documented on the site rather than in `action/`
+// (spec 10.3), which puts the list in a file the wiring does not compile. An
+// input renamed in `action.yml` and left alone on the page is a workflow
+// somebody writes from the documentation and cannot run, so the two are
+// compared here the way `just generate-check` compares the check pages.
+func TestActionInputsAreDocumented(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", "action", "action.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var action struct {
+		Inputs map[string]struct{} `yaml:"inputs"`
+	}
+	if err := yaml.Unmarshal(data, &action); err != nil {
+		t.Fatal(err)
+	}
+	if len(action.Inputs) == 0 {
+		t.Fatal("the action declares no inputs")
+	}
+
+	page, err := os.ReadFile(filepath.Join("..", "..", "docs", "pull-requests.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	documented := documentedInputs(t, string(page))
+
+	for name := range action.Inputs {
+		if !documented[name] {
+			t.Errorf("input %s is not on the page", name)
+		}
+	}
+	for name := range documented {
+		if _, ok := action.Inputs[name]; !ok {
+			t.Errorf("the page documents %s, which the action does not declare", name)
+		}
+	}
+}
+
+// documentedInputs reads the first column of the page's input table, which is
+// the one table whose rows are named after something in action.yml.
+func documentedInputs(t *testing.T, page string) map[string]bool {
+	t.Helper()
+
+	const heading = "## Inputs"
+	start := strings.Index(page, heading)
+	if start < 0 {
+		t.Fatalf("the page has no %q section", heading)
+	}
+	table := page[start+len(heading):]
+	if end := strings.Index(table, "\n## "); end >= 0 {
+		table = table[:end]
+	}
+
+	out := map[string]bool{}
+	for _, line := range strings.Split(table, "\n") {
+		if !strings.HasPrefix(line, "| `") {
+			continue
+		}
+		cell := strings.TrimPrefix(line, "| `")
+		name, _, ok := strings.Cut(cell, "`")
+		if !ok {
+			t.Errorf("unclosed input name in table row: %s", line)
+			continue
+		}
+		out[name] = true
+	}
+	if len(out) == 0 {
+		t.Fatalf("no input rows found under %q", heading)
+	}
+	return out
+}

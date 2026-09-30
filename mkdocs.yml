@@ -45,6 +45,7 @@ nav:
   - Home: index.md
   - How it works: how-it-works.md
   - Install: install.md
+  - Checking a pull request: pull-requests.md
   - Running it:
       - The binary: running.md
       - Operations: operations.md
