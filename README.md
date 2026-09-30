@@ -176,8 +176,8 @@ Working, with the manual linked for each:
   per-source limit inside it, the alert state machine, annotation templating,
   Alertmanager delivery with a resend cadence and its own expiry, resolved alerts
   retried, and a shutdown that does not cut an evaluation off. `SIGHUP` replaces
-  what is running, keeping the `for` timer of every pending alert and refusing a
-  version that fails a correctness check.
+  what is running, keeping the `for` timer of every pending alert and keeping the
+  running version when a file cannot be read.
   [Running it](https://dennisme.github.io/clickhouse-ruler/running/).
 - **An operator surface.** Metrics on `/metrics`, `/-/healthy` for the process
   and a `/-/ready` that can fail, structured logs naming the rule and source

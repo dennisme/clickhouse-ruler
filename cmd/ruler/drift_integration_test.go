@@ -119,7 +119,7 @@ sources:
 	// rather than by whoever operates the ruler (spec 8.2).
 	// The file label is the path the ruler was given, which is what somebody
 	// editing the rule needs rather than a basename they then have to find.
-	for _, want := range []string{`team="drift"`, `file="` + rulePath + `"`, `rule="DriftingRule"`} {
+	for _, want := range []string{`team="drift"`, `file="` + labelPath(t, rulePath) + `"`, `rule="DriftingRule"`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("the raised gauge does not carry %s:\n%s", want, problemLines(body))
 		}
@@ -197,6 +197,19 @@ func writeFile(t *testing.T, path, content string) {
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatalf("writing %s: %v", path, err)
 	}
+}
+
+// labelPath is the path the ruler reports a file under. The loader resolves the
+// rules root, and on macOS a temp dir is a symlink, so a label carries the
+// resolved path rather than the one written to.
+func labelPath(t *testing.T, path string) string {
+	t.Helper()
+
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		t.Fatalf("resolving %s: %v", path, err)
+	}
+	return resolved
 }
 
 // freePort asks the kernel for a port and gives it straight back, so the ruler
