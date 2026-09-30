@@ -38,7 +38,7 @@ Generated from the check table in `internal/lint/checks.go`. Edit the table, the
 | [`rule/table-access`](rule.md#rule-table-access) | `warning` by default | a source's user cannot read what the rule asks for, so nothing could be checked |
 | [`rule/table-function`](rule.md#rule-table-function) | `error` by default | a query reading through a table function the allowlist does not permit |
 | [`rule/window`](rule.md#rule-window) | `warning` by default | a `window` shorter than the group interval, leaving data no evaluation reads |
-| [`ruleset/directory`](policy.md#ruleset-directory) | fixed, always `error` | the rules directory could not be read |
+| [`ruleset/directory`](policy.md#ruleset-directory) | fixed, always `error`, refuses to load | the rules directory could not be read |
 | [`source/address`](source.md#source-address) | fixed, always `error` | a source with no address to connect to |
 | [`source/database`](source.md#source-database) | fixed, always `error` | a source naming no database |
 | [`source/evaluation-delay`](source.md#source-evaluation-delay) | fixed, always `error` | a negative evaluation delay |
@@ -53,6 +53,6 @@ Generated from the check table in `internal/lint/checks.go`. Edit the table, the
 | [`source/table`](source.md#source-table) | fixed, always `error` | a source naming no table |
 | [`source/timestamp-column`](source.md#source-timestamp-column) | fixed, always `error` | a source naming no timestamp column, so no window can be bound |
 | [`source/username`](source.md#source-username) | fixed, always `error` | a source naming no ClickHouse user, which is the tenancy boundary |
-| [`yaml/syntax`](policy.md#yaml-syntax) | fixed, always `error` | the file is not valid YAML, so nothing in it could be read |
+| [`yaml/syntax`](policy.md#yaml-syntax) | fixed, always `error`, refuses to load | the file is not valid YAML, so nothing in it could be read |
 | [`yaml/type`](policy.md#yaml-type) | fixed, always `error` | a field holding the wrong shape, such as a list where a mapping belongs |
 | [`yaml/unknown-field`](policy.md#yaml-unknown-field) | fixed, always `error` | a field nobody recognises, which silently drops configuration |

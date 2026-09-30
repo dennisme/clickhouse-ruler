@@ -71,8 +71,15 @@ func Index() string {
 
 // severity says what an operator can do about a check, not only what it ships
 // as: "fixed" is the part that answers "can I turn this off".
+//
+// Refusing a reading is printed with it, because "can I turn this off" and
+// "does this stop the ruler" are the two questions an operator has about a
+// check and only one of them is the severity (spec 7.6).
 func severity(c lint.Check) string {
 	if c.Fixed {
+		if c.RefusesReading {
+			return fmt.Sprintf("fixed, always `%s`, refuses to load", c.Always)
+		}
 		return fmt.Sprintf("fixed, always `%s`", c.Always)
 	}
 	return fmt.Sprintf("`%s` by default", c.Default)
