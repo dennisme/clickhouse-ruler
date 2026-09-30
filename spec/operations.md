@@ -273,7 +273,7 @@ read the warning.
 Of these five, the two problem gauges are the ones fed from somewhere other than
 the loader. `clickhouse_ruler_source_problem` is fed by the contract check, per
 source at startup and on a reload, which is the cadence 6.7.3 already gives it, so
-publishing it costs no extra query. `clickhouse_ruler_problem` is fed from two
+publishing it costs no extra query. `clickhouse_ruler_problem` is fed from three
 places, and 10.4 is why: most of what
 it reports is drift the evaluation can see for free by comparing itself against
 the last one (6.3.2), and the rest is `rule/attribute-key`, which needs its own
@@ -282,8 +282,10 @@ query on its own timer. One finding on the evaluation feed is not drift at all:
 render against a real alert, which the evaluation is the first thing able to know
 (6.5). It belongs on this gauge for the reason the drift findings do, that the
 author owns the fix and the team and the file are the only way to reach them, and
-it keeps the name the pull request used so one setting covers both. Each feed rebuilds only the checks it owns, so a finding
-answered on one clock is not blanked by a pass on the other. The reload pair exists
+it keeps the name the pull request used so one setting covers both. The third is the load feed, which carries the fixed
+checks that no longer refuse a reading (7.6), so a file that merged past the
+checker says so instead of running silently. Each feed rebuilds only the checks it
+owns, so a finding answered on one clock is not blanked by a pass on another. The reload pair exists
 because `SIGHUP` reloads the files, and the two deliberately do not say the same
 thing. `clickhouse_ruler_config_last_reload_successful` is about the last
 attempt, so a refused reload leaves it at 0 until one succeeds, which is the
@@ -506,10 +508,16 @@ Five things belong on it, and nothing else:
 - **Every log line, with what it means.** The table in 8.4 says what is logged.
   The page says what to do when a line appears, which is a different table and
   the one people actually need.
-- **What refuses to start, and why that is deliberate.** An error-severity
-  finding stops the ruler; a source failing the user contract is refused on its
-  own while every other source carries on (6.7.3). Both look like an outage to
-  somebody who has not read 7.1, and both are the design working.
+- **What refuses to start, what loads anyway, and why each is deliberate.** A
+  file nobody can read stops the ruler, and that is the whole list (7.6); a source
+  failing the user contract is refused on its own while every other source carries
+  on (6.7.3). Both look like an outage to somebody who has not read 7.1, and both
+  are the design working. The other half is newer and is the page's debt: a
+  finding that blocks a merge loads and raises `clickhouse_ruler_problem` under its
+  own check name, so the page has to say what the two expensive ones cost, a rule
+  missing a time bound and a rule setting its own `SETTINGS`, and how to see them
+  in `system.query_log`. A rule loaded against the author's intent is cheaper than
+  a ruler that refused to start, and only if somebody is watching.
 - **The ClickHouse side.** `system.query_log` queries keyed on the
   `log_comment` from 8.5: what a rule cost, what it read, what timed out.
 - **A rule that broke while running**, which is the one item here not addressed
@@ -1525,7 +1533,8 @@ outage.
 on a timer. It is not built and it is not going to be, because most of what it
 would have re-asked is answerable from the evaluations already happening.
 
-**Two feeds, and the split is whether an extra query is needed.**
+**Two feeds come from what is already running, and the split between them is
+whether an extra query is needed.** A third, at load, is below.
 
 The first is free and lives in the evaluator. Every evaluation already knows the
 result's column names and types, its cost, and whether it errored, so comparing
@@ -1543,6 +1552,25 @@ watching the evaluation reveals: the query succeeds, the shape is unchanged, and
 it matches nothing forever. Answering it means sampling recent data, which is a
 query the evaluation does not make, so it gets its own interval.
 
+**A third feed, at load, for what the checker should have stopped.** 7.6 splits a
+check's severity from whether it refuses a reading, so a finding that blocks a
+merge now loads instead of stopping the ruler. Something has to say so, or a rule
+that merged past CI runs with nobody told: a rule whose query sets its own
+`SETTINGS`, one missing a time bound, one producing a `team` column, a file with a
+field nobody recognises. Each is raised on `clickhouse_ruler_problem` under its
+own check name, and each is rebuilt per reading the way the other two rebuild per
+pass, so fixing a file and reloading clears it. The gauge carries no `feed` label
+and gains none for this: the check name already says which findings are the load
+feed's, since the fixed checks are only ever raised by it, and the log line is
+where `feed` is written.
+
+This feed is the reason refusing a start could be narrowed at all. Without it the
+choice was a refusal or silence, and the argument for refusing was that silence
+is worse. It also differs from the other two in what it proves: the evaluation
+and re-check feeds report a rule that broke after it was reviewed, while this one
+reports a review that did not happen, so an operator seeing it should be asking
+why the checker did not run rather than what changed in ClickHouse.
+
 **What the timer costs, and therefore how it is sized.** One bounded query per
 rule per pass, against real data. That is affordable hourly and absurd every
 minute, and the interval is a setting rather than a derived value because how
@@ -1552,26 +1580,27 @@ budget, because a re-check pass that starved alerting would be trading the
 outage it exists to prevent for a worse one. Evaluation is the work that cannot
 wait; re-checking is the work that can.
 
-**It does not gate anything.** Both feeds report into
-`clickhouse_ruler_problem` (8.2) and neither unloads a rule, neither refuses an
-evaluation, and neither resolves an alert. Refusing belongs to reload alone
-(7.6). See 6.3.2 for why: a ruler that dropped a rule on a finding would stop
+**It does not gate anything.** All three feeds report into
+`clickhouse_ruler_problem` (8.2) and none unloads a rule, refuses an evaluation,
+or resolves an alert. Refusing belongs to an unreadable file alone (7.6). See 6.3.2 for why: a ruler that dropped a rule on a finding would stop
 paging for the condition on the strength of a schema change nobody reviewed.
 
 **The validation package is already re-runnable against loaded rules** (7.1), so
-neither feed is a rewrite. The evaluator comparison keeps the previous result's
+no feed here is a rewrite. The evaluator comparison keeps the previous result's
 shape per rule and source in `internal/scheduler`, and `query.Run` returns that
 shape and what the query cost beside the samples rather than reading the column
 types, spending them on scanning and dropping them. The timer calls the same
 `query.Sample` the checks CI runs call, through the same policy resolution, and
 sizing it is `--recheck-interval` with zero for not at all.
 
-**Both feeds are built.** The evaluator feed reports every tick and the timer
+**All three feeds are built.** The evaluator feed reports every tick, the load
+feed once per reading, and the timer
 runs on `--recheck-interval`, an hour by default and zero for not at all, since a
 pass that reads real data must not start on a ruler nobody asked. Each feed
 rebuilds only the gauge series of the checks it owns: `rule/columns`,
 `rule/source-schema`, `rule/cost`, `rule/execution` and `annotations/template`
-are the evaluation's, and `rule/attribute-key` is the timer's. Scoping the rebuild by check is what keeps
+are the evaluation's, `rule/attribute-key` is the timer's, and the load feed owns
+the fixed checks that no longer refuse a reading. Scoping the rebuild by check is what keeps
 one clock from resolving the other's findings, and it is also what lets a pass
 where nothing answered leave the previous answer standing per check rather than
 for the whole rule.
@@ -1601,7 +1630,7 @@ its cluster is quiet. What does have to happen is that a source nothing reaches
 any more loses its series, since clearing one takes a pass against that cluster:
 the reconciliation that closes a connection deletes them (8.2).
 
-**Neither feed ships without its page.** The evaluator feed's is the
+**No feed ships without its page.** The evaluator feed's is the
 "a rule that broke while running" section of the operations page, with the
 paragraph on how evaluation notices drift at all on how-it-works. The signal is addressed to somebody who
 owns a rule and may never have operated this ruler, so a gauge nobody explained
@@ -1609,8 +1638,9 @@ is a gauge whose finding lands on the operator anyway, which is the outcome this
 whole section exists to avoid. 8.7 says what the operations page has to carry.
 Two rules keep it from sprawling: it explains the signal and links to the check
 page rather than re-explaining the check (7.8), and it states which feed found a
-thing, because "your rule's result changed shape" and "your rule's map key is
-gone from recent data" are different problems with different fixes and arrive on
-different clocks. How evaluation notices drift at all belongs on the how-it-works
+thing, because "your rule's result changed shape", "your rule's map key is gone
+from recent data" and "this file should never have merged" are different problems
+with different fixes and arrive on different clocks. The load feed's share of
+that page is 7.6's debt: what a rule that loaded anyway costs, and how to see it. How evaluation notices drift at all belongs on the how-it-works
 page, in a paragraph, not a section: it is one comparison on a result the
 evaluation already had.

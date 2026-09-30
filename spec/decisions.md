@@ -27,8 +27,11 @@ and are what the code comments cite.
 - **Label precedence.** Four levels, weakest first: group labels, rule labels,
   result columns, then the matched source's labels. The source wins over the
   query because it states where the evaluation happened and the query is in no
-  position to know better. `alertname` and `source` are written last and are
-  protected: an identity query data can set is a routing hazard. See 6.3.1.
+  position to know better. `alertname`, `source` and `team` are written last and
+  are protected: an identity query data can set is a routing hazard, and `team` is
+  what routes the page. `team` joined them when `rule/protected-label` stopped
+  refusing a start, since until then the refusal was the only thing keeping a
+  result column from overriding the rule's own team. See 6.3.1.
 - **The ruler owns the `ruler_` annotation prefix.** A failed annotation
   template puts its error in an annotation the ruler writes, so the name is
   reserved and `annotations/protected` refuses a rule that sets one. A prefix
@@ -81,8 +84,8 @@ and are what the code comments cite.
   is genuinely left is `rule/attribute-key`, the OTel map key rename, which
   needs its own sampling query because the shape and the row count both look
   healthy while the rule matches nothing forever. That one check gets a slow
-  timer inside `ruler run`, on `--recheck-interval`. Neither feed refuses or
-  unloads anything; both report to `clickhouse_ruler_problem`, whose labels name
+  timer inside `ruler run`, on `--recheck-interval`. No feed on that gauge refuses
+  or unloads anything; all of them report to `clickhouse_ruler_problem`, whose labels name
   the team and the file because the fix belongs to the rule's owner rather than
   the ruler's operator, and each rebuilds only the checks it owns so one clock
   cannot resolve the other's findings. See 6.3.2, 8.2 and 10.4.
@@ -363,12 +366,20 @@ and are what the code comments cite.
   as a burst needing debounce; and all of it buys back the one property the
   signal has, that whoever rolled the files out says when they are complete. If
   the ruler ever reloads itself, it polls on an interval and compares a hash
-  first, the way Prometheus and vmalert both offer and neither enables by
-  default. The hash is not an optimisation: a reload re-checks the user contract
-  and issues statements per source, so a tick that reloaded unconditionally would
-  put rule traffic on every cluster for a file nobody edited. See 6.7.3, 10.2.
-- **A reload tolerates what a start refuses, and a start stays strict.** The same
-  files that keep the previous version running on a reload refuse to start the
+  first. The polling is what Prometheus and vmalert both offer and neither
+  enables by default: `--config.auto-reload` is off with a 30s interval behind
+  it, and `-configCheckInterval` is 0. The hash is Prometheus' half alone, which
+  checksums the file each tick and skips the reload when it has not changed;
+  vmalert parses the rules and compares the parsed groups instead. Ours goes
+  before the read rather than after, and the hash is not an optimisation: a
+  reload re-checks the user contract and issues statements per source, so
+  comparing afterwards the way vmalert does would already have put rule traffic
+  on every cluster for a file nobody edited. See 6.7.3, 10.2.
+- **A reload tolerates what a start refuses, and a start stays strict.** Which
+  findings refuse a reading at all is narrowed by the decision below, to
+  `yaml/syntax` and `ruleset/directory`; this is about the two occasions, and
+  holds for whatever the set contains. The same files that keep the previous
+  version running on a reload refuse to start the
   process, which makes a refused reload a hazard ahead of the next restart rather
   than only a stale configuration: the ruler survives on the version it already
   had, `/-/ready` keeps passing because rules are loaded and a source answers, and
@@ -376,7 +387,81 @@ and are what the code comments cite.
   asymmetry is deliberate in both directions. Tolerating a bad reading at startup
   would mean a process that is up, failing readiness and paging nobody, and
   refusing to reload is the only way to keep a valid configuration running when
-  the one on disk is not. See 7.6, 8.1.
+  the one on disk is not.
+
+  **Both upstream rulers already do exactly this**, which is worth stating
+  because an asymmetry argued only from first principles reads as an invention.
+  Prometheus loads its rule files through one `reloadConfig` at startup and on
+  `SIGHUP`, and its rule manager returns `error loading rules, previous rule set
+  restored` when a file fails: on a signal that error is logged and the rules
+  already running stay, and at startup the same error aborts the run group and
+  the process exits non-zero. Its documentation states the granularity too, that
+  the changes are only applied if all rule files are well-formatted, so a
+  refusal covers every file the globs matched rather than the one at fault.
+  vmalert is the same shape in different code: a parse failure at startup is a
+  `Fatalf`, and the same failure on the reload path sets a config error, logs it
+  and continues on the configuration it already had. Neither offers a way to
+  load the good files and drop the bad ones. See 7.6, 8.1, 12.5.
+- **A severity and a refusal to start are two axes, and only a file nobody can
+  read refuses.** These were one property until 12.5 was worked through, and
+  fusing them is what made that question hard to answer. A severity says who has
+  to be involved to unblock a contributor: a warning is the author's to act on,
+  an error needs a repo owner to change policy (7.6). Whether a finding stops the
+  ruler reading the files at all is a different question with different stakes,
+  and answering it with the severity meant `annotations/protected` took a
+  restarted ruler down over a name collision in a field that does not route.
+
+  A finding refuses a start when there is nothing to read, and that is
+  `yaml/syntax` and `ruleset/directory`. Every other finding blocks a merge,
+  loads, and raises `clickhouse_ruler_problem` under its own check name. The
+  argument is the one this whole section keeps returning to: a ruler that will
+  not start pages nobody, so the blast radius of refusing is every alert in the
+  checkout and the blast radius of loading is one rule behaving as written rather
+  than as intended. CI is where this is caught, the checker gates the merge
+  (10.3), and a refusal only ever fires when CI did not run or somebody merged
+  past it. Punishing every other team's alerts for that is a shared fate nobody
+  chose.
+
+  **The severities do not move, which is the point of splitting the axes.**
+  `annotations/protected` stays fixed at `error` because an annotation a
+  responder reads is worth a repo owner's attention, and it stops blocking a
+  start because `ruler_error` is a convenience that saves an Alertmanager
+  template a step rather than the operational signal, which is the metrics.
+  `rule/protected-label` stays fixed at `error` because a label collision has no
+  route in a generated tree, and it stops blocking a start for the same reason.
+
+  **Unknown fields were the hardest of these and the schema stays strict.** The
+  reader walks the YAML by hand and reports an unrecognised key as a finding with
+  a line number, which is what lets the checker point at it in a diff, so
+  strictness costs nothing and is kept. What moves is where it is enforced. A
+  strict schema that refuses a start is a version skew hazard rather than a typo
+  net: 10.2 has rule files and the binary deploying independently, so a ruler
+  rolled back behind files that use a field the older binary does not know would
+  refuse to come up, which is an outage caused by our own strictness. `yaml/type`
+  travels with it, since a field of the wrong shape leaves the reader able to skip
+  that node and load the rest.
+
+  **Two of these hand the bill to somebody who is not the author, and they are
+  documented rather than excepted.** A rule missing `{{ .From }}` or `{{ .To }}`
+  scans unbounded on every evaluation, and a rule with its own `SETTINGS`
+  replaces the limits the ruler sends (7.3). Both cost the cluster rather than
+  the ruler, and the person paying is whoever owns ClickHouse rather than whoever
+  wrote the rule. They still load, because the alternative is the whole checkout
+  refusing, and what makes that safe rather than a foot gun is owed in two
+  places: the gauge names the check, the team and the file, and the operations
+  page says what each of the two costs and how to see it (8.7). A signal an operator
+  was never told to watch is the same as no signal.
+
+  **One runtime defect had been hiding behind the refusal.** `labelsFor` writes
+  `alertname` and `source` last, so a rule that sets either is silently ignored
+  and safe to run, and a matched source's `alert_labels` win over the query too.
+  `team` was neither: a result column named `team` overrode the rule's own label,
+  and `team` is what routes the page and labels the gauge. That never happened
+  because `rule/protected-label` refused the start, so the refusal was load
+  bearing without saying so. The ruler now wins `team` the way it already wins
+  `alertname` and `source`, and raises the gauge when a query produces one, which
+  is what makes the check merge-only rather than merge-only and a routing hazard.
+  See 6.3.1, 7.6, 8.2, 12.5.
 - **A reload re-checks the user contract.** 6.7.3 lists three places the
   contract is checked and a reload is one of them, so this is the decision to
   honour it rather than to make. The argument for doing it is the window 6.7.3
