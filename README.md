@@ -157,6 +157,12 @@ Working, with the manual linked for each:
   that set each one. Exemptions carry a reason and an expiry that fails the build
   once it passes. `--summary` writes the cost table for a pull request comment.
   [Checks](https://dennisme.github.io/clickhouse-ruler/checks/).
+- **A merge gate you can require.** A composite action,
+  `dennisme/clickhouse-ruler/action@v1`, annotating the diff on the line at
+  fault and keeping one summary comment up to date, checking only the rules a
+  pull request affects. Everything it does is a flag the binary already has.
+  [Checking a pull
+  request](https://dennisme.github.io/clickhouse-ruler/pull-requests/).
 - **Three tiers that read the cluster, each consented to on its own.**
   `--online` reads no rows: the query as ClickHouse itself parsed it, the columns
   it will really produce, whether every cluster a rule matched agrees on them,
