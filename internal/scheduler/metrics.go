@@ -185,7 +185,8 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 		// the alert never clears (spec 8.2).
 		Problem: f.NewGaugeVec(prometheus.GaugeOpts{
 			Name: "clickhouse_ruler_problem",
-			Help: "Rules that broke while running, by check and by the cluster it was found against. " +
+			Help: "Rules that broke while running or loaded with a finding that should have blocked the merge, " +
+				"by check and by the cluster it was found against. " +
 				"Fixed by whoever owns the rule, not by the operator.",
 		}, []string{"rule", "check", "severity", "team", "file", "source"}),
 
