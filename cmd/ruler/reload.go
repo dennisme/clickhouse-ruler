@@ -30,12 +30,16 @@ type config struct {
 	problems []lint.Problem
 }
 
-// refused reports whether these files may not run. An error-severity finding
-// refuses the whole reading: at startup that is a refusal to start, and on a
-// reload it keeps the version already running (spec 7.6).
+// refused reports whether these files may not run. Only a finding whose check
+// refuses a reading does that, which is a file nobody can read: at startup it
+// is a refusal to start, and on a reload it keeps the version already running.
+//
+// An error-severity finding on any other check blocks a merge and loads, and
+// is raised on clickhouse_ruler_problem instead, because a ruler that will not
+// start pages nobody (spec 7.6).
 func (c *config) refused() bool {
 	for _, p := range c.problems {
-		if p.Severity == lint.SeverityError {
+		if check, ok := lint.Lookup(p.Check); ok && check.RefusesReading {
 			return true
 		}
 	}
@@ -194,6 +198,13 @@ func (r *runner) connect(ctx context.Context, cfg *config) error {
 	}
 
 	r.queriers, r.sources, r.rules = next, definitions, len(cfg.set.Rules)
+
+	// This reading is now the running configuration, so anything in it that
+	// should have blocked the merge is running too. Both a start and a reload
+	// arrive here, which is why it is raised here and not in either caller
+	// (spec 7.6, 10.4).
+	scheduler.ReportLoadFindings(r.metrics, r.log, cfg.set, cfg.problems)
+
 	r.metrics.ConfigLastReloadSuccessful.Set(1)
 	r.metrics.ConfigLastReloadTimestamp.Set(float64(r.clock.Now().Unix()))
 	return nil
@@ -231,7 +242,7 @@ func (r *runner) reload(ctx context.Context) error {
 	// a rules tree is loaded as a tree and half of one is not a configuration
 	// anybody wrote down (spec 7.6).
 	if cfg.refused() {
-		return r.refuse("at least one rule failed a correctness check", nil)
+		return r.refuse("at least one file could not be read", nil)
 	}
 
 	if err := r.connect(ctx, cfg); err != nil {

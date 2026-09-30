@@ -57,6 +57,14 @@ const brokenRule = `groups:
         expr: "SELECT 1 AS value FROM t"
 `
 
+// Not YAML at all: an unterminated quote, so nothing in the file can be read.
+// This is the whole of what refuses a reading (spec 7.6).
+const unreadableRule = `groups:
+  - name: latency
+    rules:
+      - alert: "HighLatency
+`
+
 // Two groups sharing a name in one file. Valid YAML and valid rules; the
 // only thing wrong is that the group identity is no longer unique.
 const repeatedGroupRule = `groups:
