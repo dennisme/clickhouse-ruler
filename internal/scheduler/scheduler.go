@@ -73,6 +73,14 @@ type Scheduler struct {
 type ruleKey struct {
 	group string
 	alert string
+
+	// occurrence separates two rules sharing an alert name in one group, which
+	// is a rule/name finding that blocks a merge without refusing a start
+	// (spec 7.6). Without it the pair share one key, so a reload hands both the
+	// same previous state and keeps only one of them. It counts occurrences
+	// rather than position, so a rule whose name is unique keys the same
+	// however the file is reordered and carries its state across a reload.
+	occurrence int
 }
 
 // configured is what the running configuration has put on the metrics
@@ -245,6 +253,7 @@ func (s *Scheduler) build(set *ruleset.Set, queriers map[string]Querier, prev ma
 
 		var named []namedEval
 		unmatched := 0
+		seen := map[string]int{}
 		for _, r := range rulesByGroup[k] {
 			if len(r.Sources) == 0 {
 				unmatched++
@@ -259,7 +268,8 @@ func (s *Scheduler) build(set *ruleset.Set, queriers map[string]Querier, prev ma
 				continue
 			}
 			eval := NewRuleEval(r, queriers, s.cadence, limits, retention)
-			key := ruleKey{group: groupName, alert: r.Alert}
+			key := ruleKey{group: groupName, alert: r.Alert, occurrence: seen[r.Alert]}
+			seen[r.Alert]++
 			if p, ok := prev[key]; ok {
 				eval.carry(p, retention)
 			}

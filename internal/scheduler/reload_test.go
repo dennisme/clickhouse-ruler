@@ -284,3 +284,23 @@ func waitFor(t *testing.T, cond func() bool) {
 	}
 	t.Fatal("condition not met within 5s")
 }
+
+// Two rules sharing an alert name in one group are a rule/name finding, which
+// blocks a merge and no longer refuses a start (spec 7.6). So the scheduler has
+// to keep them apart: a shared key gives both the same previous state on a
+// reload and keeps only one of them, which attributes one rule's ActiveAt to
+// the other.
+func TestTwoRulesSharingAnAlertNameKeepSeparateState(t *testing.T) {
+	rules := []ruleset.Rule{
+		reloadRule("g1", "Slow", 5*time.Minute, nil),
+		reloadRule("g1", "Slow", 5*time.Minute, nil),
+	}
+	set := &ruleset.Set{Rules: rules}
+	queriers := map[string]Querier{"src1": &fakeQuerier{samples: oneSample()}}
+
+	sched, _, _, _ := reloadSched(t, set, queriers)
+
+	if got := len(sched.evals); got != 2 {
+		t.Errorf("evaluators = %d, want 2: the two rules share a key and one was dropped", got)
+	}
+}
