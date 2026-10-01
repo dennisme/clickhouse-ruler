@@ -711,3 +711,37 @@ and are what the code comments cite.
   so a rule firing on arrival rather than on duration fails. Asserting that an
   alert arrived proves the path; asserting that exactly one did proves the
   query. See 9.1, 9.2, 9.4.
+- **The deployment chain is proven on a cluster, not rendered.** `helm.yaml`
+  templates the chart over every values file that matters and validates the
+  output against the Kubernetes schemas, which is cheap and cannot show that a
+  commit arrives. Every link after the merge was unproven, and so were the two
+  symlink layouts 10.2 says constrain the loader rather than the chart: a
+  symlinked root walked without being resolved finds no rules at all, a mount
+  walked without skipping `..*` finds every rule twice, and both were unit tested
+  against neither a real kubelet nor a real git-sync worktree.
+  **`kind` rather than `k3d`**, because it is what the chart ecosystem tests on
+  and because `kind load docker-image` puts the image built from this checkout
+  into the cluster in one command. The stack's ruler is built rather than pulled
+  for the reason a published image is the last release (9.1 item 5), and that
+  reason does not change on a cluster.
+  **The rules repository is `git daemon`, read only, and the test commits inside
+  the pod.** `--export-all` over a `--base-path` with `receive-pack` off, so
+  nothing can push over the wire, and the sha the in-pod commit produces is what
+  every later assertion waits for. Two cheaper fixtures were tried first.
+  `alpine/git` ships no `git-daemon` binary at all. Serving the bare repository
+  as static files from a web server works only without the chart's default
+  `depth: 1`, since the dumb HTTP transport does not support shallow
+  capabilities, and a fixture that needs the default turned off is a test that no
+  longer covers an install. `git://` is accepted by git-sync and yields the same
+  worktree and symlink an SSH remote does, and `ci/git-sync-values.yaml` keeps
+  its SSH remote because that file documents a real deployment.
+  **Each link is waited on through a metric, and the refusal path is asserted
+  too.** The sha, the symlink pointing at the worktree holding it,
+  `clickhouse_ruler_config_last_reload_timestamp_seconds` moving past the
+  install, `clickhouse_ruler_config_last_reload_successful` reading 1, then the
+  new rule evaluating. 8.2 exists so the chain is observable from outside, and a
+  test reading log lines would prove something nobody operates on. The exec hook
+  posts with `--fail`, so a refused reload has to surface as a failed hook that
+  git-sync retries with the previous configuration still running; a hook
+  reporting success there would hide the case the severities in 7.9 are about.
+  See 10.2, 9.1, 8.2.

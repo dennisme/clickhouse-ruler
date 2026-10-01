@@ -1,0 +1,64 @@
+# A single ClickHouse for the cluster tests, with the schema and the user
+# contract this repository already ships.
+#
+# It is here because readiness is "rules loaded and at least one source
+# answering" (8.1), so a ruler with nowhere to query never becomes available
+# and the chain under test would be asserted against a pod no operator would
+# accept. One node and no sharding: what these tests are about is how rules
+# reach the ruler, not what an evaluation does to a cluster.
+apiVersion: v1
+kind: Service
+metadata:
+  name: clickhouse
+spec:
+  selector:
+    app: clickhouse
+  ports:
+    - name: native
+      port: 9000
+      targetPort: 9000
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: clickhouse
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: clickhouse
+  template:
+    metadata:
+      labels:
+        app: clickhouse
+    spec:
+      containers:
+        - name: clickhouse
+          image: clickhouse/clickhouse-server:25.8.2.29-alpine
+          env:
+            - name: CLICKHOUSE_DB
+              value: otel
+            - name: CLICKHOUSE_USER
+              value: ruler
+            - name: CLICKHOUSE_PASSWORD
+              value: ruler
+            - name: CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT
+              value: "1"
+          ports:
+            - containerPort: 9000
+          volumeMounts:
+            - name: init
+              mountPath: /docker-entrypoint-initdb.d
+              readOnly: true
+          readinessProbe:
+            exec:
+              command: ["clickhouse-client", "--query", "SELECT 1"]
+            periodSeconds: 2
+            failureThreshold: 30
+      volumes:
+        - name: init
+          configMap:
+            # Created by the test from deploy/clickhouse/init, so the schema and
+            # the grants are the same files the compose stack runs rather than a
+            # second copy to drift.
+            name: clickhouse-init
