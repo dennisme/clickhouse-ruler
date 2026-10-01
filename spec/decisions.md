@@ -680,3 +680,34 @@ and are what the code comments cite.
   `$__rate_interval` is the test's own, because Grafana computes it from the
   panel's time range and the scrape interval and there is nothing in the file to
   read. See 9.1, 9.8, 8.6.
+- **A rule is proven against what a collector wrote, not against rows a test
+  inserted.** The trace schema in `deploy/clickhouse/init` is copied verbatim
+  from `exporter/clickhouseexporter` so that a rule which works in the tests
+  works against real collector output, and until the collector was in the stack
+  nothing had ever demonstrated that: every row came from a test's own `INSERT`.
+  The collector writes as the admin user, which is where the stack's other
+  writes come from, because the ruler's users hold `SELECT` on one table and
+  nothing else and an exporter holding `INSERT` would contradict the contract
+  6.7.2 exists to prove. Schema creation is off so the table it writes is the
+  verbatim copy rather than one the exporter made.
+  **Volume is opt-in.** `telemetrygen` sits behind a compose profile and off by
+  default. It is in the stack because a check read against a table holding only
+  what a test put there has never met a busy one, and it is off because every
+  assertion in the tree was written against a table only tests write to: rows
+  arriving on their own would be a second author of the data all of them read.
+  **The deterministic emitter is a package, and it carries no dependency.**
+  `internal/spans`, driven by the tests and called by nothing else, because a
+  command would need a flag surface, a place in the release and a reason for an
+  operator to run it while the thing it exists for is an assertion.
+  `telemetrygen` gives volume and cannot express "exactly 40 spans over 1000ms
+  on `ServiceName=checkout` starting at T+30s", and without that an alert count
+  is not assertable. It posts OTLP over HTTP with a JSON body, the encoding the
+  protocol defines for producing telemetry without an SDK, rather than taking on
+  the OpenTelemetry Go SDK and its exporter: three modules and their
+  dependencies to build a payload a struct literal covers. Nothing was added to
+  `go.mod`.
+  **A count is the assertion, and a second service is what makes it one.** The
+  end to end test emits two services the same way and only one of them is slow,
+  so a rule firing on arrival rather than on duration fails. Asserting that an
+  alert arrived proves the path; asserting that exactly one did proves the
+  query. See 9.1, 9.2, 9.4.

@@ -918,9 +918,8 @@ stubbed collector.
 
 ### 9.1 Compose stack
 
-`compose.yaml`, all image versions pinned. Items 1, 4, 5, 7 and 8 exist today.
-Items 2 and 3 arrive with the generators, and item 6 is not a container at all
-for the reason it gives.
+`compose.yaml`, all image versions pinned. Every item exists today except 6,
+which is not a container at all for the reason it gives.
 
 1. **ClickHouse**, two nodes. Schema in `deploy/clickhouse/init`, the
    OpenTelemetry Collector ClickHouse exporter trace table reproduced verbatim
@@ -937,8 +936,25 @@ for the reason it gives.
    the only way to find out what an evaluation does when part of a cluster is
    gone, which is what 6.9 needed the node for.
 2. **OpenTelemetry collector**, ClickHouse exporter, batch timeout set low so
-   data lands in seconds rather than tens of seconds.
-3. **Telemetry generators.** Two of them, see 9.2.
+   data lands in seconds rather than tens of seconds. Its config is
+   `deploy/collector`.
+
+   It writes as `ruler`, the admin user, which is where every other write in the
+   stack comes from: the ruler's own users hold `SELECT` on one table and
+   nothing else, and an exporter granted `INSERT` would be the one thing here
+   contradicting the contract 6.7.2 exists to prove. Schema creation is off, so
+   the table it writes is the verbatim copy in item 1 rather than one the
+   exporter made; left on, the copy would stop being what anything reads.
+
+   No healthcheck, which is the one service without one. The image is distroless
+   and carries no shell, so there is nothing a compose healthcheck could exec.
+   What proves it works is a row arriving, and that is what the test waits for
+   rather than a probe.
+3. **Telemetry generators.** Two of them, see 9.2. `telemetrygen` is behind a
+   compose profile and off by default, started by `just compose-volume`. Every
+   assertion in the tree was written against a table only tests write to, and
+   rows arriving on their own would be a second author of the data all of them
+   read. The emitter is not a service at all, for the reason 9.2 gives.
 4. **Alertmanager**, real, configured with a webhook receiver pointing at the
    sink.
 5. **Ruler**, the code under test, built by compose from the `Dockerfile` in
@@ -998,6 +1014,27 @@ to catch.
 The OpenTelemetry Demo was considered and rejected. Around 15 services is too
 heavy and too slow for CI, and it is not controllable enough to assert against.
 
+**The emitter is a package the tests drive, not a binary.** `internal/spans`,
+and nothing outside a test calls it. A command would need a flag surface, a
+place in the release and a reason for an operator to run it, and it has none:
+the thing it exists to make possible is an assertion.
+
+**It speaks OTLP over HTTP with a JSON body**, which is the encoding the
+protocol defines for a caller that wants to produce telemetry without taking on
+an SDK. The alternative was the OpenTelemetry Go SDK and its OTLP exporter,
+which is three modules and their dependencies to build a payload a struct
+literal covers. Nothing was added to `go.mod` for this.
+
+**What a scenario controls** is the count, each span's duration, the service
+name, the span attributes, the status, the first span's start time and the
+period the starts are spread across. Those are the columns a rule reads, and
+the start time matters more than when the post happened: a window is a range of
+timestamps, so a scenario can describe a minute ago.
+
+**Exactly one request per scenario.** The table either holds every span or none
+of them, so a test that found fewer rows than it asked for is looking at a
+collector that dropped them rather than at a post that was still arriving.
+
 ### 9.3 Assertion path
 
 Assert on what the webhook sink received, not on ruler internal state. That
@@ -1022,6 +1059,12 @@ end to end.
 
 `evaluation_delay` from 6.8 is what absorbs ingestion lag here. Set it to a few
 seconds in the test config rather than racing the collector.
+
+That is now two source files rather than one. `cmd/ruler/testdata/sources.yaml`
+pins `0s`, because a test that inserted its own rows has no lag to absorb and a
+delay there is dead waiting. The test reading what the collector wrote uses its
+own file with a delay set, since the collector's batch timeout and the insert
+behind it both land after the span they describe ended.
 
 ### 9.5 Historical fixtures
 

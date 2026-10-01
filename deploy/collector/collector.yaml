@@ -1,0 +1,48 @@
+# The OpenTelemetry collector writing into the table the rules read. It is here
+# so a rule is proven against real collector output rather than against rows a
+# test inserted, which is the whole reason the schema in
+# deploy/clickhouse/init/01-schema.sql is copied verbatim (spec 9.1 item 2).
+receivers:
+  otlp:
+    protocols:
+      # telemetrygen speaks gRPC by default.
+      grpc:
+        endpoint: 0.0.0.0:4317
+      # What the emitter in internal/spans posts OTLP JSON to.
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  # Low timeout so data lands in seconds rather than tens of seconds. A test
+  # waiting on an alert is waiting on this plus the source's evaluation_delay
+  # (spec 9.4), and the collector's own default of 200ms with a 8192 span batch
+  # would hold a small scenario until the batch filled.
+  batch:
+    timeout: 1s
+    send_batch_size: 100
+
+exporters:
+  clickhouse:
+    endpoint: tcp://clickhouse:9000?dial_timeout=10s
+    database: otel
+    # Writes go in as the admin user, the way the tests' own seeding does: the
+    # ruler's users are SELECT on one table and nothing else, and an exporter
+    # holding INSERT would be the one thing in the stack contradicting the
+    # contract in 6.7.2.
+    username: ruler
+    password: ruler
+    traces_table_name: otel_traces
+    # The checked-in schema is the one under test. Left on, the exporter would
+    # create a table of its own on an empty database and the verbatim copy
+    # would stop being what anything reads.
+    create_schema: false
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [clickhouse]
+  telemetry:
+    logs:
+      level: warn

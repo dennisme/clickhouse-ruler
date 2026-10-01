@@ -99,6 +99,24 @@ services:
       timeout: 2s
       retries: 30
 
+  # Writes the rows the rules read, so a rule is proven against real collector
+  # output rather than against rows a test inserted (spec 9.1 item 2).
+  #
+  # No healthcheck: the image is distroless and carries no shell, so there is
+  # nothing a compose healthcheck could exec. What proves it is working is a row
+  # arriving, and that is what the test waits for.
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.161.0
+    container_name: ruler-otel-collector
+    ports:
+      - "127.0.0.1:4317:4317"
+      - "127.0.0.1:4318:4318"
+    volumes:
+      - ./deploy/collector/collector.yaml:/etc/otelcol-contrib/config.yaml:ro
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+
   # The code under test, built from this checkout rather than pulled: a
   # published image is the last release, and the stack exists to run what is in
   # the tree (spec 9.1 item 5).
@@ -186,6 +204,27 @@ services:
       interval: 2s
       timeout: 2s
       retries: 30
+
+  # Background volume, so the checks are read against a realistically busy
+  # table rather than one holding only what a test put there (spec 9.2).
+  #
+  # Behind a profile rather than on by default. Every assertion in the tree was
+  # written against a table only tests write to, and rows arriving on their own
+  # would be a second author of the data every one of them reads. Start it with
+  # `just compose-volume` when that is what is wanted.
+  telemetrygen:
+    image: ghcr.io/open-telemetry/opentelemetry-collector-contrib/telemetrygen:v0.161.0
+    container_name: ruler-telemetrygen
+    profiles: [volume]
+    command:
+      - traces
+      - --otlp-endpoint=otel-collector:4317
+      - --otlp-insecure
+      - --service=background
+      - --rate=50
+      - --duration=1h
+    depends_on:
+      - otel-collector
 
 volumes:
   clickhouse-data:
