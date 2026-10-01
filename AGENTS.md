@@ -72,6 +72,19 @@ them has a shard that never answers, which is how the sharded tests find out
 what an evaluation does when part of a cluster is gone (spec 6.9). Tests reach
 it through `RULER_CLICKHOUSE_ADDR_2`, and only to seed it.
 
+Beside them: an OpenTelemetry collector, Alertmanager, the ruler itself,
+Prometheus and Grafana. Three of those are read by tests. A test posts spans to
+the collector through `RULER_OTLP_HTTP_URL` and waits for the rows, which is the
+only path that proves a rule works against what a collector writes rather than
+against an `INSERT` a test wrote. Alertmanager delivers to a sink the test hosts
+on a fixed port. Prometheus is reached through `RULER_PROMETHEUS_URL` by the
+dashboard tests, which send every panel expression to it and require an answer;
+Grafana is there for a person to open and no test reads it (spec 9.8).
+
+`just compose-volume` adds `telemetrygen` for background volume. It is behind a
+compose profile and off by default, because every assertion in the tree was
+written against a table only tests write to.
+
 `CLICKHOUSE_IMAGE` points the stack at another server, which is how the readers
 that parse `EXPLAIN` output are checked against a version they were not written
 for. CI runs the pinned version as a required job and the newest release as an
@@ -117,9 +130,10 @@ Three things that bite:
 | `internal/query` | Query execution, SQL AST checks, driver-error redaction |
 | `internal/alert` | Alert state machine: pending, firing, resolved, `for`, identity, fingerprints |
 | `internal/scheduler` | Group ticking, concurrency limits, metrics, HTTP surface, shutdown |
-| `internal/dashboards` | Reads the shipped Grafana dashboards, so a panel cannot query a metric nothing registers |
+| `internal/dashboards` | Reads the shipped Grafana dashboards, so a panel cannot query a metric nothing registers and every panel expression is one Prometheus answers |
 | `internal/notify` | Alertmanager payloads, resend cadence, the HTTP client |
-| `deploy/` | ClickHouse init SQL (including the reference ruler user), Alertmanager config, and the Grafana dashboards |
+| `internal/spans` | Posts a known set of spans to the collector, so a test can state exactly what the table under a rule holds |
+| `deploy/` | ClickHouse init SQL (including the reference ruler user), the collector, Alertmanager and Prometheus configs, the Grafana dashboards and their provisioning, and the stack ruler's own rules |
 | `spec/` | Design, validation, operations, research, decisions |
 | `docs/` | The published site: how it works, running it, operations, deployment, a page per check family linked from every finding, and the comparison |
 
