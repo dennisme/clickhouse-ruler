@@ -227,3 +227,45 @@ func TestEveryRegisteredMetricIsOnADashboard(t *testing.T) {
 		}
 	}
 }
+
+// Resolve stands in for Grafana, so what it produces has to be what the
+// datasource would have received: the variable's own All value, not a guess
+// made here (spec 9.8).
+func TestResolveFillsVariablesFromTheirAllValue(t *testing.T) {
+	d := load(t, operations)
+
+	got := d.Resolve(`sum by (rule_group) (rate(x{rule_group=~"$rule_group"}[$__rate_interval]))`, "5m")
+	want := `sum by (rule_group) (rate(x{rule_group=~".*"}[5m]))`
+	if got != want {
+		t.Errorf("Resolve =\n  %s\nwant\n  %s", got, want)
+	}
+}
+
+// A variable this package cannot resolve has to stay visible rather than turn
+// into something that parses, since a query nobody can trace back to a panel is
+// worse than one that fails.
+func TestResolveLeavesAVariableItDoesNotKnow(t *testing.T) {
+	d := load(t, operations)
+
+	expr := `up{job="$nothing_defines_this"}`
+	if got := d.Resolve(expr, "5m"); got != expr {
+		t.Errorf("Resolve = %s, want it unchanged", got)
+	}
+}
+
+// Resolve reads an All value rather than inventing one, which only works while
+// every variable states one. Grafana's fallback when none is set is a regex of
+// whatever values exist at that moment, and that is not something a test can
+// reproduce (spec 9.8).
+func TestEveryVariableStatesAnAllValue(t *testing.T) {
+	for _, file := range []string{operations, alertRules} {
+		for _, v := range load(t, file).Templating.List {
+			if v.Type != "query" {
+				continue
+			}
+			if v.AllValue == "" {
+				t.Errorf("%s: the %q variable states no allValue, so nothing can say what All means", file, v.Name)
+			}
+		}
+	}
+}

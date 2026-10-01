@@ -11,6 +11,11 @@ clickhouse_addr := env("RULER_CLICKHOUSE_ADDR", "127.0.0.1:9000")
 clickhouse_addr_2 := env("RULER_CLICKHOUSE_ADDR_2", "127.0.0.1:9001")
 alertmanager_url := env("RULER_ALERTMANAGER_URL", "http://127.0.0.1:9093")
 
+# The Prometheus scraping the ruler container, also from compose.yaml. Only the
+# dashboard tests read it, and they read it rather than Grafana: the datasource
+# is what knows whether an expression matches anything (spec 9.8).
+prometheus_url := env("RULER_PROMETHEUS_URL", "http://127.0.0.1:9091")
+
 # List available recipes.
 default:
     @just --list
@@ -48,6 +53,7 @@ integration:
     RULER_CLICKHOUSE_ADDR="{{clickhouse_addr}}" \
     RULER_CLICKHOUSE_ADDR_2="{{clickhouse_addr_2}}" \
     RULER_ALERTMANAGER_URL="{{alertmanager_url}}" \
+    RULER_PROMETHEUS_URL="{{prometheus_url}}" \
         env -u GOROOT GOTOOLCHAIN=auto go test -tags=integration -count=1 -p 1 ./...
 
 # Bring the stack up, run the integration tests, then always tear it down.
@@ -84,6 +90,7 @@ coverage-integration:
     RULER_CLICKHOUSE_ADDR="{{clickhouse_addr}}" \
     RULER_CLICKHOUSE_ADDR_2="{{clickhouse_addr_2}}" \
     RULER_ALERTMANAGER_URL="{{alertmanager_url}}" \
+    RULER_PROMETHEUS_URL="{{prometheus_url}}" \
         env -u GOROOT GOTOOLCHAIN=auto go test -tags=integration -count=1 -p 1 \
         -coverpkg=./... ./... -coverprofile coverage.out -covermode count
     env -u GOROOT GOTOOLCHAIN=auto go tool cover -html=coverage.out -o coverage.html

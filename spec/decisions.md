@@ -641,3 +641,42 @@ and are what the code comments cite.
   than per rule because one grant on one user is not a fact about a rule, and the
   alternative reports the same sentence once for every rule that matched the
   cluster. See 6.9, 6.7.2, 7.3, 7.10.
+- **A dashboard that renders is proven by Prometheus, not by Grafana.** The gate
+  in 8.6 proves a panel names a metric something registers, which a name with the
+  wrong grouping label or an impossible matcher passes just as easily, so the
+  panel still draws nothing and an operator reads the empty graph as a healthy
+  system. Answering the other half needs series, which needs the ruler running,
+  a Prometheus that scraped it and rules that evaluated, and those are items 5, 7
+  and 8 of the stack in 9.1. They belong together because each is useless without
+  the one before it: a Prometheus with nothing to scrape holds no series and a
+  Grafana with no Prometheus renders the same empty panels the exercise is meant
+  to catch.
+  **The assertion is that the query is answerable.** Driving Grafana's API, or
+  its browser, is a large amount of machinery to learn something the datasource
+  already knows, and it fails for reasons that have nothing to do with the
+  dashboards. Grafana renders; it does not decide whether an expression matches
+  anything. So the test sends every expression to Prometheus and requires a
+  reply. It does not judge an axis, a unit or a legend, and it does not demand a
+  non-empty result, because most of the alert rules dashboard is empty while
+  nothing is wrong and a test that demanded otherwise would have to make a rule
+  fire to pass.
+  **The ruler in the stack is built from the checkout and its rules do not
+  fire.** A pulled image is the last release rather than the code under test,
+  which is the distinction the action's own workflow already draws (10.3), and
+  the layer cache keeps the build off every `compose-up` that changed no Go. The
+  rules are `deploy/stack` rather than `cmd/ruler/testdata`, because that tree is
+  a fixture a test rewrites in place and the address in its sources file is the
+  host's rather than a container's. They evaluate and stay silent so the only
+  alerts reaching Alertmanager are the ones a test sent: the sink in 9.1 is
+  shared, and a rule paging continuously would put deliveries nobody asked for in
+  front of every assertion that reads it. Evaluating is enough, since the series
+  9.8 queries come from a rule that found nothing.
+  **Grafana's variables are filled from the dashboard's own answer.** An
+  expression in a panel is not valid PromQL, so the test substitutes, and what it
+  substitutes decides how much is still being asserted. A dashboard variable is
+  replaced by its `allValue`, which is what the datasource receives when a viewer
+  leaves the dropdown on All, so the value is read out of the file rather than
+  invented and a variable that stops matching anything fails here. Only
+  `$__rate_interval` is the test's own, because Grafana computes it from the
+  panel's time range and the scrape interval and there is nothing in the file to
+  read. See 9.1, 9.8, 8.6.

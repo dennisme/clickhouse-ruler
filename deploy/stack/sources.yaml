@@ -1,0 +1,14 @@
+# The sources the ruler container reads. Separate from cmd/ruler/testdata
+# because that tree is a fixture a test rewrites in place, and the address it
+# names is the host's rather than one a container can reach (spec 9.1).
+sources:
+  - name: otel_traces
+    labels: {team: payments}
+    address: clickhouse:9000
+    database: otel
+    # The restricted user from deploy/clickhouse/init/02-ruler-user.sql, the
+    # same one a deployment is expected to use.
+    username: ruler_payments
+    table: otel_traces
+    timestamp_column: Timestamp
+    evaluation_delay: 0s

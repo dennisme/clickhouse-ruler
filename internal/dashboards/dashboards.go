@@ -36,6 +36,11 @@ type Variable struct {
 	Name  string `json:"name"`
 	Type  string `json:"type"`
 	Query string `json:"query"`
+
+	// What the datasource receives when the dropdown is left on All. It is
+	// what Resolve substitutes, so the value comes out of the file rather
+	// than out of a test.
+	AllValue string `json:"allValue"`
 }
 
 // Panel is one graph, stat or table. A row carries its own panels, so the
@@ -106,6 +111,34 @@ func (d Dashboard) VariableQueries() map[string]string {
 		}
 	}
 	return out
+}
+
+// variableRef is a Grafana variable as it appears inside an expression.
+var variableRef = regexp.MustCompile(`\$[a-zA-Z_][a-zA-Z0-9_]*`)
+
+// Resolve turns one panel expression into PromQL the datasource would have
+// received. A dashboard variable becomes its own All value, which is what
+// Grafana sends when the dropdown is left on All. `$__rate_interval` is
+// Grafana's own, computed from the panel's time range and the scrape interval
+// with nothing in the file to read, so the caller names the duration.
+//
+// A variable with neither is left where it is. It fails at the datasource
+// naming itself, which is traceable back to the panel; substituting something
+// that happens to parse is not.
+func (d Dashboard) Resolve(expr, rateInterval string) string {
+	all := map[string]string{"$__rate_interval": rateInterval}
+	for _, v := range d.Templating.List {
+		if v.AllValue != "" {
+			all["$"+v.Name] = v.AllValue
+		}
+	}
+
+	return variableRef.ReplaceAllStringFunc(expr, func(ref string) string {
+		if sub, ok := all[ref]; ok {
+			return sub
+		}
+		return ref
+	})
 }
 
 // HasVariable reports whether the dashboard declares a template variable by

@@ -1,0 +1,45 @@
+# Rules for the stack's own ruler. They evaluate and they do not fire: the
+# alerts reaching Alertmanager are the integration tests' own, and a rule
+# paging continuously into the shared webhook sink would put deliveries nobody
+# asked for in front of every assertion that reads it (spec 9.1).
+#
+# Evaluating is what the dashboards need. Iterations, evaluations, durations
+# and query cost are all series a rule that found nothing produces.
+groups:
+  - name: checkout
+    interval: 5s
+    rules:
+      - alert: CheckoutIsSlow
+        sources:
+          team: payments
+        expr: |
+          SELECT ServiceName, max(Duration) / 1e6 AS value
+          FROM otel.otel_traces
+          WHERE Timestamp >= {{ .From }} AND Timestamp < {{ .To }}
+          GROUP BY ServiceName
+          HAVING value > 1e9
+        window: 5m
+        labels:
+          team: payments
+          severity: warning
+        annotations:
+          summary: "{{ .ServiceName }} is slow"
+          runbook_url: https://dennisme.github.io/clickhouse-ruler/
+
+      - alert: CheckoutErrorsAreHigh
+        sources:
+          team: payments
+        expr: |
+          SELECT ServiceName, count() AS value
+          FROM otel.otel_traces
+          WHERE Timestamp >= {{ .From }} AND Timestamp < {{ .To }}
+            AND StatusCode = 'Error'
+          GROUP BY ServiceName
+          HAVING value > 1e9
+        window: 5m
+        labels:
+          team: payments
+          severity: warning
+        annotations:
+          summary: "{{ .ServiceName }} is failing"
+          runbook_url: https://dennisme.github.io/clickhouse-ruler/

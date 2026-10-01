@@ -1,0 +1,14 @@
+# Prometheus is here so the dashboards have something behind them. Nothing in
+# the ruler reads it (spec 9.1 item 7).
+#
+# The scrape interval is short for the reason the stack's rules evaluate on a
+# short one: what a test waits for is the first scrape, and the wait is this
+# number.
+global:
+  scrape_interval: 1s
+  evaluation_interval: 1s
+
+scrape_configs:
+  - job_name: ruler
+    static_configs:
+      - targets: ["ruler:9090"]
