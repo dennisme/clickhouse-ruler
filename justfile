@@ -16,6 +16,11 @@ alertmanager_url := env("RULER_ALERTMANAGER_URL", "http://127.0.0.1:9093")
 # is what knows whether an expression matches anything (spec 9.8).
 prometheus_url := env("RULER_PROMETHEUS_URL", "http://127.0.0.1:9091")
 
+# The collector's OTLP HTTP endpoint, also from compose.yaml. The emitter in
+# internal/spans posts there, which is the only way a test holds real collector
+# output rather than rows it inserted itself (spec 9.2).
+otlp_http_url := env("RULER_OTLP_HTTP_URL", "http://127.0.0.1:4318")
+
 # List available recipes.
 default:
     @just --list
@@ -54,6 +59,7 @@ integration:
     RULER_CLICKHOUSE_ADDR_2="{{clickhouse_addr_2}}" \
     RULER_ALERTMANAGER_URL="{{alertmanager_url}}" \
     RULER_PROMETHEUS_URL="{{prometheus_url}}" \
+    RULER_OTLP_HTTP_URL="{{otlp_http_url}}" \
         env -u GOROOT GOTOOLCHAIN=auto go test -tags=integration -count=1 -p 1 ./...
 
 # Bring the stack up, run the integration tests, then always tear it down.
@@ -91,6 +97,7 @@ coverage-integration:
     RULER_CLICKHOUSE_ADDR_2="{{clickhouse_addr_2}}" \
     RULER_ALERTMANAGER_URL="{{alertmanager_url}}" \
     RULER_PROMETHEUS_URL="{{prometheus_url}}" \
+    RULER_OTLP_HTTP_URL="{{otlp_http_url}}" \
         env -u GOROOT GOTOOLCHAIN=auto go test -tags=integration -count=1 -p 1 \
         -coverpkg=./... ./... -coverprofile coverage.out -covermode count
     env -u GOROOT GOTOOLCHAIN=auto go tool cover -html=coverage.out -o coverage.html
@@ -128,6 +135,14 @@ pre-commit:
 # Start the compose stack and wait for it to be healthy.
 compose-up:
     docker compose up -d --wait
+
+# Off by default. Every assertion in the tree was written against a table only
+# tests write to, and rows arriving on their own would be a second author of the
+# data all of them read (spec 9.2).
+#
+# Add background telemetry to a running stack.
+compose-volume:
+    docker compose --profile volume up -d telemetrygen
 
 # Tear down the stack and delete its volumes, orphans and locally built images.
 compose-down:

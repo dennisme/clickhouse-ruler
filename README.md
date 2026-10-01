@@ -244,11 +244,26 @@ every recipe; [AGENTS.md](AGENTS.md) has the layout and the conventions.
 just init               # mise tool versions and pre-commit hooks
 just check              # everything CI runs
 just test               # unit tests with -race, no container needed
-just integration-clean  # start ClickHouse, run integration tests, tear it down
+just integration-clean  # start the stack, run integration tests, tear it down
+just compose-up         # start the stack and leave it running
+just compose-volume     # add background telemetry to a running stack
+just compose-down       # tear it down, volumes and built images included
 ```
 
 No mocked databases anywhere: integration tests run against real ClickHouse,
 with real SQL and real rows.
+
+The stack is two ClickHouse nodes, an OpenTelemetry collector, Alertmanager, the
+ruler, Prometheus and Grafana. Rows reach the table the way they do in
+production: a test posts spans as OTLP and the collector writes them, against
+the trace schema copied verbatim from the collector's own ClickHouse exporter.
+Grafana is on <http://127.0.0.1:3000> with the shipped dashboards provisioned, so
+a panel can be looked at rather than reasoned about.
+
+`just compose-volume` adds `telemetrygen`, which sends a constant stream of
+spans so a check is read against a busy table rather than one holding only what
+a test put there. It is opt-in because every assertion in the tree was written
+against a table only tests write to.
 
 [RELEASE.md](RELEASE.md) covers cutting a release: one `v*` tag publishes the
 archives, the image, the chart and the floating major tag.

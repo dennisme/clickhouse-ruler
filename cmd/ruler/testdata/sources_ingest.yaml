@@ -1,0 +1,18 @@
+# The same source as sources.yaml, with an evaluation_delay. Ingestion lag is
+# absorbed by that rather than by racing the collector (spec 9.4), and
+# sources.yaml deliberately pins 0s because the tests that seed their own rows
+# have no lag to absorb.
+#
+# The test overrides the address from RULER_CLICKHOUSE_ADDR, so this file stays
+# reviewable without a live cluster to check it against.
+sources:
+  - name: otel_traces
+    labels: {team: payments}
+    address: 127.0.0.1:9000
+    database: otel
+    username: ruler_payments
+    table: otel_traces
+    timestamp_column: Timestamp
+    # The collector's batch timeout is 1s and the insert follows it, so a row
+    # can land a second or two after the span it describes ended.
+    evaluation_delay: 5s
