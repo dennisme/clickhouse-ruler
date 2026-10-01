@@ -1,0 +1,12 @@
+# The datasource the dashboards pick up. They name a datasource variable of
+# type prometheus rather than a uid, so what matters here is that exactly one
+# Prometheus is provisioned and that it is the default (spec 8.6).
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    uid: prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true

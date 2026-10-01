@@ -1,5 +1,6 @@
-# Local dev stack: ClickHouse and Alertmanager. The OpenTelemetry collector and
-# the telemetry generators arrive with the scheduler (spec section 9).
+# Local dev stack: ClickHouse, Alertmanager, the ruler, Prometheus and Grafana.
+# The OpenTelemetry collector and the telemetry generators are still to come
+# (spec section 9).
 #
 # The webhook sink is not a container. It runs inside the integration test so
 # assertions can read delivered payloads directly, which is why Alertmanager
@@ -94,6 +95,94 @@ services:
       - --log.level=warn
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:9093/-/ready"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  # The code under test, built from this checkout rather than pulled: a
+  # published image is the last release, and the stack exists to run what is in
+  # the tree (spec 9.1 item 5).
+  #
+  # Its rules evaluate and never fire, so the alerts Alertmanager delivers are
+  # the ones a test sent and nothing else.
+  ruler:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ruler
+    ports:
+      - "127.0.0.1:9090:9090"
+    volumes:
+      - ./deploy/stack:/etc/ruler:ro
+    command:
+      - run
+      - --rules=/etc/ruler/rules
+      - --sources=/etc/ruler/sources.yaml
+      - --alertmanager=http://alertmanager:9093
+      - --listen=:9090
+      - --log-level=warn
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+      clickhouse2:
+        condition: service_healthy
+      alertmanager:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:9090/-/ready"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  # What the dashboards query. The ruler itself reads nothing from it, and
+  # without it 8.6's panels have nothing behind them at all (spec 9.1 item 7).
+  prometheus:
+    image: prom/prometheus:v3.6.0
+    container_name: ruler-prometheus
+    ports:
+      - "127.0.0.1:9091:9090"
+    volumes:
+      - ./deploy/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=1h
+      - --log.level=warn
+    depends_on:
+      ruler:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:9090/-/ready"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  # Here so a person can open the dashboards and see them working. No test
+  # reads it: the datasource, not the renderer, is what knows whether an
+  # expression matches anything (spec 9.8).
+  #
+  # Nothing is configured through its UI, for the reason rules are files. A
+  # dashboard that exists only in somebody's browser cannot be reviewed.
+  grafana:
+    image: grafana/grafana:12.1.1
+    container_name: ruler-grafana
+    ports:
+      - "127.0.0.1:3000:3000"
+    volumes:
+      - ./deploy/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./deploy/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    environment:
+      # A local stack on a loopback port has nobody to authenticate against,
+      # and a login prompt between a person and the panels is the reason
+      # dashboards go unopened.
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+      GF_AUTH_BASIC_ENABLED: "false"
+      GF_LOG_LEVEL: warn
+    depends_on:
+      prometheus:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/health"]
       interval: 2s
       timeout: 2s
       retries: 30

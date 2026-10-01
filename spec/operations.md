@@ -918,8 +918,9 @@ stubbed collector.
 
 ### 9.1 Compose stack
 
-`compose.yaml`, all image versions pinned. Items 1 and 4 exist today; the rest
-arrive with the scheduler.
+`compose.yaml`, all image versions pinned. Items 1, 4, 5, 7 and 8 exist today.
+Items 2 and 3 arrive with the generators, and item 6 is not a container at all
+for the reason it gives.
 
 1. **ClickHouse**, two nodes. Schema in `deploy/clickhouse/init`, the
    OpenTelemetry Collector ClickHouse exporter trace table reproduced verbatim
@@ -940,7 +941,26 @@ arrive with the scheduler.
 3. **Telemetry generators.** Two of them, see 9.2.
 4. **Alertmanager**, real, configured with a webhook receiver pointing at the
    sink.
-5. **Ruler**, the code under test.
+5. **Ruler**, the code under test, built by compose from the `Dockerfile` in
+   this checkout rather than pulled. A published image is the last release, and
+   the stack exists to run what is in the tree, which is the same reason the
+   action's first job runs the checker in the checkout (10.3). The price is a Go
+   build the first time and after any change under `cmd` or `internal`; the
+   layer cache keeps it off every other `compose-up`.
+
+   Its rules are not the ones in `cmd/ruler/testdata`. That tree is a fixture
+   whose `sources.yaml` a test rewrites in place, and the address it names is
+   reachable from the host rather than from inside a container. The stack's own
+   rules and sources are `deploy/stack`, mounted read only, addressing the
+   ClickHouse nodes by service name.
+
+   They evaluate and they do not fire. The alerts reaching Alertmanager are the
+   integration tests' own, and a stack rule paging continuously into the webhook
+   sink in item 6 would put deliveries nobody asked for in front of every
+   assertion that reads it. Evaluating is all 9.8 needs: the iteration,
+   evaluation, duration and query cost series come from a rule that found
+   nothing, and a panel that is empty until something fires is one 9.8 does not
+   demand an answer from.
 6. **Webhook sink**, a small HTTP server that records every notification
    payload it receives and exposes them for assertions. Not a container today:
    it runs inside the integration test so assertions can read the payloads
@@ -949,11 +969,15 @@ arrive with the scheduler.
    itself is a container and no test process is left to host it.
 7. **Prometheus**, scraping the ruler. Not for the ruler's benefit: it is
    what the dashboards query, and without it 8.6's panels have nothing behind
-   them at all. See 9.8.
+   them at all. See 9.8. Its config is `deploy/prometheus`, one target, and the
+   scrape interval is short for the reason the test rules use a short one (9.4):
+   what a test waits for is the first scrape, and the wait is that interval.
 8. **Grafana**, provisioned from `deploy/grafana`: a datasource pointing at
    item 7, and a dashboard provider pointing at the files 8.6 ships. Nothing
    is configured through its UI, for the reason rules are files: a dashboard
-   that exists only in somebody's browser cannot be reviewed.
+   that exists only in somebody's browser cannot be reviewed. It is here so a
+   person can open the dashboards and see them working; no test reads it, and
+   9.8 says why.
 
 Items 5, 7 and 8 arrive together, because each is useless without the one
 before it. A Prometheus with nothing to scrape holds no series, and a Grafana
@@ -1107,6 +1131,34 @@ demands every panel be non-empty will fail on the panels that are empty when
 the system is healthy, which is most of the alert rules dashboard: a rule that
 is firing during the run is a rule the test has to make fire. The assertion is
 that the query is answerable, not that the answer is interesting.
+
+**The test reads the dashboards, not a list kept beside them.** It sits in
+`internal/dashboards` next to the gate 8.6 already ships and goes through the
+same `Expressions`, so a panel added to a file is a query this test sends
+without anybody remembering to add it. A checked-in list of
+expressions would be the hand written compatibility table 9.7 refuses for the
+same reason: a copy of the thing is a copy of where the thing used to be.
+
+**Variables are substituted the way Grafana substitutes them.** What is in a
+panel is not valid PromQL. `rule_group=~"$rule_group"` and `[$__rate_interval]`
+are Grafana's, and Prometheus rejects both, so something has to fill them in and
+the choice of what decides how much the test is still asserting. Each dashboard
+variable is replaced by its own `allValue`, which is what the datasource
+receives when a viewer leaves the dropdown on All: the substitution is read out
+of the file rather than invented, so a variable whose `allValue` stops matching
+anything is a failure here rather than a difference the test papers over.
+`$__rate_interval` has no definition to read, because Grafana computes it from
+the panel's time range and the datasource's scrape interval, so the test names a
+duration and that is the one value it decides on its own.
+
+**One assertion does need a series, and it is not a panel's.** Answerable is a
+low bar on its own: a well-formed query against a metric nobody ever exposed is
+answered with an empty result just as happily, so a stack whose ruler never
+started would pass every panel. What that cannot fake is the chain items 5 and 7
+exist for, so a second assertion waits for one series the ruler only produces by
+running, being scraped and evaluating something. It names a single metric rather
+than walking the dashboards, because this is a question about the stack and not
+about the files.
 
 ---
 
