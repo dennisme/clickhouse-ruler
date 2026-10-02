@@ -1021,6 +1021,34 @@ Both are removed with their group like everything else labelled `rule_group`
 whose interval changed reports the interval it is now running rather than the one
 it started on.
 
+**The tick delay histogram does not take the default buckets**, and it is the
+one histogram here that cannot. The other three measure a query or a send, where
+a second is a long time and `prometheus.DefBuckets` ends at ten of them. This one
+measures a group's lateness, and lateness is only ever read as a fraction of that
+group's interval. Intervals here run from thirty seconds to several minutes, so a
+delay worth seeing spans from a fraction of a second, which is a healthy ruler,
+to the whole interval, which is a tick about to be lost. The top of that range
+sits past where the default buckets stop, and every delay above ten seconds would
+land in `+Inf` together: a group five seconds late and a group three minutes late
+would read the same, which is the distinction the metric exists to make.
+
+So the buckets are exponential, from fifty milliseconds, by a factor of three,
+nine of them:
+
+```text
+0.05  0.15  0.45  1.35  4.05  12.15  36.45  109.35  328.05
+```
+
+That covers fifty milliseconds to five and a half minutes, which is the longest
+interval anybody is expected to configure, and the first bucket collects the
+healthy ruler rather than spreading it. The factor is three rather than two
+because a quantile here is read against an interval and acted on at the order of
+magnitude: a group whose p99 delay is a tenth of its interval is fine and one at
+half is about to miss, and no decision between them turns on the second digit. It
+buys the range in ten series per group instead of the fifteen a factor of two
+would need for the same range, which is one less than the eleven the default
+buckets already cost everywhere else.
+
 **Whether any of this can carry a promise.** Not end to end, and the reason is
 worth stating exactly, because "no latency SLO" and "no promise about anything"
 are different answers.
