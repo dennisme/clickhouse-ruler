@@ -2064,8 +2064,22 @@ sizing it is `--recheck-interval` with zero for not at all.
 
 **All three feeds are built.** The evaluator feed reports every tick, the load
 feed once per reading, and the timer
-runs on `--recheck-interval`, an hour by default and zero for not at all, since a
-pass that reads real data must not start on a ruler nobody asked. Each feed
+runs on `--recheck-interval`, an hour by default and zero for not at all.
+
+**The pass ships on, and that is the opposite of what an earlier reading of this
+paragraph said.** The argument for off was that a pass reading real data must not
+start on a ruler nobody asked, which borrowed 7.3's consent posture and does not
+carry here. 7.3 is about `ruler check`, where somebody at a terminal may not
+expect any query to leave their laptop, so `-sample` and `-backfill` are opted
+into. A running ruler is already querying these tables on every tick; that is
+the product. One bounded query per rule per source per hour is small beside
+that, and the thing it buys is the only sight anybody has of a renamed map key,
+which is the one failure in this section that reports nothing and reads exactly
+like an estate where nothing was renamed. A check that ships off is a check that
+does not exist on every ruler whose operator never heard of it. Turning it off
+stays a flag away, because how often a schema moves is a property of the
+organisation, and `docs/running.md` carries the arithmetic for an estate to
+price the reads. Each feed
 rebuilds only the gauge series of the checks it owns: `rule/columns`,
 `rule/source-schema`, `rule/cost`, `rule/execution` and `annotations/template`
 are the evaluation's, `rule/attribute-key` is the timer's, and the load feed owns
