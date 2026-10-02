@@ -23,20 +23,9 @@ plurality that does not exist.
 
 Spec 6.5 now carries the argument and the ordering: Alertmanager's own docs say
 not to load balance in front of it, so a list is the right shape here even
-though a source keeps one address, and the list waits on the item below because
-fan-out multiplies that worst case.
-
-### An Alertmanager outage shows up as missed iterations
-
-`Cadence.Send` runs inside the rule's evaluation goroutine
-(`internal/scheduler/ruleeval.go`, end of `Evaluate`). Four attempts at a 10s
-timeout plus backoff is roughly 42s worst case. A group on a 30s interval starts
-missing iterations, which spec 8.2 calls the single most important operational
-signal, for a cause that is not evaluation.
-
-Either bound the send by the group interval, or say this next to the missed
-iterations expression in `docs/operations.md`. Spec 6.5 makes this a blocker for
-a list of Alertmanagers rather than a standalone annoyance.
+though a source keeps one address. It waited on the send leaving the evaluation
+goroutine, because fan-out multiplies that worst case by the number of
+endpoints, and that item is now closed, so nothing is in front of this one.
 
 ### Flags need a restart and the docs do not say it
 
@@ -91,6 +80,38 @@ on `--format`. Workable and documented, but a lot of rules for one command.
 
 Original numbering and original text kept, so a reference written before the
 fix still points at the right item.
+
+### An Alertmanager outage shows up as missed iterations
+
+**Closed by taking the send off the evaluation goroutine.** Delivery is one
+worker behind a bounded queue, `--notification-queue-capacity`, ten thousand
+alerts, Prometheus' number and unit. The queue sits in front of `notify.Cadence`
+rather than between it and the client, because the Cadence deliberately does not
+record a failed send and a queue behind that record would mark an alert
+delivered before anything was: each item carries the alerts, the `now` of the
+evaluation that produced them and the group's interval, and the worker calls
+`Cadence.Send`. A full queue drops the oldest rather than blocking or dropping
+the newest, and a drop is not a lost page, because nothing is recorded as sent
+and the next evaluation hands the same instances over, spending the same
+`--resend-tolerance` a failed send spends. `Result.SendError` is gone, since a
+field on an evaluation's result would be nil on every evaluation of a ruler that
+cannot deliver anything; the log line moved to the worker, which carries the
+group and the rule for it. Four series say what the queue made invisible: depth,
+capacity, queue wait and alerts dropped, with the tick delay buckets on the wait
+and a new term in the lag budget rather than a redefinition of notification
+latency. `Shutdown` now drains the queue inside the same timeout it gives
+evaluations, and the worker's sends no longer run on an evaluation's context, so
+the wait means what it always claimed. The argument is in spec 6.5.
+
+`Cadence.Send` runs inside the rule's evaluation goroutine
+(`internal/scheduler/ruleeval.go`, end of `Evaluate`). Four attempts at a 10s
+timeout plus backoff is roughly 42s worst case. A group on a 30s interval starts
+missing iterations, which spec 8.2 calls the single most important operational
+signal, for a cause that is not evaluation.
+
+Either bound the send by the group interval, or say this next to the missed
+iterations expression in `docs/operations.md`. Spec 6.5 makes this a blocker for
+a list of Alertmanagers rather than a standalone annoyance.
 
 ### Two spec'd metrics are still absent
 
@@ -310,8 +331,7 @@ past CI is running anyway.
 
 ## Order to fix
 
-1. The Alertmanager items, in the order spec 6.5 sets: take the send off the
-   evaluation path, then the list of endpoints.
+1. The list of Alertmanagers, which the send queue unblocked.
 2. The consumer toil, starting with what a rule can template: the gap between
    "a rule names no cluster" and `FROM otel.otel_traces` is the one an author
    meets first.

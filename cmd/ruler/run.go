@@ -61,6 +61,9 @@ func runRun(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	resendTolerance := fs.Int("resend-tolerance", notify.DefaultResendTolerance,
 		"how many resend periods a firing alert stays valid for, so how many consecutive failed evaluations or sends "+
 			"pass before Alertmanager expires an alert that is still firing; 4 is what Prometheus gives itself")
+	queueCapacity := fs.Int("notification-queue-capacity", scheduler.DefaultNotificationQueueCapacity,
+		"how many alerts may wait to be sent to Alertmanager before the oldest are dropped; the send runs off the "+
+			"evaluation goroutine, so this is what an Alertmanager outage fills instead of a group's interval")
 	logLevel := fs.String("log-level", "info", "log verbosity: debug, info, warn or error")
 	reloadEndpoint := fs.Bool("enable-reload-endpoint", false,
 		"serve POST /-/reload, which re-reads the same files SIGHUP does, for deployments where a signal cannot "+
@@ -78,6 +81,13 @@ func runRun(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	// Alertmanager reads as resolved.
 	if *resendInterval <= 0 {
 		printf(stderr, "--resend-interval must be positive, got %s\n", *resendInterval)
+		return exitUsage
+	}
+
+	// A queue of nothing drops every alert the moment it is handed over, and
+	// the bound is the whole point of the queue.
+	if *queueCapacity <= 0 {
+		printf(stderr, "--notification-queue-capacity must be positive, got %d\n", *queueCapacity)
 		return exitUsage
 	}
 
@@ -124,8 +134,13 @@ func runRun(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	// in a log line, because a URL may carry userinfo and a label is scraped,
 	// stored and put on a dashboard (spec 8.4).
 	alertmanagerClient := notify.NewClient(*alertmanagerURL)
-	rn.cadence = scheduler.NewCadence(alertmanagerClient, alertmanager.Redacted(),
+	cadence := scheduler.NewCadence(alertmanagerClient, alertmanager.Redacted(),
 		rn.resend, rn.metrics, rn.clock)
+	// Delivery is one goroutine behind a bounded queue, so an Alertmanager
+	// outage fills the queue instead of holding a group's evaluation past its
+	// interval (spec 6.5). The queue outlives every reload, as the cadence
+	// behind it does.
+	rn.queue = scheduler.NewSendQueue(cadence, *queueCapacity, rn.metrics, rn.clock, log)
 
 	// SIGHUP is the whole trigger. Nothing watches the filesystem: an operator
 	// or whatever rolled the files out says when they are complete, and a

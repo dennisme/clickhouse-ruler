@@ -38,10 +38,10 @@ func TestNewCountsRulesWithNoMatchedSourceAsUnmatched(t *testing.T) {
 
 	reg := prometheus.NewRegistry()
 	metrics := NewMetrics(reg)
-	cadence := notify.NewCadence(&recordingSender{}, time.Minute, notify.DefaultResendTolerance)
+	queue := queueFor(&recordingSender{}, time.Minute)
 	clock := newFakeClock(time.Unix(0, 0))
 
-	New(set, map[string]Querier{"src1": &fakeQuerier{}}, cadence, metrics, clock, 0, nil, testResend, 0)
+	New(set, map[string]Querier{"src1": &fakeQuerier{}}, queue, metrics, clock, 0, nil, testResend, 0)
 
 	got := testutil.ToFloat64(metrics.RulesUnmatched.WithLabelValues("f.yaml:g1"))
 	if got != 1 {
@@ -64,10 +64,10 @@ func TestNewStaggersGroupsSharingAnInterval(t *testing.T) {
 
 	reg := prometheus.NewRegistry()
 	metrics := NewMetrics(reg)
-	cadence := notify.NewCadence(&recordingSender{}, time.Minute, notify.DefaultResendTolerance)
+	queue := queueFor(&recordingSender{}, time.Minute)
 	clock := newFakeClock(time.Unix(0, 0))
 
-	sched := New(set, map[string]Querier{"src1": &fakeQuerier{}}, cadence, metrics, clock, 0, nil, testResend, 0)
+	sched := New(set, map[string]Querier{"src1": &fakeQuerier{}}, queue, metrics, clock, 0, nil, testResend, 0)
 
 	if len(sched.groups) != 2 {
 		t.Fatalf("got %d groups, want 2", len(sched.groups))
@@ -97,11 +97,11 @@ func TestAlertsActiveIsLabelledByGroupAndRule(t *testing.T) {
 
 	reg := prometheus.NewRegistry()
 	metrics := NewMetrics(reg)
-	cadence := notify.NewCadence(&recordingSender{}, time.Minute, notify.DefaultResendTolerance)
+	queue := queueFor(&recordingSender{}, time.Minute)
 	clock := newFakeClock(time.Unix(0, 0))
 
 	sched := New(set, map[string]Querier{"src1": &fakeQuerier{samples: oneSample()}},
-		cadence, metrics, clock, 0, nil, testResend, 0)
+		queue, metrics, clock, 0, nil, testResend, 0)
 
 	// Evaluate both groups once, directly, so the gauge is written without
 	// having to drive the tickers.
@@ -125,9 +125,9 @@ func TestAlertsActiveIsLabelledByGroupAndRule(t *testing.T) {
 func TestShutdownBeforeStartIsANoop(t *testing.T) {
 	reg := prometheus.NewRegistry()
 	metrics := NewMetrics(reg)
-	cadence := notify.NewCadence(&recordingSender{}, time.Minute, notify.DefaultResendTolerance)
+	queue := queueFor(&recordingSender{}, time.Minute)
 	clock := newFakeClock(time.Unix(0, 0))
 
-	sched := New(&ruleset.Set{}, map[string]Querier{}, cadence, metrics, clock, 0, nil, testResend, 0)
+	sched := New(&ruleset.Set{}, map[string]Querier{}, queue, metrics, clock, 0, nil, testResend, 0)
 	sched.Shutdown(time.Second)
 }

@@ -355,6 +355,97 @@
       ]
     },
     {
+      "title": "Send queue depth",
+      "description": "Alerts waiting to be delivered, against how many may wait. The send runs off the evaluation goroutine, so this is what an Alertmanager outage fills instead of a group's interval: depth climbing with send failures above zero is delivery falling behind, and depth climbing with failures at zero is Alertmanager accepting slower than the groups produce. Dropped is the oldest alerts going over the capacity, or what a shutdown could not deliver in time. A drop is not a lost page on its own, because nothing was recorded as sent and the next evaluation enqueues the same instances, but it spends the same resend tolerance a failed send spends (spec 6.5).",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 41
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "clickhouse_ruler_notification_queue_length",
+          "legendFormat": "alerts queued"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "clickhouse_ruler_notification_queue_capacity",
+          "legendFormat": "capacity (alerts)"
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "rate(clickhouse_ruler_notifications_dropped_total[$__rate_interval])",
+          "legendFormat": "alerts dropped/s"
+        }
+      ]
+    },
+    {
+      "title": "Time waiting in the send queue",
+      "description": "How long an alert batch sat before its send was attempted. Deliberately not part of notification latency, which holds only sends Alertmanager accepted: this is the term the lag budget gains for running delivery behind a queue, and folding the two together would hide it. Near zero while Alertmanager answers, because one worker drains faster than the groups fill. Read against the group's interval, which is what every delay here is read against (spec 8.8).",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 41
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(clickhouse_ruler_notification_queue_wait_seconds_bucket[$__rate_interval])))",
+          "legendFormat": "p99"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "histogram_quantile(0.5, sum by (le) (rate(clickhouse_ruler_notification_queue_wait_seconds_bucket[$__rate_interval])))",
+          "legendFormat": "p50"
+        }
+      ]
+    },
+    {
       "title": "Query cost",
       "description": "What rules are reading, from the driver's own callbacks rather than from system.query_log. The rate is the number that matters: the same query is cheap hourly and ruinous every fifteen seconds. An empty team is a rule whose author set no team label.",
       "type": "timeseries",
@@ -366,7 +457,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 41
+        "y": 49
       },
       "fieldConfig": {
         "defaults": {
@@ -407,7 +498,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 41
+        "y": 49
       },
       "fieldConfig": {
         "defaults": {
@@ -448,7 +539,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 49
+        "y": 57
       },
       "fieldConfig": {
         "defaults": {
@@ -489,7 +580,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 57
+        "y": 65
       },
       "fieldConfig": {
         "defaults": {
@@ -548,7 +639,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 65
+        "y": 73
       },
       "fieldConfig": {
         "defaults": {
@@ -589,7 +680,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 65
+        "y": 73
       },
       "fieldConfig": {
         "defaults": {
@@ -621,7 +712,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 73
+        "y": 81
       },
       "fieldConfig": {
         "defaults": {
@@ -662,7 +753,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 73
+        "y": 81
       },
       "fieldConfig": {
         "defaults": {
@@ -694,7 +785,7 @@
         "h": 6,
         "w": 24,
         "x": 0,
-        "y": 81
+        "y": 89
       },
       "fieldConfig": {
         "defaults": {
@@ -726,7 +817,7 @@
         "h": 6,
         "w": 24,
         "x": 0,
-        "y": 87
+        "y": 95
       },
       "fieldConfig": {
         "defaults": {

@@ -16,7 +16,6 @@ import (
 
 	"github.com/dennisme/clickhouse-ruler/internal/alert"
 	"github.com/dennisme/clickhouse-ruler/internal/lint"
-	"github.com/dennisme/clickhouse-ruler/internal/notify"
 	"github.com/dennisme/clickhouse-ruler/internal/query"
 	"github.com/dennisme/clickhouse-ruler/internal/rule"
 	"github.com/dennisme/clickhouse-ruler/internal/ruleset"
@@ -83,7 +82,7 @@ func TestEvalGroupLogsWhichRuleAndSourceFailed(t *testing.T) {
 	q := &fakeQuerier{err: errors.New("connection refused")}
 
 	sched := New(oneRuleSet("Broken", source.Source{Name: "src1"}), map[string]Querier{"src1": q},
-		notify.NewCadence(&recordingSender{}, time.Minute, notify.DefaultResendTolerance),
+		queueFor(&recordingSender{}, time.Minute),
 		NewMetrics(prometheus.NewRegistry()), newFakeClock(time.Unix(0, 0)), 0, log, testResend, 0)
 
 	sched.groups[0].Eval(context.Background(), time.Unix(0, 0))
@@ -118,34 +117,6 @@ func TestEvalGroupLogsWhichRuleAndSourceFailed(t *testing.T) {
 	}
 }
 
-// Result.SendError was set and then dropped, so an operator reading
-// clickhouse_ruler_alerts_send_failures_total had nothing saying which rule could not be
-// delivered.
-func TestEvalGroupLogsASendFailure(t *testing.T) {
-	log, buf := logBuffer()
-	sender := &recordingSender{err: errors.New("alertmanager unreachable")}
-
-	sched := New(oneRuleSet("Undeliverable", source.Source{Name: "src1"}),
-		map[string]Querier{"src1": &fakeQuerier{samples: oneSample()}},
-		notify.NewCadence(sender, time.Minute, notify.DefaultResendTolerance),
-		NewMetrics(prometheus.NewRegistry()), newFakeClock(time.Unix(0, 0)), 0, log, testResend, 0)
-
-	sched.groups[0].Eval(context.Background(), time.Unix(0, 0))
-
-	lines := logLines(t, buf)
-	if len(lines) != 1 {
-		t.Fatalf("got %d log lines, want 1: %v", len(lines), lines)
-	}
-	wantFields(t, lines[0], map[string]string{
-		"level":      "ERROR",
-		"rule_group": "f.yaml:g1",
-		"rule":       "Undeliverable",
-	})
-	if got, _ := lines[0]["error"].(string); !strings.Contains(got, "alertmanager unreachable") {
-		t.Errorf("error field = %q, want it to carry what the send said", got)
-	}
-}
-
 // Spec 8.3's cardinality rule is about metrics, and the same reasoning applies
 // to logs: a rule returning ten thousand rows must not write ten thousand
 // lines. One line per rule and per source, never per alert instance.
@@ -160,13 +131,14 @@ func TestEvalGroupLogsOncePerRuleRegardlessOfInstanceCount(t *testing.T) {
 		})
 	}
 	sender := &recordingSender{err: errors.New("alertmanager unreachable")}
+	queue, metrics := loggingQueue(sender, log)
 
 	sched := New(oneRuleSet("Noisy", source.Source{Name: "src1"}),
 		map[string]Querier{"src1": &fakeQuerier{samples: samples}},
-		notify.NewCadence(sender, time.Minute, notify.DefaultResendTolerance),
-		NewMetrics(prometheus.NewRegistry()), newFakeClock(time.Unix(0, 0)), 0, log, testResend, 0)
+		queue, metrics, newFakeClock(time.Unix(0, 0)), 0, log, testResend, 0)
 
 	sched.groups[0].Eval(context.Background(), time.Unix(0, 0))
+	queue.drain()
 
 	if lines := logLines(t, buf); len(lines) != 1 {
 		t.Fatalf("got %d log lines for 500 instances, want 1", len(lines))
@@ -184,7 +156,7 @@ func TestShutdownLogsWhenTheTimeoutExpires(t *testing.T) {
 
 	clock := newFakeClock(time.Unix(0, 0))
 	sched := New(oneRuleSet("Slow", source.Source{Name: "src1"}), map[string]Querier{"src1": q},
-		notify.NewCadence(&recordingSender{}, time.Minute, notify.DefaultResendTolerance),
+		queueFor(&recordingSender{}, time.Minute),
 		NewMetrics(prometheus.NewRegistry()), clock, 0, log, testResend, 0)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -260,7 +232,7 @@ func TestEvalGroupLogsADuplicateLabelSet(t *testing.T) {
 
 	metrics := NewMetrics(prometheus.NewRegistry())
 	sched := New(oneRuleSet("Collapsed", src), map[string]Querier{"src1": q},
-		notify.NewCadence(&recordingSender{}, time.Minute, notify.DefaultResendTolerance),
+		queueFor(&recordingSender{}, time.Minute),
 		metrics, newFakeClock(time.Unix(0, 0)), 0, log, testResend, 0)
 
 	sched.groups[0].Eval(context.Background(), time.Unix(0, 0))
@@ -307,12 +279,12 @@ func TestEvalGroupLogsABrokenAnnotationWithoutFailingTheSend(t *testing.T) {
 	}
 
 	sender := &recordingSender{}
-	metrics := NewMetrics(prometheus.NewRegistry())
+	queue, metrics := loggingQueue(sender, log)
 	sched := New(set, map[string]Querier{"src1": &fakeQuerier{samples: samples}},
-		notify.NewCadence(sender, time.Minute, notify.DefaultResendTolerance),
-		metrics, newFakeClock(time.Unix(0, 0)), 0, log, testResend, 0)
+		queue, metrics, newFakeClock(time.Unix(0, 0)), 0, log, testResend, 0)
 
 	sched.groups[0].Eval(context.Background(), time.Unix(0, 0))
+	queue.drain()
 
 	// One line and no more, however many instances hit it: the finding, which is
 	// the line addressed to whoever owns the rule. A second line announcing the
@@ -397,7 +369,7 @@ func TestEvalGroupLogsABrokenAnnotationOnceWhileTheRuleIsQuiet(t *testing.T) {
 	q := &fakeQuerier{samples: []alert.Sample{{Labels: map[string]string{"ServiceName": "svc"}, Value: 1}}}
 	metrics := NewMetrics(prometheus.NewRegistry())
 	sched := New(set, map[string]Querier{"src1": q},
-		notify.NewCadence(&recordingSender{}, time.Minute, notify.DefaultResendTolerance),
+		queueFor(&recordingSender{}, time.Minute),
 		metrics, newFakeClock(time.Unix(0, 0)), 0, log, testResend, 0)
 
 	sched.groups[0].Eval(context.Background(), time.Unix(0, 0))
@@ -441,7 +413,7 @@ func TestNewLogsEveryRuleThatMatchedNoSource(t *testing.T) {
 	})
 
 	New(set, map[string]Querier{"src1": &fakeQuerier{}},
-		notify.NewCadence(&recordingSender{}, time.Minute, notify.DefaultResendTolerance),
+		queueFor(&recordingSender{}, time.Minute),
 		NewMetrics(prometheus.NewRegistry()), newFakeClock(time.Unix(0, 0)), 0, log, testResend, 0)
 
 	lines := logLines(t, buf)

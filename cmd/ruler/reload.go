@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/dennisme/clickhouse-ruler/internal/lint"
-	"github.com/dennisme/clickhouse-ruler/internal/notify"
 	"github.com/dennisme/clickhouse-ruler/internal/policy"
 	"github.com/dennisme/clickhouse-ruler/internal/query"
 	"github.com/dennisme/clickhouse-ruler/internal/ruleset"
@@ -66,7 +65,7 @@ type runner struct {
 	stderr  io.Writer
 	metrics *scheduler.Metrics
 	clock   scheduler.Clock
-	cadence *notify.Cadence
+	queue   *scheduler.SendQueue
 
 	concurrency int
 	resend      scheduler.Resend
@@ -253,7 +252,7 @@ func (r *runner) connect(ctx context.Context, cfg *config) error {
 // reaches the same scheduler through Reload, because the alert state and the
 // group goroutines are the process rather than the files.
 func (r *runner) build(cfg *config) {
-	r.sched = scheduler.New(cfg.set, toQuerierMap(r.queriers), r.cadence,
+	r.sched = scheduler.New(cfg.set, toQuerierMap(r.queriers), r.queue,
 		r.metrics, r.clock, r.concurrency, r.log, r.resend, r.recheck)
 }
 

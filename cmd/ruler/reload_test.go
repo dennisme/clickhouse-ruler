@@ -78,8 +78,10 @@ func startRunner(t *testing.T, dir string) *runner {
 		clock:       scheduler.NewRealClock(),
 		resend:      scheduler.Resend{Interval: notify.DefaultResendInterval, Tolerance: notify.DefaultResendTolerance},
 	}
-	r.cadence = scheduler.NewCadence(notify.NewClient("http://127.0.0.1:9093"),
+	cadence := scheduler.NewCadence(notify.NewClient("http://127.0.0.1:9093"),
 		"http://127.0.0.1:9093", r.resend, r.metrics, r.clock)
+	r.queue = scheduler.NewSendQueue(cadence, scheduler.DefaultNotificationQueueCapacity,
+		r.metrics, r.clock, r.log)
 
 	cfg, err := r.load()
 	if err != nil {

@@ -12,7 +12,6 @@ import (
 
 	"github.com/dennisme/clickhouse-ruler/internal/alert"
 	"github.com/dennisme/clickhouse-ruler/internal/lint"
-	"github.com/dennisme/clickhouse-ruler/internal/notify"
 	"github.com/dennisme/clickhouse-ruler/internal/query"
 	"github.com/dennisme/clickhouse-ruler/internal/rule"
 	"github.com/dennisme/clickhouse-ruler/internal/ruleset"
@@ -70,7 +69,7 @@ func TestEvalGroupReportsDrift(t *testing.T) {
 
 	sched := New(ownedRuleSet(source.Source{Name: "payments_prod"}),
 		map[string]Querier{"payments_prod": q},
-		notify.NewCadence(&recordingSender{}, time.Minute, notify.DefaultResendTolerance),
+		queueFor(&recordingSender{}, time.Minute),
 		m, newFakeClock(time.Unix(0, 0)), 0, log, testResend, 0)
 
 	sched.groups[0].Eval(context.Background(), time.Unix(0, 0))
@@ -111,7 +110,7 @@ func TestEvalGroupClearsAFindingThatWentAway(t *testing.T) {
 
 	sched := New(ownedRuleSet(source.Source{Name: "payments_prod"}),
 		map[string]Querier{"payments_prod": q},
-		notify.NewCadence(&recordingSender{}, time.Minute, notify.DefaultResendTolerance),
+		queueFor(&recordingSender{}, time.Minute),
 		m, newFakeClock(time.Unix(0, 0)), 0, log, testResend, 0)
 
 	sched.groups[0].Eval(context.Background(), time.Unix(0, 0))
@@ -139,7 +138,7 @@ func TestEvalGroupKeepsFindingsWhenAPassCouldNotAsk(t *testing.T) {
 
 	sched := New(ownedRuleSet(source.Source{Name: "payments_prod"}),
 		map[string]Querier{"payments_prod": q},
-		notify.NewCadence(&recordingSender{}, time.Minute, notify.DefaultResendTolerance),
+		queueFor(&recordingSender{}, time.Minute),
 		m, newFakeClock(time.Unix(0, 0)), 0, log, testResend, 0)
 
 	sched.groups[0].Eval(context.Background(), time.Unix(0, 0))
@@ -185,7 +184,7 @@ func TestEvalGroupReportsAQueryThatFailed(t *testing.T) {
 
 	sched := New(ownedRuleSet(source.Source{Name: "payments_prod"}),
 		map[string]Querier{"payments_prod": q},
-		notify.NewCadence(&recordingSender{}, time.Minute, notify.DefaultResendTolerance),
+		queueFor(&recordingSender{}, time.Minute),
 		m, newFakeClock(time.Unix(0, 0)), 0, log, testResend, 0)
 
 	sched.groups[0].Eval(context.Background(), time.Unix(0, 0))
@@ -216,7 +215,7 @@ func TestEvalGroupKeepsAShapeFindingWhileTheQueryFails(t *testing.T) {
 
 	sched := New(ownedRuleSet(source.Source{Name: "payments_prod"}),
 		map[string]Querier{"payments_prod": q},
-		notify.NewCadence(&recordingSender{}, time.Minute, notify.DefaultResendTolerance),
+		queueFor(&recordingSender{}, time.Minute),
 		m, newFakeClock(time.Unix(0, 0)), 0, log, testResend, 0)
 
 	sched.groups[0].Eval(context.Background(), time.Unix(0, 0))
@@ -245,7 +244,7 @@ func TestEvalGroupKeepsAFailureWhenASourceWasNotAsked(t *testing.T) {
 	eu := source.Source{Name: "payments_eu"}
 
 	sched := New(ownedRuleSet(prod, eu), map[string]Querier{"payments_prod": q, "payments_eu": q},
-		notify.NewCadence(&recordingSender{}, time.Minute, notify.DefaultResendTolerance),
+		queueFor(&recordingSender{}, time.Minute),
 		m, newFakeClock(time.Unix(0, 0)), 0, log, testResend, 0)
 
 	q.err = errors.New("Code: 60. Table does not exist")
@@ -283,7 +282,7 @@ func TestEvalGroupReportsAFailureWhileAnotherSourceWasNotAsked(t *testing.T) {
 	eu := source.Source{Name: "payments_eu"}
 
 	sched := New(ownedRuleSet(prod, eu), map[string]Querier{"payments_prod": q},
-		notify.NewCadence(&recordingSender{}, time.Minute, notify.DefaultResendTolerance),
+		queueFor(&recordingSender{}, time.Minute),
 		m, newFakeClock(time.Unix(0, 0)), 0, log, testResend, 0)
 
 	sched.groups[0].Eval(context.Background(), time.Unix(0, 0))
@@ -328,7 +327,7 @@ func TestEvalGroupReportsAnAnnotationThatWouldNotRender(t *testing.T) {
 		map[string]string{"summary": "{{ .ServiceName }} p99 is {{ .p99 }}ms"},
 		source.Source{Name: "payments_prod"})
 	sched := New(set, map[string]Querier{"payments_prod": q},
-		notify.NewCadence(&recordingSender{}, time.Minute, notify.DefaultResendTolerance),
+		queueFor(&recordingSender{}, time.Minute),
 		m, newFakeClock(time.Unix(0, 0)), 0, log, testResend, 0)
 
 	sched.groups[0].Eval(context.Background(), time.Unix(0, 0))
@@ -377,7 +376,7 @@ func TestEvalGroupReportsTwoBrokenAnnotationsAsOneSeries(t *testing.T) {
 		"description": "in {{ .region }}",
 	}, source.Source{Name: "payments_prod"})
 	sched := New(set, map[string]Querier{"payments_prod": q},
-		notify.NewCadence(&recordingSender{}, time.Minute, notify.DefaultResendTolerance),
+		queueFor(&recordingSender{}, time.Minute),
 		m, newFakeClock(time.Unix(0, 0)), 0, log, testResend, 0)
 
 	sched.groups[0].Eval(context.Background(), time.Unix(0, 0))
@@ -400,7 +399,7 @@ func TestEvalGroupClearsAnAnnotationFindingWhenItRenders(t *testing.T) {
 	broken := map[string]string{"summary": "p99 is {{ .p99 }}ms"}
 	set := brokenAnnotationRuleSet(broken, source.Source{Name: "payments_prod"})
 	sched := New(set, map[string]Querier{"payments_prod": q},
-		notify.NewCadence(&recordingSender{}, time.Minute, notify.DefaultResendTolerance),
+		queueFor(&recordingSender{}, time.Minute),
 		m, newFakeClock(time.Unix(0, 0)), 0, log, testResend, 0)
 
 	sched.groups[0].Eval(context.Background(), time.Unix(0, 0))
@@ -431,7 +430,7 @@ func TestEvalGroupKeepsAnAnnotationFindingWhenNothingRendered(t *testing.T) {
 		map[string]string{"summary": "p99 is {{ .p99 }}ms"},
 		source.Source{Name: "payments_prod"})
 	sched := New(set, map[string]Querier{"payments_prod": q},
-		notify.NewCadence(&recordingSender{}, time.Minute, notify.DefaultResendTolerance),
+		queueFor(&recordingSender{}, time.Minute),
 		m, newFakeClock(time.Unix(0, 0)), 0, log, testResend, 0)
 
 	sched.groups[0].Eval(context.Background(), time.Unix(0, 0))
@@ -470,7 +469,7 @@ func TestEvalGroupKeepsAnAnnotationFindingWhileTheBrokenSourceRendersNothing(t *
 		map[string]string{"summary": "p99 is {{ .p99 }}ms"},
 		source.Source{Name: "payments_prod"}, source.Source{Name: "payments_staging"})
 	sched := New(set, map[string]Querier{"payments_prod": prod, "payments_staging": staging},
-		notify.NewCadence(&recordingSender{}, time.Minute, notify.DefaultResendTolerance),
+		queueFor(&recordingSender{}, time.Minute),
 		m, newFakeClock(time.Unix(0, 0)), 0, log, testResend, 0)
 
 	sched.groups[0].Eval(context.Background(), time.Unix(0, 0))
@@ -501,7 +500,7 @@ func TestEvalGroupClearsAnAnnotationFindingWhenTheSourceRendersAgain(t *testing.
 		map[string]string{"summary": "p99 is {{ .p99 }}ms"},
 		source.Source{Name: "payments_prod"})
 	sched := New(set, map[string]Querier{"payments_prod": q},
-		notify.NewCadence(&recordingSender{}, time.Minute, notify.DefaultResendTolerance),
+		queueFor(&recordingSender{}, time.Minute),
 		m, newFakeClock(time.Unix(0, 0)), 0, log, testResend, 0)
 
 	sched.groups[0].Eval(context.Background(), time.Unix(0, 0))
@@ -538,7 +537,7 @@ func TestReloadKeepsAFindingWhoseSourceIsQuiet(t *testing.T) {
 	sources := []source.Source{{Name: "payments_prod"}, {Name: "payments_staging"}}
 
 	sched := New(brokenAnnotationRuleSet(broken, sources...), queriers,
-		notify.NewCadence(&recordingSender{}, time.Minute, notify.DefaultResendTolerance),
+		queueFor(&recordingSender{}, time.Minute),
 		m, newFakeClock(time.Unix(0, 0)), 0, log, testResend, 0)
 
 	sched.groups[0].Eval(context.Background(), time.Unix(0, 0))
@@ -569,7 +568,7 @@ func TestEvalGroupKeepsADisagreementWhileOneClusterIsDown(t *testing.T) {
 
 	sched := New(ownedRuleSet(source.Source{Name: "payments_prod"}, source.Source{Name: "payments_eu"}),
 		map[string]Querier{"payments_prod": prod, "payments_eu": eu},
-		notify.NewCadence(&recordingSender{}, time.Minute, notify.DefaultResendTolerance),
+		queueFor(&recordingSender{}, time.Minute),
 		m, newFakeClock(time.Unix(0, 0)), 0, log, testResend, 0)
 
 	// The two clusters return different types for value, which is the
@@ -598,7 +597,7 @@ func TestEvalGroupClearsADisagreementWhenOneSourceIsLeft(t *testing.T) {
 	queriers := map[string]Querier{"payments_prod": prod, "payments_eu": eu}
 
 	sched := New(ownedRuleSet(source.Source{Name: "payments_prod"}, source.Source{Name: "payments_eu"}),
-		queriers, notify.NewCadence(&recordingSender{}, time.Minute, notify.DefaultResendTolerance),
+		queriers, queueFor(&recordingSender{}, time.Minute),
 		m, newFakeClock(time.Unix(0, 0)), 0, log, testResend, 0)
 
 	sched.groups[0].Eval(context.Background(), time.Unix(0, 0))

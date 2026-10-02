@@ -11,7 +11,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
-	"github.com/dennisme/clickhouse-ruler/internal/notify"
 	"github.com/dennisme/clickhouse-ruler/internal/query"
 	"github.com/dennisme/clickhouse-ruler/internal/rule"
 	"github.com/dennisme/clickhouse-ruler/internal/ruleset"
@@ -111,7 +110,7 @@ func TestRuleEvalQueriesItsSourcesConcurrently(t *testing.T) {
 	}
 
 	eval := NewRuleEval(multiSourceRule(names...), queriers,
-		notify.NewCadence(&recordingSender{}, time.Minute, notify.DefaultResendTolerance), newQueryLimits(0, nil, nil), testRetention)
+		queueFor(&recordingSender{}, time.Minute), newQueryLimits(0, nil, nil), testRetention)
 
 	go eval.Evaluate(context.Background(), time.Now())
 
@@ -136,7 +135,7 @@ func TestRuleEvalRespectsTheQueryConcurrencyLimit(t *testing.T) {
 	}
 
 	eval := NewRuleEval(multiSourceRule(names...), queriers,
-		notify.NewCadence(&recordingSender{}, time.Minute, notify.DefaultResendTolerance), newQueryLimits(limit, nil, nil), testRetention)
+		queueFor(&recordingSender{}, time.Minute), newQueryLimits(limit, nil, nil), testRetention)
 
 	done := make(chan Result, 1)
 	go func() { done <- eval.Evaluate(context.Background(), time.Now()) }()
@@ -169,9 +168,9 @@ func TestRuleEvalReturnsSourcesInAStableOrder(t *testing.T) {
 
 	sender := &recordingSender{}
 	eval := NewRuleEval(multiSourceRule(names...), queriers,
-		notify.NewCadence(sender, time.Minute, notify.DefaultResendTolerance), newQueryLimits(0, nil, nil), testRetention)
+		queueFor(sender, time.Minute), newQueryLimits(0, nil, nil), testRetention)
 
-	eval.Evaluate(context.Background(), time.Now())
+	evaluateAndDeliver(context.Background(), eval, time.Now())
 
 	if len(sender.calls) != 1 {
 		t.Fatalf("got %d calls, want 1", len(sender.calls))
@@ -202,7 +201,7 @@ func TestPerSourceLimitBoundsOnlyThatSource(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		for name, q := range map[string]*barrierQuerier{"slow": slow, "fast": fast} {
 			eval := NewRuleEval(multiSourceRule(name), map[string]Querier{name: q},
-				notify.NewCadence(&recordingSender{}, time.Minute, notify.DefaultResendTolerance),
+				queueFor(&recordingSender{}, time.Minute),
 				limits, testRetention)
 			wg.Add(1)
 			go func() {
@@ -236,9 +235,9 @@ func TestPerSourceLimitAbandonsAQueuedQueryOnShutdown(t *testing.T) {
 
 	q := newBarrierQuerier(1)
 	queriers := map[string]Querier{"slow": q}
-	cadence := notify.NewCadence(&recordingSender{}, time.Minute, notify.DefaultResendTolerance)
+	queue := queueFor(&recordingSender{}, time.Minute)
 
-	holder := NewRuleEval(multiSourceRule("slow"), queriers, cadence, limits, testRetention)
+	holder := NewRuleEval(multiSourceRule("slow"), queriers, queue, limits, testRetention)
 	go holder.Evaluate(context.Background(), time.Now())
 	if !q.waitAllStarted() {
 		t.Fatal("the first query never took the slot")
@@ -247,7 +246,7 @@ func TestPerSourceLimitAbandonsAQueuedQueryOnShutdown(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	queued := make(chan Result, 1)
 	go func() {
-		queued <- NewRuleEval(multiSourceRule("slow"), queriers, cadence, limits, testRetention).
+		queued <- NewRuleEval(multiSourceRule("slow"), queriers, queue, limits, testRetention).
 			Evaluate(ctx, time.Now())
 	}()
 
@@ -277,9 +276,9 @@ func TestQueueWaitIsReportedForALimitedSource(t *testing.T) {
 
 	q := newBarrierQuerier(1)
 	queriers := map[string]Querier{"slow": q}
-	cadence := notify.NewCadence(&recordingSender{}, time.Minute, notify.DefaultResendTolerance)
+	queue := queueFor(&recordingSender{}, time.Minute)
 
-	holder := NewRuleEval(multiSourceRule("slow"), queriers, cadence, limits, testRetention)
+	holder := NewRuleEval(multiSourceRule("slow"), queriers, queue, limits, testRetention)
 	done := make(chan Result, 1)
 	go func() { done <- holder.Evaluate(context.Background(), time.Now()) }()
 	if !q.waitAllStarted() {
@@ -288,7 +287,7 @@ func TestQueueWaitIsReportedForALimitedSource(t *testing.T) {
 
 	queued := make(chan Result, 1)
 	go func() {
-		queued <- NewRuleEval(multiSourceRule("slow"), queriers, cadence, limits, testRetention).
+		queued <- NewRuleEval(multiSourceRule("slow"), queriers, queue, limits, testRetention).
 			Evaluate(context.Background(), time.Now())
 	}()
 
@@ -315,7 +314,7 @@ func TestNoQueueWaitForAnUnboundedSource(t *testing.T) {
 	limits := newQueryLimits(0, nil, nil)
 
 	eval := NewRuleEval(multiSourceRule("s1"), map[string]Querier{"s1": &fakeQuerier{samples: oneSample()}},
-		notify.NewCadence(&recordingSender{}, time.Minute, notify.DefaultResendTolerance),
+		queueFor(&recordingSender{}, time.Minute),
 		limits, testRetention)
 
 	if res := eval.Evaluate(context.Background(), time.Now()); len(res.QueueWaits) != 0 {
@@ -331,9 +330,9 @@ func TestConcurrencyWaitIsReportedForTheRulerCap(t *testing.T) {
 
 	q := newBarrierQuerier(1)
 	queriers := map[string]Querier{"s1": q}
-	cadence := notify.NewCadence(&recordingSender{}, time.Minute, notify.DefaultResendTolerance)
+	queue := queueFor(&recordingSender{}, time.Minute)
 
-	holder := NewRuleEval(multiSourceRule("s1"), queriers, cadence, limits, testRetention)
+	holder := NewRuleEval(multiSourceRule("s1"), queriers, queue, limits, testRetention)
 	done := make(chan Result, 1)
 	go func() { done <- holder.Evaluate(context.Background(), time.Now()) }()
 	if !q.waitAllStarted() {
@@ -342,7 +341,7 @@ func TestConcurrencyWaitIsReportedForTheRulerCap(t *testing.T) {
 
 	queued := make(chan Result, 1)
 	go func() {
-		queued <- NewRuleEval(multiSourceRule("s1"), queriers, cadence, limits, testRetention).
+		queued <- NewRuleEval(multiSourceRule("s1"), queriers, queue, limits, testRetention).
 			Evaluate(context.Background(), time.Now())
 	}()
 
@@ -366,7 +365,7 @@ func TestConcurrencyWaitReportsAQueryThatQueuedForNothing(t *testing.T) {
 	limits := newQueryLimits(DefaultQueryConcurrency, nil, nil)
 
 	eval := NewRuleEval(multiSourceRule("s1"), map[string]Querier{"s1": &fakeQuerier{samples: oneSample()}},
-		notify.NewCadence(&recordingSender{}, time.Minute, notify.DefaultResendTolerance),
+		queueFor(&recordingSender{}, time.Minute),
 		limits, testRetention)
 
 	res := eval.Evaluate(context.Background(), time.Now())
@@ -381,7 +380,7 @@ func TestNoConcurrencyWaitWhenTheRulerCapIsOff(t *testing.T) {
 	limits := newQueryLimits(0, nil, nil)
 
 	eval := NewRuleEval(multiSourceRule("s1"), map[string]Querier{"s1": &fakeQuerier{samples: oneSample()}},
-		notify.NewCadence(&recordingSender{}, time.Minute, notify.DefaultResendTolerance),
+		queueFor(&recordingSender{}, time.Minute),
 		limits, testRetention)
 
 	if res := eval.Evaluate(context.Background(), time.Now()); len(res.ConcurrencyWaits) != 0 {
@@ -398,7 +397,7 @@ func TestQueriesInFlightCountsAQueryWhileItRuns(t *testing.T) {
 
 	q := newBarrierQuerier(1)
 	eval := NewRuleEval(multiSourceRule("s1"), map[string]Querier{"s1": q},
-		notify.NewCadence(&recordingSender{}, time.Minute, notify.DefaultResendTolerance),
+		queueFor(&recordingSender{}, time.Minute),
 		limits, testRetention)
 
 	done := make(chan Result, 1)

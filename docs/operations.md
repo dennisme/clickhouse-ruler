@@ -29,6 +29,12 @@ alerts in it are silently late. Nothing else reports this: every rule in the
 group still evaluates, still succeeds, and still fires, just not when you
 think.
 
+**It is the group's queries, never Alertmanager.** Delivery runs on a worker of
+its own behind a bounded queue, so an Alertmanager that stopped answering fills
+[the send queue](#the-send-queue-filling) and leaves the interval alone. An
+outage used to land here instead, because the retry ladder is about forty
+seconds and ran on the group's own goroutine.
+
 Three things fix it, in this order. Make the query cheaper: `ruler check
 --online` reports what a rule is predicted to read per evaluation, and the
 `system.query_log` queries below say what it actually read. Make the interval
@@ -197,9 +203,10 @@ that and no send against it could ever succeed. On a dashboard this is
 histogram_quantile(0.99, sum by (le) (rate(clickhouse_ruler_notification_latency_seconds_bucket[5m]))) > 5
 ```
 
-**Trouble above five seconds at p99.** Sending is in the evaluation path, so
-latency here becomes evaluation duration, and evaluation duration becomes the
-missed iterations above.
+**Trouble above five seconds at p99.** Sending is not in the evaluation path, so
+latency here does not become evaluation duration: it becomes depth on
+[the send queue](#the-send-queue-filling), and alerts that reach Alertmanager
+later than they were evaluated.
 
 This measures sends Alertmanager accepted, and nothing else. A send that failed
 took as long as the retry policy says it takes, four attempts plus backoff, so
@@ -215,6 +222,65 @@ retrying.
 Batches attempted, if you want it, is
 `clickhouse_ruler_notification_latency_seconds_count` plus
 `clickhouse_ruler_alerts_send_failures_total`.
+
+### The send queue filling
+
+```promql
+clickhouse_ruler_notification_queue_length
+  / clickhouse_ruler_notification_queue_capacity > 0.5
+```
+
+**Trouble above half the capacity for 5 minutes, and at anything above zero
+sustained.** The ruler hands each evaluation's alerts to one worker, which posts
+them, so this is where an Alertmanager problem shows up. A depth that rises and
+falls is the queue doing its job. A depth that only rises means the worker is
+delivering slower than the groups are producing, and the capacity is the clock
+you are watching: at the far end the oldest alerts are dropped.
+
+How long alerts are waiting, which is the same reading in seconds:
+
+```promql
+histogram_quantile(0.99, sum by (le) (
+  rate(clickhouse_ruler_notification_queue_wait_seconds_bucket[5m])
+))
+```
+
+Read both against [send failures](#send-failures) and
+[notification latency](#notification-latency), which say why. Failures above
+zero is Alertmanager unreachable, and each batch spends the whole retry ladder,
+about forty seconds, before the worker moves to the next one. Failures at zero
+with latency high is Alertmanager accepting slowly. Failures and latency both
+healthy with the queue still filling is a ruler producing alerts faster than one
+worker can post them, which is a rules repository that grew rather than a
+delivery problem, and the fix is fewer firing instances rather than a bigger
+queue.
+
+What was dropped, which is the only thing here that cannot be recovered by
+waiting:
+
+```promql
+rate(clickhouse_ruler_notifications_dropped_total[5m]) > 0
+```
+
+**A drop is not a lost page on its own.** Nothing is recorded as sent until
+Alertmanager accepts it, so the next evaluation of that rule hands over the same
+instances, and a resolved alert is re-asserted for its retention window the same
+way. What a drop spends is `--resend-tolerance`: after that many resend periods
+without a firing alert getting through, Alertmanager expires it, delivers a
+resolved notification for something still broken, and the condition pages again
+when delivery recovers. Dropping is still better than the alternative, which is
+an evaluation goroutine waiting on Alertmanager.
+
+Raising `--notification-queue-capacity` buys time for a longer outage and
+nothing else, at the cost of memory: the bound is counted in alerts, and one
+alert is one rendered instance with its labels and annotations. It does not make
+delivery faster, so a queue filling at a steady rate reaches the new ceiling
+later and still reaches it.
+
+**A restart drains it.** Shutdown finishes the evaluations in flight and then
+delivers what is left in the queue, both inside `--shutdown-timeout`. What is
+still queued when that expires is counted as dropped, with a `warn` line saying
+how much, so a restart that lost pages says so rather than going quiet.
 
 ### A rule reading more than it should
 
@@ -393,6 +459,9 @@ The delay budget for one group, as far as series can carry it:
   ))
 + histogram_quantile(0.99, sum by (rule_group, le) (
     rate(clickhouse_ruler_query_duration_seconds_bucket[1h])
+  ))
++ histogram_quantile(0.99, sum by (le) (
+    rate(clickhouse_ruler_notification_queue_wait_seconds_bucket[1h])
   ))
 + histogram_quantile(0.99, sum by (le) (
     rate(clickhouse_ruler_notification_latency_seconds_bucket[1h])
@@ -776,11 +845,14 @@ about what they typed.
 | info | `rule matched no source` | Nothing, usually. One line per rule this ruler loaded and will never evaluate, with `rule`, `file` and `team`. Normal on a ruler per datacenter reading a shared repository. This is how you get from `clickhouse_ruler_rules_unmatched` to the rule names. |
 | info | `shutting down` | Nothing. Carries the `timeout` an in-flight evaluation is being given. |
 | error | `rule evaluation failed against a source` | Read `source` and `error`: this is the database's own reply, with credentials removed. A timeout or memory cap means the rule is too expensive, and the `system.query_log` queries below say by how much. The rule's alert state is untouched, so its `for` timer survives and the next evaluation continues from where the last successful one left off. |
-| error | `sending alerts to alertmanager failed` | Check Alertmanager. The alerts were evaluated and their state has advanced; only delivery failed, and they are re-posted on the resend interval. Repeated failures past `--resend-tolerance` periods let Alertmanager expire an alert that is still firing. |
+| error | `sending alerts to alertmanager failed` | Check Alertmanager. The alerts were evaluated and their state has advanced; only delivery failed, and they are re-posted on the resend interval. Written by the worker that posts, not by the evaluation, which returned before the send was attempted: `rule_group` and `rule` travel with the alerts so this line still names whose page did not go out. Repeated failures past `--resend-tolerance` periods let Alertmanager expire an alert that is still firing. |
 | warn | `the alertmanager did not answer its probe` | Read `error`: it says whether the host does not resolve, the port refuses, or Alertmanager answered and is not ready. Written once when it stops answering and not on every probe, so the line dates the outage; `clickhouse_ruler_alertmanager_last_probe_successful` is whether it is answering now. Nothing about the ruler is failing, and nothing is dropped until `--resend-tolerance` periods pass. |
 | info | `the alertmanager answered its probe again` | Nothing. The pair to the line above, so a probe outage has a start and an end in the log. |
 | error | `metrics listener stopped` | The HTTP surface is gone, so metrics and probes are unanswered while the evaluation loop carries on. Usually the `listen` address is already taken. Restart it. |
-| warn | `shutdown timeout expired with evaluations still running` | A query or a send was cut off part way through. This is the only signal that says so. If it happens on every restart, raise `--shutdown-timeout` above your slowest evaluation. |
+| warn | `shutdown timeout expired with evaluations still running` | A query was cut off part way through. This is the only signal that says so. If it happens on every restart, raise `--shutdown-timeout` above your slowest evaluation. |
+| warn | `the send queue is full, dropping the oldest alerts` | Alertmanager is not keeping up and the queue reached `--notification-queue-capacity`, so the oldest alerts were dropped to make room. `dropped` is how many alerts, `capacity` is the bound. Nothing was recorded as sent, so the next evaluation of those rules hands the same instances over again; what you are spending is `--resend-tolerance`. See [the send queue filling](#the-send-queue-filling). |
+| warn | `the send queue was not drained, dropping what was left` | A shutdown ran out of `--shutdown-timeout` before the queue emptied, and `dropped` alerts were never posted. Raise the timeout if it happens on every restart. |
+| warn | `alerts dropped: the send queue is closed` | An evaluation finished after shutdown had closed the queue, so its alerts went nowhere. One line per rule, carrying `rule_group`, `rule` and the `alerts` count. Harmless on its own: the rule is evaluated again by whatever restarts. |
 | warn | `a rule broke while running` | Not an operator's problem to fix. `team` and `file` say whose rule it is and where, `source` says which cluster it was found against, `check` names the page explaining it, `feed` says which clock found it, and `problem` says what changed. On [`annotations/template`](checks/rule.md#annotations-template) it also carries `error`, the template error itself, which is on the alert as well and nowhere else: the alert was delivered with `<ruler: annotation "NAME" failed...>` where that annotation should be, so somebody is reading a marker on their page. One line per broken template, however many rows the rule returned. The rule is still evaluating and still paging. Warned rather than errored however severe the finding is, because nothing about the ruler is failing. |
 | warn | `refusing a source that failed the user contract` | Deliberate, see below. |
 | warn | `rule loaded with a finding that should have blocked the merge` | Not an operator's problem to fix, and the one line that says a review did not happen: this file would have been blocked in CI and merged anyway, so it is running with nobody told. `team` and `file` say whose and where, `check` names the page, `feed` reads `load`. The two expensive ones are a rule missing a time bound and a rule setting its own `SETTINGS`. |

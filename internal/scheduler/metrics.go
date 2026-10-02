@@ -37,6 +37,11 @@ type Metrics struct {
 	AlertsSendFailures  *prometheus.CounterVec
 	NotificationLatency prometheus.Histogram
 
+	NotificationQueueLength   prometheus.Gauge
+	NotificationQueueCapacity prometheus.Gauge
+	NotificationQueueWait     prometheus.Histogram
+	NotificationsDropped      prometheus.Counter
+
 	AlertmanagerLastProbeSuccessful *prometheus.GaugeVec
 
 	RulesUnmatched *prometheus.GaugeVec
@@ -214,6 +219,42 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 		NotificationLatency: f.NewHistogram(prometheus.HistogramOpts{
 			Name: "clickhouse_ruler_notification_latency_seconds",
 			Help: "Time spent sending an alert batch Alertmanager accepted.",
+		}),
+
+		// The send runs behind a queue, so an Alertmanager outage fills the
+		// queue rather than making a group miss iterations, and these four are
+		// what that made invisible (spec 6.5). No alertmanager label although
+		// the two counters above carry one: the queue is per ruler and there is
+		// one endpoint to be per, and a list of endpoints is a queue per
+		// endpoint that brings the label with it.
+		NotificationQueueLength: f.NewGauge(prometheus.GaugeOpts{
+			Name: "clickhouse_ruler_notification_queue_length",
+			Help: "Number of alerts waiting to be sent to Alertmanager.",
+		}),
+
+		// Ships with the length for the reason clickhouse_ruler_query_concurrency
+		// ships with the wait it is read against: a depth of nine thousand says
+		// nothing without the number it is nine thousand of (spec 8.8).
+		NotificationQueueCapacity: f.NewGauge(prometheus.GaugeOpts{
+			Name: "clickhouse_ruler_notification_queue_capacity",
+			Help: "How many alerts may wait to be sent to Alertmanager before the oldest are dropped.",
+		}),
+
+		// The tick delay buckets, for the same reason that one cannot take the
+		// defaults: this is a delay read against a group's interval, and
+		// prometheus.DefBuckets stops at ten seconds where one retry ladder
+		// alone is forty two (spec 6.5, 8.8).
+		NotificationQueueWait: f.NewHistogram(prometheus.HistogramOpts{
+			Name:    "clickhouse_ruler_notification_queue_wait_seconds",
+			Help:    "Time an alert batch spent waiting to be sent to Alertmanager.",
+			Buckets: prometheus.ExponentialBuckets(0.05, 3, 9),
+		}),
+
+		// Counted in alerts, the unit the capacity is counted in, so the two
+		// are read against each other.
+		NotificationsDropped: f.NewCounter(prometheus.CounterOpts{
+			Name: "clickhouse_ruler_notifications_dropped_total",
+			Help: "Total number of alerts dropped without being sent because the send queue was full or not drained.",
 		}),
 
 		// The one delivery series that exists before anything fires, which is

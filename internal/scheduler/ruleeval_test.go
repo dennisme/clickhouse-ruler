@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/dennisme/clickhouse-ruler/internal/alert"
-	"github.com/dennisme/clickhouse-ruler/internal/notify"
 	"github.com/dennisme/clickhouse-ruler/internal/query"
 	"github.com/dennisme/clickhouse-ruler/internal/rule"
 	"github.com/dennisme/clickhouse-ruler/internal/ruleset"
@@ -95,17 +94,17 @@ func TestRuleEvalKeepsForTimerAcrossEvaluations(t *testing.T) {
 	r := testRule(time.Minute)
 	q := &fakeQuerier{samples: oneSample()}
 	sender := &recordingSender{}
-	eval := NewRuleEval(r, map[string]Querier{"src1": q}, notify.NewCadence(sender, 5*time.Minute, notify.DefaultResendTolerance), newQueryLimits(0, nil, nil), testRetention)
+	eval := NewRuleEval(r, map[string]Querier{"src1": q}, queueFor(sender, 5*time.Minute), newQueryLimits(0, nil, nil), testRetention)
 
 	now := time.Now()
-	eval.Evaluate(context.Background(), now)
+	evaluateAndDeliver(context.Background(), eval, now)
 	if len(sender.calls) != 0 {
 		t.Fatalf("pending instance must not be sent, got %d calls", len(sender.calls))
 	}
 
 	// Same instance, one rule.For later: if state had been rebuilt this
 	// would still be pending instead of crossing into firing.
-	eval.Evaluate(context.Background(), now.Add(time.Minute))
+	evaluateAndDeliver(context.Background(), eval, now.Add(time.Minute))
 	if len(sender.calls) != 1 {
 		t.Fatalf("got %d calls, want 1: the instance should have started firing", len(sender.calls))
 	}
@@ -121,19 +120,19 @@ func TestRuleEvalLeavesStateIntactAcrossAQueryFailure(t *testing.T) {
 	r := testRule(time.Minute)
 	q := &fakeQuerier{samples: oneSample()}
 	sender := &recordingSender{}
-	eval := NewRuleEval(r, map[string]Querier{"src1": q}, notify.NewCadence(sender, 5*time.Minute, notify.DefaultResendTolerance), newQueryLimits(0, nil, nil), testRetention)
+	eval := NewRuleEval(r, map[string]Querier{"src1": q}, queueFor(sender, 5*time.Minute), newQueryLimits(0, nil, nil), testRetention)
 
 	now := time.Now()
-	eval.Evaluate(context.Background(), now)
+	evaluateAndDeliver(context.Background(), eval, now)
 
 	q.err = errors.New("connection refused")
-	res := eval.Evaluate(context.Background(), now.Add(30*time.Second))
+	res := evaluateAndDeliver(context.Background(), eval, now.Add(30*time.Second))
 	if len(res.SourceErrors) != 1 {
 		t.Fatalf("SourceErrors = %v, want one entry", res.SourceErrors)
 	}
 
 	q.err = nil
-	eval.Evaluate(context.Background(), now.Add(time.Minute))
+	evaluateAndDeliver(context.Background(), eval, now.Add(time.Minute))
 	if len(sender.calls) != 1 {
 		t.Fatalf("got %d calls, want 1: the outage tick must not have reset the for timer", len(sender.calls))
 	}
@@ -149,16 +148,16 @@ func TestRuleEvalSurvivesAnAlertmanagerOutage(t *testing.T) {
 	r := testRule(0)
 	q := &fakeQuerier{samples: oneSample()}
 	sender := &recordingSender{err: errors.New("alertmanager unreachable")}
-	eval := NewRuleEval(r, map[string]Querier{"src1": q}, notify.NewCadence(sender, 5*time.Minute, notify.DefaultResendTolerance), newQueryLimits(0, nil, nil), testRetention)
+	eval := NewRuleEval(r, map[string]Querier{"src1": q}, queueFor(sender, 5*time.Minute), newQueryLimits(0, nil, nil), testRetention)
 
 	now := time.Now()
-	res := eval.Evaluate(context.Background(), now)
-	if res.SendError == nil {
-		t.Fatal("want a send error while alertmanager is down")
+	evaluateAndDeliver(context.Background(), eval, now)
+	if len(sender.calls) != 1 {
+		t.Fatalf("got %d calls, want the failed attempt", len(sender.calls))
 	}
 
 	sender.err = nil
-	eval.Evaluate(context.Background(), now.Add(time.Second))
+	evaluateAndDeliver(context.Background(), eval, now.Add(time.Second))
 	if len(sender.calls) != 2 {
 		t.Fatalf("got %d calls, want 2: the retry must still include the alert", len(sender.calls))
 	}
@@ -172,9 +171,9 @@ func TestRuleEvalSurvivesAnAlertmanagerOutage(t *testing.T) {
 func TestRuleEvalWithNoMatchedSourcesDoesNothing(t *testing.T) {
 	r := ruleset.Rule{Rule: rule.Rule{Alert: "Unmatched"}, Labels: map[string]string{}}
 	sender := &recordingSender{}
-	eval := NewRuleEval(r, map[string]Querier{}, notify.NewCadence(sender, time.Minute, notify.DefaultResendTolerance), newQueryLimits(0, nil, nil), testRetention)
+	eval := NewRuleEval(r, map[string]Querier{}, queueFor(sender, time.Minute), newQueryLimits(0, nil, nil), testRetention)
 
-	res := eval.Evaluate(context.Background(), time.Now())
+	res := evaluateAndDeliver(context.Background(), eval, time.Now())
 	if len(res.SourceErrors) != 0 {
 		t.Fatalf("SourceErrors = %v, want none", res.SourceErrors)
 	}
@@ -195,9 +194,9 @@ func TestRuleEvalReportsWhichSourceFailedAndWhy(t *testing.T) {
 		"src1": &fakeQuerier{samples: oneSample()},
 		"src2": &fakeQuerier{err: refused},
 	}
-	eval := NewRuleEval(r, queriers, notify.NewCadence(&recordingSender{}, time.Minute, notify.DefaultResendTolerance), newQueryLimits(0, nil, nil), testRetention)
+	eval := NewRuleEval(r, queriers, queueFor(&recordingSender{}, time.Minute), newQueryLimits(0, nil, nil), testRetention)
 
-	res := eval.Evaluate(context.Background(), time.Now())
+	res := evaluateAndDeliver(context.Background(), eval, time.Now())
 	if len(res.SourceErrors) != 1 {
 		t.Fatalf("SourceErrors = %v, want one entry", res.SourceErrors)
 	}
@@ -213,9 +212,9 @@ func TestRuleEvalReportsWhichSourceFailedAndWhy(t *testing.T) {
 // every tick. It reports like any other failed source so it can be logged.
 func TestRuleEvalReportsASourceWithNoQuerier(t *testing.T) {
 	eval := NewRuleEval(testRule(0), map[string]Querier{},
-		notify.NewCadence(&recordingSender{}, time.Minute, notify.DefaultResendTolerance), newQueryLimits(0, nil, nil), testRetention)
+		queueFor(&recordingSender{}, time.Minute), newQueryLimits(0, nil, nil), testRetention)
 
-	res := eval.Evaluate(context.Background(), time.Now())
+	res := evaluateAndDeliver(context.Background(), eval, time.Now())
 	if len(res.SourceErrors) != 1 {
 		t.Fatalf("SourceErrors = %v, want one entry", res.SourceErrors)
 	}
@@ -236,11 +235,11 @@ func TestRuleEvalRetriesAResolveAfterAFailedSend(t *testing.T) {
 	q := &fakeQuerier{samples: oneSample()}
 	sender := &recordingSender{}
 	eval := NewRuleEval(r, map[string]Querier{"src1": q},
-		notify.NewCadence(sender, time.Millisecond, notify.DefaultResendTolerance),
+		queueFor(sender, time.Millisecond),
 		newQueryLimits(0, nil, nil), testRetention)
 
 	now := time.Now()
-	eval.Evaluate(context.Background(), now)
+	evaluateAndDeliver(context.Background(), eval, now)
 	if len(sender.calls) != 1 {
 		t.Fatalf("got %d calls, want the firing alert sent", len(sender.calls))
 	}
@@ -248,17 +247,14 @@ func TestRuleEvalRetriesAResolveAfterAFailedSend(t *testing.T) {
 	// The condition recovers, and Alertmanager is unreachable for that tick.
 	sender.err = errors.New("alertmanager unreachable")
 	q.samples = nil
-	res := eval.Evaluate(context.Background(), now.Add(time.Second))
-	if res.SendError == nil {
-		t.Fatal("want a send error while alertmanager is down")
-	}
+	evaluateAndDeliver(context.Background(), eval, now.Add(time.Second))
 	// recordingSender records the attempt it failed, so the retry has to be
 	// counted from here rather than read off the end of the slice.
 	attempted := len(sender.calls)
 
 	// Alertmanager comes back. The resolve has to still be there.
 	sender.err = nil
-	eval.Evaluate(context.Background(), now.Add(2*time.Second))
+	evaluateAndDeliver(context.Background(), eval, now.Add(2*time.Second))
 
 	if len(sender.calls) != attempted+1 {
 		t.Fatalf("got %d attempts, want one more than %d: the resolve was never retried",
