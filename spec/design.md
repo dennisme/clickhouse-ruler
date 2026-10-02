@@ -105,6 +105,8 @@ sources:
 | `username` | string | required | The ClickHouse user, and therefore the tenancy boundary (6.6). |
 | `password_file` | path | none | Reads the password from a file. Mutually exclusive with `password_env`. |
 | `password_env` | string | none | Reads the password from an environment variable. |
+| `secure` | bool | `false` | Connect over TLS, verifying the server against the host's trust store. |
+| `tls_config` | map | none | TLS against something other than the default trust: a private CA, a client certificate, a name to verify. Implies `secure`. |
 | `table` | string | required | The table rules against this source read. |
 | `timestamp_column` | string | required | The column the evaluation window is applied to. |
 | `evaluation_delay` | duration | `1m` | How far behind live to evaluate (6.8). |
@@ -165,13 +167,102 @@ The password comes from `password_file` or `password_env`:
   auth failure rather than a clear config error.
 - A trailing newline is stripped, because `echo secret > file` adds one and it
   is not part of the password.
-- Neither set is legal: local development, and mTLS where ClickHouse
-  authenticates the client certificate instead.
+- Neither set is legal: local development, and mTLS, where the client
+  certificate named in `tls_config` is what ClickHouse authenticates.
 
 There is deliberately no DSN field. A DSN carries the password through string
 handling, where any error that echoes its input puts the credential in a log.
 Connection options are built field by field instead, and `Source.String`
 redacts the password so printing one with `%v` cannot leak it.
+
+**TLS is off by default, and `secure: true` is the whole of the managed
+case.** A service that accepts only encrypted connections, which is every
+ClickHouse Cloud service, is reached by turning one flag on: the server is
+verified against the host's trust store, and there is nothing else to say.
+
+```yaml
+- name: payments_cloud
+  address: abc123.eu-west-1.aws.clickhouse.cloud:9440
+  database: otel
+  username: ruler_payments
+  password_file: /run/secrets/ruler/payments
+  secure: true
+  table: otel_traces
+  timestamp_column: Timestamp
+```
+
+`tls_config` is for a cluster whose trust is not the default one. Its presence
+turns TLS on by itself, so it is never written beside `secure: true`, and
+`secure: false` with a `tls_config` set is an error rather than a precedence
+rule, for the reason two password sources are: one of the two is stale, and
+silently choosing either connects in a way nobody asked for.
+
+| Field | Type | Default | Purpose |
+|---|---|---|---|
+| `ca_file` | path | the host's trust store | PEM bundle the server's certificate is verified against. A private CA. |
+| `cert_file` | path | none | Client certificate, PEM. With `key_file`, this is mTLS. |
+| `key_file` | path | none | Private key for `cert_file`. Both or neither. |
+| `server_name` | string | the host in `address` | The name verified in the server's certificate. Set it when `address` is an IP or a tunnel. |
+| `insecure_skip_verify` | bool | `false` | Skips verification. Reported by `source/tls-insecure` (7.7). |
+
+Both forms exist because they answer different questions. `secure: true` says
+encrypt this and trust what the host trusts, which needs no knobs; spelling
+that as `tls_config: {}` would read as though there were something to
+configure, and an operator who needs nothing configured should not have to
+write an empty map to say so.
+
+**Key material comes from files, never inline**, the posture `password_file`
+already sets: a certificate or a key pasted into the sources file is a secret
+in a git history. A file that cannot be read, a file that is empty, a PEM that
+holds no certificate, and a `cert_file` without its `key_file` are each an
+error from `source/tls` naming the line of the field. They are read when the
+file is parsed rather than when a connection is made, so `ruler check` fails
+on a path that is wrong instead of a daemon failing at its first evaluation.
+
+`server_name` defaults to the host in `address`, which is what `crypto/tls`
+does with an empty one. The default is the driver's behaviour written down
+rather than a name the ruler computes, and it is overridden for the cases where
+the host is not the name on the certificate: an IP address, or a tunnel.
+
+**`insecure_skip_verify` is an error that an exemption clears.** It is a
+security downgrade an operator chooses, and this repository already has the
+shape for that: `exempt` with a reason and a date (7.7).
+
+```yaml
+- name: payments_staging
+  address: ch-staging:9440
+  database: otel
+  username: ruler_payments
+  tls_config:
+    insecure_skip_verify: true
+  table: otel_traces
+  timestamp_column: Timestamp
+  exempt:
+    - check: source/tls-insecure
+      reason: staging's certificate is self-signed until the internal CA lands
+      until: 2026-12-01
+```
+
+The three other answers are each worse. Silence means a sources file that
+passes every check describes a connection nobody can be sure reached the
+cluster it named, and the diff that added the field looks like any other. A
+warning on every run is a warning nobody reads, and this one is permanent by
+construction: the condition never clears on its own. Refusing it outright
+would make clusters with self-signed certificates unreachable, and a tool that
+cannot reach a real cluster is replaced by one that can.
+
+What the exemption buys is the date. The reason is written down in the
+operator's file, under the CODEOWNERS of 6.6, and on the day it expires the
+file fails until somebody states it again. Whether a downgrade is still agreed
+to is state rather than shape, so it is read with a clock, beside the expiry
+check rather than at parse time.
+
+The connection is still built field by field. The resolved `tls.Config` is
+carried on the source and handed to the driver by the one place that opens a
+connection, so `ruler check --online`, the privileges check in 6.7.2 and the
+re-check pass all reach the cluster the same way. A handshake failure is an
+error out of `internal/query` like any other and goes through the same
+redaction (8.4).
 
 ### 6.3 Evaluation model
 
