@@ -29,9 +29,9 @@ func testGroup(name string, interval time.Duration) rule.Group {
 func TestNewCountsRulesWithNoMatchedSourceAsUnmatched(t *testing.T) {
 	set := &ruleset.Set{
 		Rules: []ruleset.Rule{
-			{Rule: rule.Rule{Alert: "Matched"}, File: "f.yaml", Group: testGroup("g1", time.Minute),
+			{Rule: rule.Rule{Alert: "Matched"}, File: "f.yaml", Path: "f.yaml", Group: testGroup("g1", time.Minute),
 				Labels: map[string]string{}, Sources: []source.Source{{Name: "src1"}}},
-			{Rule: rule.Rule{Alert: "Unmatched"}, File: "f.yaml", Group: testGroup("g1", time.Minute),
+			{Rule: rule.Rule{Alert: "Unmatched"}, File: "f.yaml", Path: "f.yaml", Group: testGroup("g1", time.Minute),
 				Labels: map[string]string{}},
 		},
 	}
@@ -55,9 +55,9 @@ func TestNewCountsRulesWithNoMatchedSourceAsUnmatched(t *testing.T) {
 func TestNewStaggersGroupsSharingAnInterval(t *testing.T) {
 	set := &ruleset.Set{
 		Rules: []ruleset.Rule{
-			{Rule: rule.Rule{Alert: "A"}, File: "f.yaml", Group: testGroup("g1", time.Minute),
+			{Rule: rule.Rule{Alert: "A"}, File: "f.yaml", Path: "f.yaml", Group: testGroup("g1", time.Minute),
 				Labels: map[string]string{}, Sources: []source.Source{{Name: "src1"}}},
-			{Rule: rule.Rule{Alert: "B"}, File: "f.yaml", Group: testGroup("g2", time.Minute),
+			{Rule: rule.Rule{Alert: "B"}, File: "f.yaml", Path: "f.yaml", Group: testGroup("g2", time.Minute),
 				Labels: map[string]string{}, Sources: []source.Source{{Name: "src1"}}},
 		},
 	}
@@ -88,9 +88,9 @@ func TestNewStaggersGroupsSharingAnInterval(t *testing.T) {
 func TestAlertsActiveIsLabelledByGroupAndRule(t *testing.T) {
 	set := &ruleset.Set{
 		Rules: []ruleset.Rule{
-			{Rule: rule.Rule{Alert: "SharedName"}, File: "a.yaml", Group: testGroup("g1", time.Minute),
+			{Rule: rule.Rule{Alert: "SharedName"}, File: "a.yaml", Path: "a.yaml", Group: testGroup("g1", time.Minute),
 				Labels: map[string]string{}, Sources: []source.Source{{Name: "src1"}}},
-			{Rule: rule.Rule{Alert: "SharedName"}, File: "b.yaml", Group: testGroup("g2", time.Minute),
+			{Rule: rule.Rule{Alert: "SharedName"}, File: "b.yaml", Path: "b.yaml", Group: testGroup("g2", time.Minute),
 				Labels: map[string]string{}, Sources: []source.Source{{Name: "src1"}}},
 		},
 	}

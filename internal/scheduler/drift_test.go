@@ -20,6 +20,7 @@ func driftRule(sources ...source.Source) ruleset.Rule {
 	return ruleset.Rule{
 		Rule:    rule.Rule{Alert: "SlowCheckout"},
 		File:    "rules/payments.yaml",
+		Path:    "rules/payments.yaml",
 		Labels:  map[string]string{"team": "payments"},
 		Sources: sources,
 	}

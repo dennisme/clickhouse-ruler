@@ -93,6 +93,23 @@ before.
 
 Go runtime and process collectors come from `client_golang` defaults.
 
+**What a rule group is called.** `rule_group` is the rule file's path relative
+to the rules root, a colon, then the group's name:
+`payments/checkout.yaml:checkout`. A group name is unique within its file and
+not across the tree, so the file has to be part of the identity (7.6), and the
+path relative to the root is the only spelling of the file a deployment does
+not rewrite. git-sync hands the ruler a symlink at a worktree named after the
+commit (10.2) and the loader resolves that symlink before it walks, so a
+resolved path carries the commit: every merge would rename every series this
+ruler exposes, break every rate across the merge, and leave every alert built
+on the old name resolving while the new name starts from zero. The `file` label
+on `clickhouse_ruler_problem` is the same path for the same reason, and it is
+also the path its reader can act on, since an absolute path inside a container
+is not one an author can open.
+
+Where the files came from is a fact about the configuration rather than a
+dimension of every series, so it is a label on one info metric instead.
+
 Evaluation:
 
 | Metric | Type | Labels |
@@ -213,6 +230,7 @@ Validation and config:
 | `clickhouse_ruler_rules_unmatched` | gauge | `rule_group` |
 | `clickhouse_ruler_config_last_reload_successful` | gauge | none |
 | `clickhouse_ruler_config_last_reload_timestamp_seconds` | gauge | none |
+| `clickhouse_ruler_config_info` | gauge | `revision`, `rules_root` |
 
 `clickhouse_ruler_problem` is the `pint` analog, and it is aimed at somebody
 other than the operator. A rule that broke under a schema change is fixed by
@@ -270,7 +288,7 @@ Alerting on it staying raised is how the soft failure in 6.10 stops being
 ignored: the check warns at authoring time, this catches the case where nobody
 read the warning.
 
-Of these five, the two problem gauges are the ones fed from somewhere other than
+Of these six, the two problem gauges are the ones fed from somewhere other than
 the loader. `clickhouse_ruler_source_problem` is fed by the contract check, per
 source at startup and on a reload, which is the cadence 6.7.3 already gives it, so
 publishing it costs no extra query. `clickhouse_ruler_problem` is fed from three
@@ -296,6 +314,36 @@ configuration being evaluated, so a refused reload leaves it alone. The query it
 exists for is `time() - clickhouse_ruler_config_last_reload_timestamp_seconds`,
 read as how old the running rules are, and stamping it on a refusal would answer
 that with the moment the ruler declined to change anything.
+
+`clickhouse_ruler_config_info` is always 1 and exists for its labels, the shape
+`clickhouse_ruler_build_info` already uses: that one says which binary a replica
+runs, this one says which configuration it is running. One series per
+configuration version, rebuilt by every load that succeeded, so a replica has
+exactly one of them and `count by (revision) (clickhouse_ruler_config_info)`
+over a fleet says whether they agree.
+
+`revision` is a hash over the files the ruler loaded: every rule file and every
+team policy file under the rules root, each contributing its path relative to
+the root and its contents, in a fixed order. Twelve hex characters, the length
+git prints a disambiguated short sha at.
+
+A hash and not a commit, because the ruler fetches nothing and nothing hands it
+a sha. git-sync does know one, and it is in the name of the worktree the symlink
+points at, so reading it would mean inferring a commit from a sidecar's naming
+convention: wrong on a ConfigMap mount, wrong on a plain directory, and wrong
+the day git-sync changes its layout. The hash is also the better answer to the
+question this metric exists for, which is whether two replicas are evaluating
+the same rules. Two replicas on the same commit whose volumes disagree carry the
+same sha and different rules; two that hash the same are running the same files
+whatever either of them was told the commit was.
+
+`rules_root` is the resolved root the files were read from, which is where a
+commit rides along when there is one: under git-sync it is the worktree, so the
+sha is on the metric without the ruler claiming to know that it is a sha. A
+second label rather than a second metric, because the pair is one fact, this is
+the configuration running and this is where it came from, and it belongs here
+rather than on every series because it changes on every sync whether the rules
+did or not.
 
 The query cost table above is read from the driver's callbacks as the query
 runs. Progress packets carry what each block read rather than a running
@@ -1326,6 +1374,14 @@ finds no rule files at all, and a mount walked without skipping `..*` finds
 every rule twice and reports each as a duplicate of itself. The compose stack
 this repository already runs is the third case and the simplest, a real
 directory and a signal.
+
+It constrains what a rule is called as much as it constrains the walk. A rule's
+identity is its path relative to the rules root, so all three layouts agree on
+it and a worktree named after a commit does not rename every series on every
+merge (8.2). What the ruler states about the revision is a hash of the files it
+loaded, on `clickhouse_ruler_config_info`, with the resolved root beside it: the
+root is the worktree under git-sync, so the commit is on the metric without the
+ruler inferring one from a path a sidecar chose the name of.
 
 #### Proving the chain on a cluster
 

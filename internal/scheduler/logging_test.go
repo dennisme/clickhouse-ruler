@@ -69,6 +69,7 @@ func oneRuleSet(alertName string, sources ...source.Source) *ruleset.Set {
 	return &ruleset.Set{Rules: []ruleset.Rule{{
 		Rule:    rule.Rule{Alert: alertName},
 		File:    "f.yaml",
+		Path:    "f.yaml",
 		Group:   testGroup("g1", time.Minute),
 		Labels:  map[string]string{},
 		Sources: sources,
@@ -433,6 +434,7 @@ func TestNewLogsEveryRuleThatMatchedNoSource(t *testing.T) {
 	set.Rules = append(set.Rules, ruleset.Rule{
 		Rule:    rule.Rule{Alert: "Evaluated"},
 		File:    "f.yaml",
+		Path:    "f.yaml",
 		Group:   testGroup("g1", time.Minute),
 		Labels:  map[string]string{},
 		Sources: []source.Source{{Name: "src1"}},

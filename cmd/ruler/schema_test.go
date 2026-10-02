@@ -125,7 +125,7 @@ func TestSchemaDisagreementsReportsEveryColumn(t *testing.T) {
 // one problem for it however many sources disagreed and however many columns
 // they disagreed on.
 func TestSchemaProblemReportsOncePerRule(t *testing.T) {
-	r := ruleset.Rule{Rule: rule.Rule{Alert: "CheckoutIsSlow"}, File: "rules/payments.yaml"}
+	r := ruleset.Rule{Rule: rule.Rule{Alert: "CheckoutIsSlow"}, File: "rules/payments.yaml", Path: "rules/payments.yaml"}
 	answers := []sourceColumns{
 		{source: "payments_dc1", columns: readColumns(t, "columns_traces_extra_label.txt")},
 		{source: "payments_dc2", columns: readColumns(t, "columns_traces_float_value.txt")},

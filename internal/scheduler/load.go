@@ -41,10 +41,19 @@ func ReportLoadFindings(m *Metrics, log *slog.Logger, set *ruleset.Set, problems
 
 		team := teams[ruleAt{file: p.File, alert: p.Subject}]
 
+		// The finding carries where the file is on disk, because that is what
+		// whoever reads it on stderr has to open. The label is the rule's path
+		// in the tree, which is what the other two feeds raise and what a
+		// published revision does not rewrite (spec 8.2).
+		file := p.File
+		if set != nil {
+			file = ruleset.Path(set.Dir, p.File)
+		}
+
 		// No source label. A load finding is about what the file says, which
 		// is true of every cluster the rule reaches, where the other two feeds
 		// report what one cluster answered.
-		m.Problem.WithLabelValues(p.Subject, p.Check, p.Severity.String(), team, p.File, "").Set(1)
+		m.Problem.WithLabelValues(p.Subject, p.Check, p.Severity.String(), team, file, "").Set(1)
 
 		if log != nil {
 			// A warning however severe the finding is, the same as the other
@@ -53,7 +62,7 @@ func ReportLoadFindings(m *Metrics, log *slog.Logger, set *ruleset.Set, problems
 			// field (spec 8.4).
 			log.Warn("rule loaded with a finding that should have blocked the merge",
 				"rule", p.Subject, "check", p.Check, "severity", p.Severity.String(),
-				"team", team, "file", p.File, "feed", feedLoad, "problem", p.Text)
+				"team", team, "file", file, "feed", feedLoad, "problem", p.Text)
 		}
 	}
 }

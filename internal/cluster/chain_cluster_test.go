@@ -4,6 +4,8 @@ package cluster
 
 import (
 	"fmt"
+	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -102,8 +104,8 @@ func commit(t *testing.T, ns *Namespace, message string, files map[string]string
 }
 
 // groups is every rule group the ruler is currently ticking, by the group name
-// at the end of its identifier. The identifier also carries the file path,
-// which is what the rule_group label is built from.
+// at the end of its identifier. The identifier also carries the rule file's
+// path in the rules tree, which is what identities asserts on.
 func groups(t *testing.T, ns *Namespace) map[string]int {
 	t.Helper()
 
@@ -119,6 +121,38 @@ func groups(t *testing.T, ns *Namespace) map[string]int {
 		}
 	}
 	return out
+}
+
+// identities is every rule group the ruler is ticking, spelled the way the
+// rule_group label spells it, sorted. This is the assertion the deployment
+// chain was blind to: the identity has to be the rule's path in the rules tree,
+// because git-sync hands the ruler a symlink at a worktree named after the
+// commit and an identity built from the resolved path renames every series the
+// ruler exposes on every merge (spec 8.2).
+func identities(t *testing.T, ns *Namespace) []string {
+	t.Helper()
+
+	var out []string
+	pod := ns.Pod(rulerSelector)
+	for _, s := range Find(ns.Metrics(pod, "ruler", rulerPort),
+		"clickhouse_ruler_rule_group_iterations_total", nil) {
+		out = append(out, s.Labels["rule_group"])
+	}
+	sort.Strings(out)
+	return out
+}
+
+// configuration is the one series of clickhouse_ruler_config_info: the revision
+// of the files the ruler loaded and the root it read them from (spec 8.2).
+func configuration(t *testing.T, ns *Namespace) Sample {
+	t.Helper()
+
+	pod := ns.Pod(rulerSelector)
+	got := Find(ns.Metrics(pod, "ruler", rulerPort), "clickhouse_ruler_config_info", nil)
+	if len(got) != 1 {
+		t.Fatalf("clickhouse_ruler_config_info has %d series, want exactly 1: %v", len(got), got)
+	}
+	return got[0]
 }
 
 func reloadSucceeded(t *testing.T, ns *Namespace) (float64, bool) {
@@ -151,6 +185,15 @@ func TestAMergedRuleReachesTheRulerAndEvaluates(t *testing.T) {
 		t.Fatalf("after install the ruler ticks %v, want exactly one checkout group", got)
 	}
 
+	// What the rule is called before the merge, and what configuration the
+	// ruler says it is running. Both are compared with themselves afterwards.
+	checkout := filepath.Join("payments", "checkout.yaml") + ":checkout"
+	if got := identities(t, ns); len(got) != 1 || got[0] != checkout {
+		t.Fatalf("after install the ruler ticks %v, want exactly %q: the identity is the rule's "+
+			"path in the tree, not the worktree it was synced into", got, checkout)
+	}
+	before := configuration(t, ns)
+
 	sha := commit(t, ns, "the rule that is merged while it runs", map[string]string{
 		"rules/payments/orders.yaml": ruleFile("orders", "OrdersAreSlow"),
 	})
@@ -165,6 +208,29 @@ func TestAMergedRuleReachesTheRulerAndEvaluates(t *testing.T) {
 		got := groups(t, ns)
 		return got["orders"] == 1 && got["checkout"] == 1, fmt.Sprint(got)
 	})
+
+	// The identity survived the merge. The worktree the rules were read from is
+	// a different directory now, named after a different commit, and neither
+	// the group that was already running nor the one that arrived is named
+	// after it: rates hold across the merge and an alert on the running rule
+	// was never resolved and recreated under a new name (spec 8.2).
+	orders := filepath.Join("payments", "orders.yaml") + ":orders"
+	want := []string{checkout, orders}
+	if got := identities(t, ns); strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Errorf("after the merge the ruler ticks %v, want %v", got, want)
+	}
+
+	// What did change is the one series that is supposed to: the revision of
+	// the files, and the root they were read from.
+	after := configuration(t, ns)
+	if after.Labels["revision"] == before.Labels["revision"] {
+		t.Errorf("clickhouse_ruler_config_info revision = %q both before and after the merge, "+
+			"want the added rule file to have changed it", after.Labels["revision"])
+	}
+	if !strings.Contains(after.Labels["rules_root"], sha) {
+		t.Errorf("clickhouse_ruler_config_info rules_root = %q, want the worktree holding %s",
+			after.Labels["rules_root"], sha)
+	}
 
 	// The reload the hook asked for was accepted, which is the half of 8.2
 	// that says the files running are the files that arrived.

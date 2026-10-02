@@ -55,6 +55,13 @@ keeps evaluating what it loaded at startup.
 
 Both layouts hand the ruler a rules path built out of symlinks: git-sync's
 `--link`, and kubelet's `..data`. The loader reads each of them exactly once.
+A rule is identified by its path inside the rules tree rather than by where the
+tree is mounted, so `payments/checkout.yaml:checkout` is what `rule_group` and
+the `file` label carry under all three layouts, and a merge that moves the
+worktree does not rename every series. Which revision is running is
+`clickhouse_ruler_config_info`, a hash of the files the ruler loaded, with the
+resolved root beside it: under git-sync that root is the worktree, so the commit
+is on the metric without the ruler inferring one from the path.
 
 **Two series say what is actually running.**
 `clickhouse_ruler_config_last_reload_successful` at 0 means the ruler read the

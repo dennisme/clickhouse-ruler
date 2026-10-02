@@ -138,6 +138,66 @@ func TestStartupRecordsTheConfigReloadMetrics(t *testing.T) {
 	}
 }
 
+// The revision of the files being evaluated, which is the only revision the
+// ruler can state: it fetches nothing and nothing hands it a commit (spec 8.2).
+// One series, because it is a fact about the configuration rather than a
+// dimension of anything.
+func TestStartupRecordsTheConfigurationItIsRunning(t *testing.T) {
+	dir := fixture(t, bareRule, reloadPolicy)
+	r := startRunner(t, dir)
+
+	cfg, err := r.load()
+	if err != nil {
+		t.Fatalf("reading the fixture: %v", err)
+	}
+	if cfg.set.Revision == "" {
+		t.Fatal("the load states no revision")
+	}
+
+	if got := testutil.CollectAndCount(r.metrics.ConfigInfo); got != 1 {
+		t.Errorf("clickhouse_ruler_config_info has %d series, want exactly 1", got)
+	}
+	got := testutil.ToFloat64(r.metrics.ConfigInfo.WithLabelValues(cfg.set.Revision, cfg.set.Dir))
+	if got != 1 {
+		t.Errorf("clickhouse_ruler_config_info{revision=%q, rules_root=%q} = %v, want 1",
+			cfg.set.Revision, cfg.set.Dir, got)
+	}
+}
+
+// A reload is a new configuration version, so the series is replaced rather
+// than added to: two revisions on one ruler would read as two configurations
+// running at once (spec 8.2).
+func TestReloadReplacesTheConfigurationItIsRunning(t *testing.T) {
+	dir := fixture(t, bareRule, reloadPolicy)
+	r := startRunner(t, dir)
+
+	before, err := r.load()
+	if err != nil {
+		t.Fatalf("reading the fixture: %v", err)
+	}
+
+	writeRuleFile(t, dir, "errors.yaml", addedRule)
+	if err := r.reload(context.Background()); err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+
+	after, err := r.load()
+	if err != nil {
+		t.Fatalf("re-reading the fixture: %v", err)
+	}
+	if after.set.Revision == before.set.Revision {
+		t.Fatalf("revision after a rule was added = %q, want it to have changed", after.set.Revision)
+	}
+
+	if got := testutil.CollectAndCount(r.metrics.ConfigInfo); got != 1 {
+		t.Errorf("clickhouse_ruler_config_info has %d series after a reload, want exactly 1", got)
+	}
+	if got := testutil.ToFloat64(r.metrics.ConfigInfo.WithLabelValues(after.set.Revision, after.set.Dir)); got != 1 {
+		t.Errorf("clickhouse_ruler_config_info{revision=%q} = %v, want 1 for the files now running",
+			after.set.Revision, got)
+	}
+}
+
 // Spec 7.6: a file nobody can read refuses the reading, and the ruler keeps
 // the previous version of it. The rules that were running stay running,
 // because a reload is not an opportunity to leave the ruler evaluating nothing.
@@ -203,18 +263,16 @@ func TestReloadRaisesTheLoadFindingOnTheProblemGauge(t *testing.T) {
 		t.Fatalf("reload = %v", err)
 	}
 
-	// The loader resolves the rules root, and on macOS a temp dir is a symlink,
-	// so the label carries the resolved path rather than the one written to.
-	root, err := filepath.EvalSymlinks(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
+	// The label is the rule's path in the tree, not where the tree happens to
+	// be mounted: the loader resolves the rules root, and nothing a deployment
+	// does to that root may rename the series (spec 8.2).
+	//
 	// No team: this fixture's rule carries no team label, and `sources` is a
 	// selector rather than one. An empty team is the honest answer when no file
 	// says who owns the rule.
 	got := testutil.ToFloat64(r.metrics.Problem.WithLabelValues(
 		"HighLatency", lint.CheckRuleExpr, "error", "",
-		filepath.Join(root, "rules", "payments", "unbounded.yaml"), ""))
+		filepath.Join("payments", "unbounded.yaml"), ""))
 	if got != 1 {
 		t.Errorf("clickhouse_ruler_problem for rule/expr = %v, want 1: the rule loaded with nobody told", got)
 	}

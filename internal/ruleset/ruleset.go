@@ -8,7 +8,10 @@
 package ruleset
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"hash"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -28,7 +31,14 @@ import (
 type Rule struct {
 	rule.Rule
 
+	// File is where the file is on disk, which is what a finding points at
+	// and what the loader read. Path is where the file sits in the rules
+	// tree: its path relative to the rules root, which is the rule's
+	// identity. A deployment publishes a revision by pointing a symlink at a
+	// worktree named after the commit (spec 10.2), so File is rewritten by
+	// every merge and Path is not (spec 8.2).
 	File  string
+	Path  string
 	Group rule.Group
 
 	// Labels is the rule's file-level label set, group labels overlaid with
@@ -52,11 +62,25 @@ type Rule struct {
 
 // GroupID names a group the way every metric label, log line and
 // system.query_log comment spells it. A group name is unique within its file
-// and not across the directory, so the file is part of the identity (spec 7.6).
-func GroupID(file, group string) string { return file + ":" + group }
+// and not across the directory, so the file is part of the identity (spec 7.6),
+// and the file is spelled relative to the rules root so that publishing a
+// revision does not rename it (spec 8.2).
+func GroupID(path, group string) string { return path + ":" + group }
 
 // GroupID is the rule's own group.
-func (r Rule) GroupID() string { return GroupID(r.File, r.Group.Name) }
+func (r Rule) GroupID() string { return GroupID(r.Path, r.Group.Name) }
+
+// Path is where a file the loader read sits in the rules tree, which is its
+// identity: the resolved root moves on every published revision and this does
+// not (spec 8.2, 10.2). A file somehow outside the root keeps the path it was
+// read by, which is wrong in the same way the path is.
+func Path(root, file string) string {
+	rel, err := filepath.Rel(root, file)
+	if err != nil || strings.HasPrefix(rel, "..") {
+		return file
+	}
+	return rel
+}
 
 // Team is who owns the rule, read from its effective labels so a group can
 // set it once for every rule in the file. Empty when nobody claimed it,
@@ -66,7 +90,17 @@ func (r Rule) Team() string { return r.Labels["team"] }
 
 // Set is every rule found under a directory.
 type Set struct {
-	Dir   string
+	// Dir is the rules root the files were read from, resolved: the path an
+	// operator gave may be a symlink at the revision being published
+	// (spec 10.2). Every rule's Path is relative to it.
+	Dir string
+
+	// Revision names this version of the files, as a hash of the files that
+	// loaded. It is what the ruler can state honestly, because the ruler
+	// fetches nothing and nothing hands it a commit, and it is the answer to
+	// whether two replicas are evaluating the same rules (spec 8.2).
+	Revision string
+
 	Rules []Rule
 }
 
@@ -102,7 +136,8 @@ func Load(dir string, sources *source.File, root *policy.Policy) (*Set, []lint.P
 		}
 	}
 
-	l := &loader{dir: tree, sources: sources, root: root}
+	set.Dir = tree
+	l := &loader{dir: tree, sources: sources, root: root, files: sha256.New()}
 	problems = append(problems, l.readTeamPolicies(policies)...)
 
 	for _, path := range files {
@@ -111,6 +146,11 @@ func Load(dir string, sources *source.File, root *policy.Policy) (*Set, []lint.P
 		problems = append(problems, found...)
 	}
 	problems = append(problems, l.duplicateAlerts(set.Rules)...)
+
+	// Twelve hex characters, the length git prints a disambiguated short sha
+	// at: long enough that two configurations in one fleet will not collide,
+	// short enough to read off a dashboard (spec 8.2).
+	set.Revision = hex.EncodeToString(l.files.Sum(nil))[:12]
 	return set, problems
 }
 
@@ -122,6 +162,25 @@ type loader struct {
 	sources *source.File
 	root    *policy.Policy
 	teams   map[string]*policy.Policy
+
+	// files accumulates the revision of what was read, in the order the walk
+	// sorted the tree into, so two readings of the same tree agree.
+	files hash.Hash
+}
+
+// revision hashes one file into the set's revision: its path in the tree, then
+// a digest of its contents.
+//
+// The path is in the hash because where a rule sits decides the team policy
+// above it and the identity of its group, so the same bytes in another
+// directory are a different configuration. A digest rather than the bytes
+// themselves keeps every file's contribution the same length, so a path ending
+// where the next file's contents begin cannot hash the same as some other pair
+// that concatenates to it, and no path can contain the separator.
+func (l *loader) revision(path string, data []byte) {
+	sum := sha256.Sum256(data)
+	l.files.Write([]byte(Path(l.dir, path) + "\x00"))
+	l.files.Write(sum[:])
 }
 
 // readTeamPolicies parses the ruler.yaml files found under the rules root.
@@ -144,6 +203,7 @@ func (l *loader) readTeamPolicies(paths []string) []lint.Problem {
 				lint.CheckRulesetDirectory, lint.SeverityError, err.Error()))
 			continue
 		}
+		l.revision(path, data)
 		p, found := policy.Parse(path, data)
 		l.teams[filepath.Dir(path)] = p
 		problems = append(problems, found...)
@@ -242,6 +302,8 @@ func (l *loader) loadFile(path string) ([]Rule, []lint.Problem) {
 		}
 	}
 
+	l.revision(path, data)
+
 	parsed, problems := rule.Parse(path, data)
 	if parsed == nil {
 		return nil, problems
@@ -261,6 +323,7 @@ func (l *loader) loadFile(path string) ([]Rule, []lint.Problem) {
 			loaded := Rule{
 				Rule:    r,
 				File:    path,
+				Path:    Path(l.dir, path),
 				Group:   g,
 				Labels:  labels,
 				Sources: matched,

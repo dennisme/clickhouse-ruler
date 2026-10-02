@@ -736,12 +736,44 @@ and are what the code comments cite.
   worktree and symlink an SSH remote does, and `ci/git-sync-values.yaml` keeps
   its SSH remote because that file documents a real deployment.
   **Each link is waited on through a metric, and the refusal path is asserted
-  too.** The sha, the symlink pointing at the worktree holding it,
-  `clickhouse_ruler_config_last_reload_timestamp_seconds` moving past the
-  install, `clickhouse_ruler_config_last_reload_successful` reading 1, then the
-  new rule evaluating. 8.2 exists so the chain is observable from outside, and a
+  too.** The sha, the symlink pointing at the worktree holding it, the merged
+  rule's group appearing in `clickhouse_ruler_rule_group_iterations_total`, then
+  `clickhouse_ruler_config_last_reload_successful` reading 1.
+  `clickhouse_ruler_config_last_reload_timestamp_seconds` is the one link not
+  waited on, because a unix timestamp exposed as a float is rounded to the
+  nearest ten seconds and two reloads inside that window read as one number. 8.2 exists so the chain is observable from outside, and a
   test reading log lines would prove something nobody operates on. The exec hook
   posts with `--fail`, so a refused reload has to surface as a failed hook that
   git-sync retries with the previous configuration still running; a hook
   reporting success there would hide the case the severities in 7.9 are about.
   See 10.2, 9.1, 8.2.
+
+- **A rule's identity is its path relative to the rules root.** `rule_group` is
+  that path plus the group name, and the `file` label on
+  `clickhouse_ruler_problem` is that path. The file has to be in the identity
+  because a group name is unique only within its file (7.6), and the resolved
+  absolute path was the wrong spelling of it: git-sync publishes a revision as a
+  symlink at a worktree named after the commit, the loader resolves that symlink
+  before walking, so every merge renamed every series the ruler exposes. Rates
+  break across the rename, alerts on the old names resolve while the new ones
+  start from zero, and the three layouts in 10.2 disagreed about what the same
+  rule was called. Relative to the root they all agree, and the label is also the
+  path its reader can act on: an absolute path inside a container is not one a
+  rule author can open. The stagger offset is keyed on it too, so a sync no
+  longer reshuffles when every group ticks. See 8.2, 10.2.
+- **The revision the ruler states is a hash of the files it loaded, not a
+  commit.** `clickhouse_ruler_config_info{revision, rules_root}`, always 1, one
+  series per configuration version. The ruler fetches nothing, so nothing hands
+  it a sha; the only sha within reach is the one git-sync puts in the name of the
+  worktree it links to, and reading that would be inferring a commit from a
+  sidecar's naming convention, which is wrong on a ConfigMap mount, wrong on a
+  plain directory, and wrong the day git-sync changes its layout. The hash is
+  also the stronger answer to the question the metric exists for: two replicas on
+  one commit whose volumes disagree carry the same sha and different rules, where
+  two that hash the same are running the same files. It covers every rule file
+  and every team policy file under the root, each contributing its path relative
+  to the root and its contents, truncated to twelve hex characters. `rules_root`
+  is the resolved root, so a commit still rides along where a deployment named one,
+  without the ruler claiming to know that it did. One label on an info metric
+  rather than a dimension of every series, because it changes on every sync
+  whether the rules did or not. See 8.2, 10.2.

@@ -19,6 +19,7 @@ func loadFixture(t *testing.T) (*Metrics, *ruleset.Set) {
 	set := &ruleset.Set{Rules: []ruleset.Rule{{
 		Rule:    rule.Rule{Alert: "HighLatency"},
 		File:    "payments/latency.yaml",
+		Path:    "payments/latency.yaml",
 		Group:   testGroup("latency", time.Minute),
 		Labels:  map[string]string{"team": "payments"},
 		Sources: []source.Source{{Name: "src1"}},

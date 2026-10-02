@@ -24,6 +24,7 @@ func reloadRule(group, alertName string, forDur time.Duration, labels map[string
 	return ruleset.Rule{
 		Rule:    rule.Rule{Alert: alertName, For: forDur},
 		File:    "f.yaml",
+		Path:    "f.yaml",
 		Group:   testGroup(group, time.Minute),
 		Labels:  labels,
 		Sources: []source.Source{{Name: "src1"}},
