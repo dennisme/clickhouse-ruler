@@ -766,14 +766,15 @@ checked without a running system; labels need series. The stack in 9.8 is
 where that half is answered, and until it exists this gate is the weaker of
 the two claims this section makes.
 
-One further omission worth stating rather than discovering. Duration is shown
-against nothing, because the group's interval is configuration and 8.2 exposes
-no metric carrying it. A panel cannot draw the line an operator is meant to
-read the duration against, so it says so in its description instead. Exposing
-the interval as a gauge is the obvious fix, and declining it here rested on its
-only consumer being a dashboard. 8.8 is where that stops being true: the interval
-is what every cadence expression is read against, so the gauge is carried there
-with the rest of the cadence work rather than as a panel's convenience.
+One further omission worth stating rather than discovering, because the
+reasoning that closed it is the reasoning that nearly left it open. Duration was
+shown against nothing: the group's interval is configuration, 8.2 exposed no
+metric carrying it, and a panel cannot draw the line an operator is meant to
+read a duration against. Exposing the interval as a gauge was the obvious fix,
+and declining it rested on its only consumer being a dashboard. 8.8 is where
+that stops being true, because the interval is what every cadence expression is
+read against, so the gauge is carried there and the duration panel draws it as
+a line like anything else.
 
 ### 8.7 The operations page
 
@@ -1020,6 +1021,34 @@ Both are removed with their group like everything else labelled `rule_group`
 (8.2), and the gauge is set from the configuration on every load, so a group
 whose interval changed reports the interval it is now running rather than the one
 it started on.
+
+**The tick delay histogram does not take the default buckets**, and it is the
+one histogram here that cannot. The other three measure a query or a send, where
+a second is a long time and `prometheus.DefBuckets` ends at ten of them. This one
+measures a group's lateness, and lateness is only ever read as a fraction of that
+group's interval. Intervals here run from thirty seconds to several minutes, so a
+delay worth seeing spans from a fraction of a second, which is a healthy ruler,
+to the whole interval, which is a tick about to be lost. The top of that range
+sits past where the default buckets stop, and every delay above ten seconds would
+land in `+Inf` together: a group five seconds late and a group three minutes late
+would read the same, which is the distinction the metric exists to make.
+
+So the buckets are exponential, from fifty milliseconds, by a factor of three,
+nine of them:
+
+```text
+0.05  0.15  0.45  1.35  4.05  12.15  36.45  109.35  328.05
+```
+
+That covers fifty milliseconds to five and a half minutes, which is the longest
+interval anybody is expected to configure, and the first bucket collects the
+healthy ruler rather than spreading it. The factor is three rather than two
+because a quantile here is read against an interval and acted on at the order of
+magnitude: a group whose p99 delay is a tenth of its interval is fine and one at
+half is about to miss, and no decision between them turns on the second digit. It
+buys the range in ten series per group instead of the fifteen a factor of two
+would need for the same range, which is one less than the eleven the default
+buckets already cost everywhere else.
 
 **Whether any of this can carry a promise.** Not end to end, and the reason is
 worth stating exactly, because "no latency SLO" and "no promise about anything"

@@ -299,6 +299,7 @@ func (s *Scheduler) build(set *ruleset.Set, queriers map[string]Querier, prev ma
 			rechecked = append(rechecked, recheckRule{rule: r, team: r.Team(), file: r.Path})
 		}
 		s.metrics.RulesUnmatched.WithLabelValues(groupName).Set(float64(unmatched))
+		s.metrics.GroupInterval.WithLabelValues(groupName).Set(interval.Seconds())
 
 		offset := staggerOffset(k.path+"|"+k.name, interval)
 		specs = append(specs, GroupSpec{
@@ -615,6 +616,7 @@ func (s *Scheduler) startLocked() {
 			inner(ctx, tickAt)
 			dur := s.clock.Now().Sub(start)
 
+			s.metrics.TickDelay.WithLabelValues(groupName).Observe(start.Sub(tickAt).Seconds())
 			s.metrics.EvaluationDuration.WithLabelValues(groupName).Observe(dur.Seconds())
 			s.metrics.LastDuration.WithLabelValues(groupName).Set(dur.Seconds())
 			s.metrics.LastEvaluationTimestamp.WithLabelValues(groupName).Set(float64(tickAt.Unix()))

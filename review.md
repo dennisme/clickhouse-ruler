@@ -47,17 +47,6 @@ it.
 
 ## Metrics and logs
 
-### Two spec'd metrics are still absent
-
-`clickhouse_ruler_rule_group_interval_seconds` and
-`clickhouse_ruler_rule_group_tick_delay_seconds` (spec 8.8). The scheduler holds
-both inputs already: `GroupSpec.Interval`, and `tickAt` against `s.clock.Now()`
-in the wrapper at `internal/scheduler/scheduler.go`, `startLocked`.
-
-Without the interval gauge every cadence expression hardcodes a number the rule
-file is free to change. Without tick delay, a ruler running consistently late
-without ever overrunning an interval reads healthy.
-
 ### No `--log-format=json`
 
 Spec 8.4 declines it until somebody asks. Asking: structured `slog` output in
@@ -102,6 +91,29 @@ on `--format`. Workable and documented, but a lot of rules for one command.
 
 Original numbering and original text kept, so a reference written before the
 fix still points at the right item.
+
+### Two spec'd metrics are still absent
+
+**Closed.** The gauge is set from the configuration on every load beside
+`clickhouse_ruler_rules_unmatched` (`internal/scheduler/scheduler.go`, `build`),
+so a group whose interval was edited reports the one it is now running. The
+histogram is observed in the one wrapper every group's `Eval` goes through,
+beside the duration already recorded there. Both go with their group in
+`deleteGroup`. The buckets are exponential from 50ms by a factor of three
+rather than `prometheus.DefBuckets`, which stops at ten seconds and would read a
+group five seconds late the same as one three minutes late; the argument is in
+spec 8.8. `docs/operations.md` gained *How late a group is running*, and the
+duration panel now draws the interval as a line, which closes the omission spec
+8.6 named.
+
+`clickhouse_ruler_rule_group_interval_seconds` and
+`clickhouse_ruler_rule_group_tick_delay_seconds` (spec 8.8). The scheduler holds
+both inputs already: `GroupSpec.Interval`, and `tickAt` against `s.clock.Now()`
+in the wrapper at `internal/scheduler/scheduler.go`, `startLocked`.
+
+Without the interval gauge every cadence expression hardcodes a number the rule
+file is free to change. Without tick delay, a ruler running consistently late
+without ever overrunning an interval reads healthy.
 
 ### 5. mTLS to ClickHouse is documented and does not exist
 
@@ -298,10 +310,8 @@ past CI is running anyway.
 
 ## Order to fix
 
-1. The two spec'd cadence metrics. Without the interval gauge every cadence
-   expression hardcodes a number the rule file is free to change.
-2. The Alertmanager items, in the order spec 6.5 sets: take the send off the
+1. The Alertmanager items, in the order spec 6.5 sets: take the send off the
    evaluation path, then the list of endpoints.
-3. The consumer toil, starting with what a rule can template: the gap between
+2. The consumer toil, starting with what a rule can template: the gap between
    "a rule names no cluster" and `FROM otel.otel_traces` is the one an author
    meets first.

@@ -27,6 +27,8 @@ type Metrics struct {
 	IterationsMissedTotal   *prometheus.CounterVec
 	LastEvaluationTimestamp *prometheus.GaugeVec
 	LastDuration            *prometheus.GaugeVec
+	GroupInterval           *prometheus.GaugeVec
+	TickDelay               *prometheus.HistogramVec
 
 	AnnotationFailures *prometheus.CounterVec
 
@@ -142,6 +144,43 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 		LastDuration: f.NewGaugeVec(prometheus.GaugeOpts{
 			Name: "clickhouse_ruler_rule_group_last_duration_seconds",
 			Help: "Duration of the last rule group evaluation.",
+		}, []string{"rule_group"}),
+
+		// What every cadence expression is read against: a group's duration,
+		// its spacing and its lateness all mean something only as a fraction of
+		// the interval it was configured to run on, and an operator who has to
+		// hardcode that number reads every expression against a rule file
+		// somebody else can edit. prometheus_rule_group_interval_seconds by
+		// another prefix on the same group key, so the reading carries over
+		// (spec 8.2, 8.8).
+		//
+		// Set from the configuration on every load rather than once at first
+		// start, so a group whose interval was edited reports the interval it
+		// is now running.
+		GroupInterval: f.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "clickhouse_ruler_rule_group_interval_seconds",
+			Help: "The interval a rule group is configured to evaluate on.",
+		}, []string{"rule_group"}),
+
+		// How late a tick started against the moment it was scheduled for. A
+		// group woken exactly on schedule still waits on the ruler-wide
+		// concurrency cap or on the source's own (spec 6.11), and that is a
+		// ruler running consistently late while
+		// clickhouse_ruler_rule_group_iterations_missed_total reads healthy:
+		// nothing overran an interval, every tick simply started inside one.
+		//
+		// Not the default buckets, which stop at ten seconds. Lateness is read
+		// as a fraction of an interval and intervals here run from thirty
+		// seconds to several minutes, so the defaults would put a group five
+		// seconds late and a group three minutes late in the same +Inf bucket,
+		// which is the distinction this metric exists to make. A factor of
+		// three from fifty milliseconds covers fifty milliseconds to five and a
+		// half minutes in ten series per group, and a quantile here is acted on
+		// at the order of magnitude rather than the second digit (spec 8.8).
+		TickDelay: f.NewHistogramVec(prometheus.HistogramOpts{
+			Name:    "clickhouse_ruler_rule_group_tick_delay_seconds",
+			Help:    "How long after its scheduled tick a rule group's evaluation actually started.",
+			Buckets: prometheus.ExponentialBuckets(0.05, 3, 9),
 		}, []string{"rule_group"}),
 
 		// Carries the group as well as the rule because an alert name may
@@ -481,6 +520,8 @@ func (m *Metrics) deleteGroup(group string) {
 	m.IterationsMissedTotal.DeletePartialMatch(labels)
 	m.LastEvaluationTimestamp.DeletePartialMatch(labels)
 	m.LastDuration.DeletePartialMatch(labels)
+	m.GroupInterval.DeletePartialMatch(labels)
+	m.TickDelay.DeletePartialMatch(labels)
 	m.AlertsActive.DeletePartialMatch(labels)
 	m.RulesUnmatched.DeletePartialMatch(labels)
 
