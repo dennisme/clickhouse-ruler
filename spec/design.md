@@ -199,7 +199,7 @@ silently choosing either connects in a way nobody asked for.
 
 | Field | Type | Default | Purpose |
 |---|---|---|---|
-| `ca_file` | path | the host's trust store | PEM bundle the server's certificate is verified against. A private CA. |
+| `ca_file` | path | the host's trust store | PEM bundle the server's certificate is verified against, replacing the host's trust store rather than adding to it. |
 | `cert_file` | path | none | Client certificate, PEM. With `key_file`, this is mTLS. |
 | `key_file` | path | none | Private key for `cert_file`. Both or neither. |
 | `server_name` | string | the host in `address` | The name verified in the server's certificate. Set it when `address` is an IP or a tunnel. |
@@ -218,6 +218,35 @@ holds no certificate, and a `cert_file` without its `key_file` are each an
 error from `source/tls` naming the line of the field. They are read when the
 file is parsed rather than when a connection is made, so `ruler check` fails
 on a path that is wrong instead of a daemon failing at its first evaluation.
+
+`ca_file` replaces the host's trust store rather than adding to it, which is
+what a self-signed cluster wants: the CA that signed it becomes the only thing
+that can vouch for it, and a public CA that mis-issues a certificate for the
+same name is not trusted for this connection. So a private CA is supplied on
+its own, with no `cert_file` and no `key_file`, and nothing else is needed.
+A cluster behind a public CA sets `secure: true` and names no bundle at all.
+
+**Rotation is a reload, not a timer.** The files are read when the sources
+file is read, and an open connection holds what was read: a certificate
+replaced on disk reaches the cluster on the next `SIGHUP` or `POST /-/reload`,
+which re-reads the sources file and reopens every source whose definition
+changed. That is what a rotated `password_file` already does, and it is one
+mechanism rather than two.
+
+The source carries the PEM bytes rather than a built `tls.Config` for that
+reason. A reload keeps a connection only when the source it was opened with
+equals the one just read, and a `tls.Config` holds a certificate pool whose
+entries never compare equal: every reload would reopen every source that
+configured TLS, and a rotated certificate would be indistinguishable from an
+unchanged one. Bytes compare, so an unchanged file keeps its connection and a
+rotated one replaces it.
+
+There is deliberately no per-source refresh interval. Re-reading the material
+on a timer of its own would be a second way into the operator's files with no
+finding path at the end of it: what a reload reads is checked and reported, and
+what a background refresh read would be reported by nobody. A certificate
+manager that rotates a secret signals the process, which is the shape every
+other operator file here already has.
 
 `server_name` defaults to the host in `address`, which is what `crypto/tls`
 does with an empty one. The default is the driver's behaviour written down

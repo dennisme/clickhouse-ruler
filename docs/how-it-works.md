@@ -81,9 +81,11 @@ turns TLS on by itself:
       server_name: ch-prod.internal
 ```
 
-`ca_file` is the CA the server is verified against; `cert_file` and `key_file`
-are the pair ClickHouse authenticates for mTLS, and a source with them and no
-password is legal. `server_name` defaults to the host in `address`, so it is
+`ca_file` is the CA the server is verified against, and it replaces the host's
+trust store rather than adding to it: a self-signed cluster is reached by
+supplying its own CA and nothing else, and no public CA can then vouch for that
+name. `cert_file` and `key_file` are the pair ClickHouse authenticates for
+mTLS, and a source with them and no password is legal. `server_name` defaults to the host in `address`, so it is
 only written when that host is not the name on the certificate. All four are
 paths, never inline material, for the reason `password_file` is: a key pasted
 into the sources file is a key in a git history. A path that is wrong fails
@@ -92,6 +94,13 @@ into the sources file is a key in a git history. A path that is wrong fails
 `insecure_skip_verify: true` turns verification off, and costs an `exempt`
 entry for `source/tls-insecure` with a reason and a date. Giving the ruler the
 self-signed certificate as `ca_file` is the fix that needs no exemption.
+
+**A rotated certificate needs a reload.** An open connection holds the
+material that was read when the sources file was read, so a new certificate on
+disk reaches the cluster on the next `SIGHUP` or `POST /-/reload`, which
+reopens every source whose definition changed. There is no refresh interval:
+rotation here works the way `password_file` rotation already does, and a
+certificate manager that replaces a secret signals the process.
 
 **Rules** are author owned. A rule names no source; it carries a `sources`
 selector over source labels, and runs against every source that matches. One
