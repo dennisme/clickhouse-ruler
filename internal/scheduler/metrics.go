@@ -416,9 +416,21 @@ func (m *Metrics) deleteRuleName(rule string) {
 
 	m.QueryReadRowsTotal.DeletePartialMatch(labels)
 	m.QueryReadBytesTotal.DeletePartialMatch(labels)
-	m.Problem.DeletePartialMatch(labels)
 	m.QueryMemoryUsage.DeletePartialMatch(labels)
 	m.QueryDuration.DeletePartialMatch(labels)
+}
+
+// deleteProblem removes the findings raised against one rule at one path, which
+// is how both runtime feeds address the gauge: a pass clears its own series by
+// the rule and the file together, so a pair no configuration holds any more is a
+// pair no pass can reach (spec 8.2).
+//
+// Separate from deleteRuleName, which is about the cost series. Those carry the
+// rule alone and so wait until no group holds a rule by that name, where a
+// finding is addressed to an owner at a path and goes the moment that path stops
+// being one of this rule's.
+func (m *Metrics) deleteProblem(rule, file string) {
+	m.Problem.DeletePartialMatch(prometheus.Labels{"rule": rule, "file": file})
 }
 
 // deleteSource removes the series of a source no rule reaches any more. Left

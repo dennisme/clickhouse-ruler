@@ -8,6 +8,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
+	"github.com/dennisme/clickhouse-ruler/internal/lint"
 	"github.com/dennisme/clickhouse-ruler/internal/notify"
 	"github.com/dennisme/clickhouse-ruler/internal/rule"
 	"github.com/dennisme/clickhouse-ruler/internal/ruleset"
@@ -176,6 +177,58 @@ func TestReloadKeepsTheCostSeriesOfARuleNameStillLoadedElsewhere(t *testing.T) {
 	}
 	if hasSeriesFor(t, reg, "rule_group", "f.yaml:g1") {
 		t.Error("series for f.yaml:g1 survived a reload that removed the group")
+	}
+}
+
+// A rule that moved to another file is a rule whose findings can never be
+// cleared again: both runtime feeds clear clickhouse_ruler_problem by the rule
+// and the file together, so a pass against the new path leaves the old path's
+// series raised at 1 for the life of the process. The gauge is the one signal
+// addressed to whoever owns the query, and an unclearable one pages them with
+// nothing they can do about it (spec 8.2).
+func TestReloadDeletesTheProblemSeriesOfARuleThatMovedFile(t *testing.T) {
+	set := &ruleset.Set{Rules: []ruleset.Rule{reloadRule("g1", "Slow", 0, nil)}}
+	queriers := map[string]Querier{"src1": &fakeQuerier{samples: oneSample()}}
+
+	sched, metrics, reg, clock := reloadSched(t, set, queriers)
+	evalAll(sched, clock.Now())
+	metrics.Problem.WithLabelValues(
+		"Slow", lint.CheckRuleColumns, lint.SeverityError.String(), "payments", "f.yaml", "src1").Set(1)
+
+	moved := reloadRule("g1", "Slow", 0, nil)
+	moved.File, moved.Path = "moved.yaml", "moved.yaml"
+	sched.Reload(&ruleset.Set{Rules: []ruleset.Rule{moved}}, queriers)
+
+	if hasSeriesFor(t, reg, "file", "f.yaml") {
+		t.Error("a finding against f.yaml survived a reload that moved the rule to moved.yaml, so nothing can ever clear it")
+	}
+}
+
+// The same deletion must stop at the rule it is about. An alert name may repeat
+// across groups (spec 7.6), so a rule dropped from one file while another file
+// still holds a rule by that name keeps the surviving rule's findings: those are
+// current, and blanking them would read as a schema somebody fixed.
+func TestReloadKeepsTheProblemSeriesOfARuleNameStillLoadedElsewhere(t *testing.T) {
+	shared := reloadRule("g2", "Shared", 0, nil)
+	shared.File, shared.Path = "b.yaml", "b.yaml"
+
+	set := &ruleset.Set{Rules: []ruleset.Rule{reloadRule("g1", "Shared", 0, nil), shared}}
+	queriers := map[string]Querier{"src1": &fakeQuerier{samples: oneSample()}}
+
+	sched, metrics, reg, clock := reloadSched(t, set, queriers)
+	evalAll(sched, clock.Now())
+	for _, file := range []string{"f.yaml", "b.yaml"} {
+		metrics.Problem.WithLabelValues(
+			"Shared", lint.CheckRuleColumns, lint.SeverityError.String(), "payments", file, "src1").Set(1)
+	}
+
+	sched.Reload(&ruleset.Set{Rules: []ruleset.Rule{shared}}, queriers)
+
+	if hasSeriesFor(t, reg, "file", "f.yaml") {
+		t.Error("a finding against f.yaml survived a reload that dropped the rule in it")
+	}
+	if !hasSeriesFor(t, reg, "file", "b.yaml") {
+		t.Error("the finding against b.yaml was deleted, but that rule is still loaded and still raising it")
 	}
 }
 

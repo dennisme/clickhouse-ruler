@@ -83,6 +83,21 @@ type ruleKey struct {
 	occurrence int
 }
 
+// problemKey is how clickhouse_ruler_problem addresses a finding: the rule it is
+// about and the path whoever owns it has to open (spec 8.2). Both feeds that
+// raise the gauge while the ruler runs clear their own series by these two
+// labels together, so a rule whose path changed leaves the old path's series
+// with nothing able to reach it: the gauge is the one signal addressed to a rule
+// owner, and one that cannot be cleared pages them with no fix available.
+//
+// Not the group, even though a group's identity already carries a path. The
+// labels on the gauge are what a reload has to delete by, and the group is not
+// one of them.
+type problemKey struct {
+	rule string
+	file string
+}
+
 // configured is what the running configuration has put on the metrics
 // registry, so a reload can delete the series of everything that is no longer
 // loaded. A series left behind at its last value reads as a rule that still
@@ -98,6 +113,12 @@ type configured struct {
 	// one group while another group still holds a rule by that name must not
 	// take the surviving one's cost series with it.
 	names map[string]int
+
+	// problems is the rule and path pairs the problem gauge can hold findings
+	// under. A pair rather than either half: two rules sharing an alert name in
+	// one file raise under one pair and the pair outlives either of them, and a
+	// rule whose path changed is a pair nothing is raising under any more.
+	problems map[problemKey]bool
 }
 
 type namedEval struct {
@@ -317,14 +338,16 @@ func (s *Scheduler) recheckSpec(
 // describe records what set puts on the registry.
 func describe(set *ruleset.Set) configured {
 	c := configured{
-		groups:  map[string]bool{},
-		rules:   map[ruleKey]bool{},
-		sources: map[string]bool{},
-		names:   map[string]int{},
+		groups:   map[string]bool{},
+		rules:    map[ruleKey]bool{},
+		sources:  map[string]bool{},
+		names:    map[string]int{},
+		problems: map[problemKey]bool{},
 	}
 	for _, r := range set.Rules {
 		group := r.GroupID()
 		c.groups[group] = true
+		c.problems[problemKey{rule: r.Alert, file: r.Path}] = true
 
 		key := ruleKey{group: group, alert: r.Alert}
 		if !c.rules[key] {
@@ -366,6 +389,19 @@ func (s *Scheduler) deleteGoneSeries(old, next configured) {
 		if next.names[key.alert] == 0 {
 			s.metrics.deleteRuleName(key.alert)
 		}
+	}
+
+	// The problem gauge is keyed on neither of the two above: it carries the
+	// rule and the path and not the group, so a rule that merely moved file is
+	// still loaded under a key the loop above keeps and is raising its findings
+	// under a pair that nothing clears. A pair this configuration no longer
+	// holds is one no pass can reach, whether the rule moved, was renamed or was
+	// deleted outright (spec 8.2).
+	for key := range old.problems {
+		if next.problems[key] {
+			continue
+		}
+		s.metrics.deleteProblem(key.rule, key.file)
 	}
 
 	for name := range old.sources {
