@@ -85,14 +85,22 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 	return &Metrics{
 		BuildInfo: buildInfo,
 
+		// One evaluation of one rule against one cluster, which is the one
+		// place a name here means something different from the Prometheus
+		// metric it tracks (spec 8.2). Prometheus has no source dimension; a
+		// selector here can match an estate, and a rule against four clusters
+		// is four queries, four alert states and four ways to fail (spec
+		// 6.10.1). Counted once per rule, the failures counter below could
+		// exceed this one and the ratio of the two stopped being a share.
+		// A single-source deployment reads the same either way.
 		EvaluationsTotal: f.NewCounterVec(prometheus.CounterOpts{
 			Name: "clickhouse_ruler_rule_evaluations_total",
-			Help: "Total number of rule evaluations.",
+			Help: "Total number of rule evaluations, one per cluster a rule was evaluated against.",
 		}, []string{"rule_group", "rule"}),
 
 		EvaluationFailuresTotal: f.NewCounterVec(prometheus.CounterOpts{
 			Name: "clickhouse_ruler_rule_evaluation_failures_total",
-			Help: "Total number of rule evaluations that failed against a source.",
+			Help: "Total number of rule evaluations that failed, one per cluster the rule failed against.",
 		}, []string{"rule_group", "rule"}),
 
 		// Deliberately not a label on clickhouse_ruler_rule_evaluation_failures_total.
@@ -159,9 +167,14 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 			Help: "Total number of alert batches that failed to send to Alertmanager.",
 		}, []string{"alertmanager"}),
 
+		// Only sends Alertmanager accepted. A failed send's duration is the
+		// retry ladder giving up, so it measures the resend policy rather than
+		// Alertmanager, and folding it in fired the latency alert for the
+		// delivery outage the failure counter already reports (spec 8.2).
+		// Batches attempted is this histogram's count plus that counter.
 		NotificationLatency: f.NewHistogram(prometheus.HistogramOpts{
 			Name: "clickhouse_ruler_notification_latency_seconds",
-			Help: "Time spent sending an alert batch to Alertmanager.",
+			Help: "Time spent sending an alert batch Alertmanager accepted.",
 		}),
 
 		// The one delivery series that exists before anything fires, which is

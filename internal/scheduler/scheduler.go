@@ -486,7 +486,13 @@ func evalGroup(groupName string, evals []namedEval, m *Metrics, log *slog.Logger
 				defer wg.Done()
 				res := ne.eval.Evaluate(ctx, tickAt)
 
-				m.EvaluationsTotal.WithLabelValues(groupName, ne.rule).Inc()
+				// One evaluation per cluster, which is the unit the failure
+				// counter beside it already counts: a rule spanning four
+				// clusters makes four evaluations, each with its own alert
+				// state and its own failure (spec 6.10.1, 8.2). Counted once
+				// per rule, the ratio this repository ships read 4.0 for a
+				// rule whose four clusters all failed.
+				m.EvaluationsTotal.WithLabelValues(groupName, ne.rule).Add(float64(ne.eval.sources()))
 				if len(res.SourceErrors) > 0 {
 					m.EvaluationFailuresTotal.WithLabelValues(groupName, ne.rule).Add(float64(len(res.SourceErrors)))
 				}

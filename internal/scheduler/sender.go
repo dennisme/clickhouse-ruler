@@ -21,12 +21,20 @@ type instrumentedSender struct {
 func (s *instrumentedSender) Send(ctx context.Context, alerts []alert.Alert) error {
 	start := s.clock.Now()
 	err := s.inner.Send(ctx, alerts)
-	s.metrics.NotificationLatency.Observe(s.clock.Now().Sub(start).Seconds())
 
 	if err != nil {
 		s.metrics.AlertsSendFailures.WithLabelValues(s.alertmanager).Inc()
 		return err
 	}
+
+	// Observed only for a send that worked. A failed send measures the retry
+	// ladder giving up, which is a duration the retry policy decides rather
+	// than one Alertmanager produced, so folding it in makes the latency alert
+	// fire for a delivery outage the failure counter already reports, and the
+	// latency panel's own reading says that cause is Alertmanager being slow
+	// (spec 8.2). Batches attempted stays available as this histogram's count
+	// plus the failure counter.
+	s.metrics.NotificationLatency.Observe(s.clock.Now().Sub(start).Seconds())
 	s.metrics.AlertsSentTotal.WithLabelValues(s.alertmanager).Add(float64(len(alerts)))
 	return nil
 }
