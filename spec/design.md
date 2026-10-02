@@ -226,27 +226,49 @@ same name is not trusted for this connection. So a private CA is supplied on
 its own, with no `cert_file` and no `key_file`, and nothing else is needed.
 A cluster behind a public CA sets `secure: true` and names no bundle at all.
 
-**Rotation is a reload, not a timer.** The files are read when the sources
-file is read, and an open connection holds what was read: a certificate
-replaced on disk reaches the cluster on the next `SIGHUP` or `POST /-/reload`,
-which re-reads the sources file and reopens every source whose definition
-changed. That is what a rotated `password_file` already does, and it is one
-mechanism rather than two.
+**The client pair rotates on its own. The CA needs a reload.** The two halves
+are not symmetric, and an operator has to know which is which:
 
-The source carries the PEM bytes rather than a built `tls.Config` for that
-reason. A reload keeps a connection only when the source it was opened with
-equals the one just read, and a `tls.Config` holds a certificate pool whose
-entries never compare equal: every reload would reopen every source that
-configured TLS, and a rotated certificate would be indistinguishable from an
-unchanged one. Bytes compare, so an unchanged file keeps its connection and a
-rotated one replaces it.
+| Replaced on disk | What picks it up | What an operator does |
+|---|---|---|
+| `cert_file`, `key_file` | the driver's next handshake | nothing |
+| `ca_file` | a reload, which reopens that source's connection | `SIGHUP`, or `POST /-/reload` |
+| `password_file` | a reload | `SIGHUP`, or `POST /-/reload` |
 
-There is deliberately no per-source refresh interval. Re-reading the material
-on a timer of its own would be a second way into the operator's files with no
-finding path at the end of it: what a reload reads is checked and reported, and
-what a background refresh read would be reported by nobody. A certificate
-manager that rotates a secret signals the process, which is the shape every
-other operator file here already has.
+The client pair is held as the two paths and read inside `GetClientCertificate`,
+so each handshake presents whatever is on disk at that moment. This is not a
+convenience. A certificate manager rotates a pair on a schedule nobody signals,
+and `clickhouse-go` keeps a connection for an hour by default, so holding the
+bytes would mean presenting the old certificate until a reload and then, once it
+expired, a source that stops evaluating within the hour at a time nobody chose,
+with a sources file that reads as correct. Reading at the handshake removes that
+failure mode rather than documenting it. It also means the private key is never
+held by the process between handshakes.
+
+The CA is held as the bytes that were read, because replacing one has to reopen
+the connection: `crypto/tls` takes its roots as a built pool and offers no
+callback for them, and the alternative is verifying peers by hand, which is not
+a thing to hand-roll. Holding the bytes is also what makes the reload able to
+tell: a reload keeps a connection only when the source it was opened with equals
+the one just read, and a built `tls.Config` could not be compared at all,
+because its certificate pool holds a closure per certificate and two closures
+are never equal. So a replaced bundle reopens the connection, an unchanged one
+keeps it, and a rotated client pair does neither because it does not need to.
+
+That a CA rotation costs a signal is acceptable in a way a certificate rotation
+would not be: a CA is replaced during a planned migration, measured in years,
+and the old one is trusted until it is removed.
+
+This is the split `opentelemetry-collector`'s `configtls` arrives at from the
+other direction. Its `reload_interval` re-reads the certificate and the key
+behind a `GetCertificate` callback and leaves the CA out of it entirely
+(`configtls.go`, `certReloader`). The difference here is the timer: the
+handshake is the moment the material is needed, so reading it there needs no
+interval for an operator to choose and keeps no cache that can serve a
+certificate which has since expired. `prometheus/common` does both halves, the
+CA by hashing the file contents on each round trip and rebuilding the whole
+transport (`http_config.go`, `tlsRoundTripper`), which is available to an HTTP
+client in a way it is not to a pool of long-lived native connections.
 
 `server_name` defaults to the host in `address`, which is what `crypto/tls`
 does with an empty one. The default is the driver's behaviour written down
