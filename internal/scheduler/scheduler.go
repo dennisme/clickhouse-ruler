@@ -105,8 +105,9 @@ type namedEval struct {
 	eval *RuleEval
 
 	// team and file are what a finding about this rule is addressed with: who
-	// owns the query and where to edit it (spec 8.2). The rule's own file,
-	// which is also the file half of its group's identity.
+	// owns the query and where to edit it (spec 8.2). The file is the rule's
+	// path in the rules tree, which is also the file half of its group's
+	// identity (spec 8.2).
 	team string
 	file string
 }
@@ -217,7 +218,7 @@ func (s *Scheduler) Reload(set *ruleset.Set, queriers map[string]Querier) {
 // so the work it does queues behind the evaluations rather than beside them
 // (spec 6.11, 10.4).
 func (s *Scheduler) build(set *ruleset.Set, queriers map[string]Querier, prev map[ruleKey]*RuleEval) ([]GroupSpec, map[ruleKey]*RuleEval, *GroupSpec) {
-	type groupKey struct{ file, name string }
+	type groupKey struct{ path, name string }
 
 	limits := newQueryLimits(s.concurrency, matchedSources(set), s.metrics)
 
@@ -226,7 +227,7 @@ func (s *Scheduler) build(set *ruleset.Set, queriers map[string]Querier, prev ma
 	intervalByGroup := map[groupKey]time.Duration{}
 
 	for _, r := range set.Rules {
-		k := groupKey{r.File, r.Group.Name}
+		k := groupKey{r.Path, r.Group.Name}
 		if _, ok := rulesByGroup[k]; !ok {
 			order = append(order, k)
 			intervalByGroup[k] = r.Group.Interval
@@ -235,8 +236,8 @@ func (s *Scheduler) build(set *ruleset.Set, queriers map[string]Querier, prev ma
 	}
 
 	sort.Slice(order, func(i, j int) bool {
-		if order[i].file != order[j].file {
-			return order[i].file < order[j].file
+		if order[i].path != order[j].path {
+			return order[i].path < order[j].path
 		}
 		return order[i].name < order[j].name
 	})
@@ -247,7 +248,7 @@ func (s *Scheduler) build(set *ruleset.Set, queriers map[string]Querier, prev ma
 	var rechecked []recheckRule
 
 	for _, k := range order {
-		groupName := ruleset.GroupID(k.file, k.name)
+		groupName := ruleset.GroupID(k.path, k.name)
 		interval := intervalByGroup[k]
 		retention := s.resend.retention(interval)
 
@@ -264,7 +265,7 @@ func (s *Scheduler) build(set *ruleset.Set, queriers map[string]Querier, prev ma
 				// authoring time (spec 8.4).
 				s.log.Info("rule matched no source",
 					"rule_group", groupName, "rule", r.Alert,
-					"file", r.File, "team", r.Team())
+					"file", r.Path, "team", r.Team())
 				continue
 			}
 			eval := NewRuleEval(r, queriers, s.cadence, limits, retention)
@@ -274,12 +275,12 @@ func (s *Scheduler) build(set *ruleset.Set, queriers map[string]Querier, prev ma
 				eval.carry(p, retention)
 			}
 			evals[key] = eval
-			named = append(named, namedEval{rule: r.Alert, eval: eval, team: r.Team(), file: r.File})
-			rechecked = append(rechecked, recheckRule{rule: r, team: r.Team(), file: r.File})
+			named = append(named, namedEval{rule: r.Alert, eval: eval, team: r.Team(), file: r.Path})
+			rechecked = append(rechecked, recheckRule{rule: r, team: r.Team(), file: r.Path})
 		}
 		s.metrics.RulesUnmatched.WithLabelValues(groupName).Set(float64(unmatched))
 
-		offset := staggerOffset(k.file+"|"+k.name, interval)
+		offset := staggerOffset(k.path+"|"+k.name, interval)
 		specs = append(specs, GroupSpec{
 			Name:     groupName,
 			Interval: interval,
@@ -480,7 +481,7 @@ func evalGroup(groupName string, evals []namedEval, m *Metrics, log *slog.Logger
 				// raised.
 				for _, p := range res.Problems {
 					m.Problem.WithLabelValues(
-						ne.rule, p.Check, p.Severity.String(), ne.team, p.File, p.Source).Set(1)
+						ne.rule, p.Check, p.Severity.String(), ne.team, ne.file, p.Source).Set(1)
 
 					// A warning however severe the finding is: the rule is
 					// still evaluating and still paging, so nothing about
@@ -496,7 +497,7 @@ func evalGroup(groupName string, evals []namedEval, m *Metrics, log *slog.Logger
 					fields := []any{
 						"rule_group", groupName, "rule", ne.rule,
 						"check", p.Check, "severity", p.Severity.String(),
-						"team", ne.team, "file", p.File, "source", p.Source,
+						"team", ne.team, "file", ne.file, "source", p.Source,
 						"feed", feedEvaluation, "problem", p.Text,
 					}
 					if p.Err != nil {

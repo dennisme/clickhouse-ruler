@@ -203,18 +203,16 @@ func TestReloadRaisesTheLoadFindingOnTheProblemGauge(t *testing.T) {
 		t.Fatalf("reload = %v", err)
 	}
 
-	// The loader resolves the rules root, and on macOS a temp dir is a symlink,
-	// so the label carries the resolved path rather than the one written to.
-	root, err := filepath.EvalSymlinks(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
+	// The label is the rule's path in the tree, not where the tree happens to
+	// be mounted: the loader resolves the rules root, and nothing a deployment
+	// does to that root may rename the series (spec 8.2).
+	//
 	// No team: this fixture's rule carries no team label, and `sources` is a
 	// selector rather than one. An empty team is the honest answer when no file
 	// says who owns the rule.
 	got := testutil.ToFloat64(r.metrics.Problem.WithLabelValues(
 		"HighLatency", lint.CheckRuleExpr, "error", "",
-		filepath.Join(root, "rules", "payments", "unbounded.yaml"), ""))
+		filepath.Join("payments", "unbounded.yaml"), ""))
 	if got != 1 {
 		t.Errorf("clickhouse_ruler_problem for rule/expr = %v, want 1: the rule loaded with nobody told", got)
 	}

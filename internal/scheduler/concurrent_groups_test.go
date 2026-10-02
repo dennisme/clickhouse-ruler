@@ -45,6 +45,7 @@ func TestConcurrentGroupsShareOneCadenceSafely(t *testing.T) {
 			// a write into the shared cadence map.
 			Rule:    rule.Rule{Alert: "Rule" + name},
 			File:    name + ".yaml",
+			Path:    name + ".yaml",
 			Group:   testGroup("g"+name, time.Second),
 			Labels:  map[string]string{},
 			Sources: []source.Source{{Name: "src1"}},

@@ -26,6 +26,7 @@ func ownedRuleSet(sources ...source.Source) *ruleset.Set {
 	return &ruleset.Set{Rules: []ruleset.Rule{{
 		Rule:    rule.Rule{Alert: "SlowCheckout"},
 		File:    "rules/payments.yaml",
+		Path:    "rules/payments.yaml",
 		Group:   testGroup("payments", time.Minute),
 		Labels:  map[string]string{"team": "payments"},
 		Sources: sources,
@@ -299,6 +300,7 @@ func brokenAnnotationRuleSet(annotations map[string]string, sources ...source.So
 	return &ruleset.Set{Rules: []ruleset.Rule{{
 		Rule:    rule.Rule{Alert: "SlowCheckout", Annotations: annotations},
 		File:    "rules/payments.yaml",
+		Path:    "rules/payments.yaml",
 		Group:   testGroup("payments", time.Minute),
 		Labels:  map[string]string{"team": "payments"},
 		Sources: sources,

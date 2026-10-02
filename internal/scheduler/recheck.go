@@ -79,12 +79,12 @@ func recheckPass(
 			}
 			for _, p := range problems {
 				m.Problem.WithLabelValues(
-					rr.rule.Alert, p.Check, p.Severity.String(), rr.team, p.File, p.Source).Set(1)
+					rr.rule.Alert, p.Check, p.Severity.String(), rr.team, rr.file, p.Source).Set(1)
 
 				log.Warn("a rule broke while running",
 					"rule_group", rr.rule.GroupID(), "rule", rr.rule.Alert,
 					"check", p.Check, "severity", p.Severity.String(),
-					"team", rr.team, "file", p.File, "source", p.Source,
+					"team", rr.team, "file", rr.file, "source", p.Source,
 					"feed", feedRecheck, "problem", p.Text)
 			}
 		}
