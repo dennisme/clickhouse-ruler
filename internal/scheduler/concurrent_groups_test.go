@@ -8,7 +8,6 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
-	"github.com/dennisme/clickhouse-ruler/internal/notify"
 	"github.com/dennisme/clickhouse-ruler/internal/query"
 	"github.com/dennisme/clickhouse-ruler/internal/rule"
 	"github.com/dennisme/clickhouse-ruler/internal/ruleset"
@@ -42,7 +41,7 @@ func TestConcurrentGroupsShareOneCadenceSafely(t *testing.T) {
 		name := string(rune('a' + i))
 		rules = append(rules, ruleset.Rule{
 			// for is 0, so every tick produces a firing alert and therefore
-			// a write into the shared cadence map.
+			// a write into the shared queue map.
 			Rule:    rule.Rule{Alert: "Rule" + name},
 			File:    name + ".yaml",
 			Path:    name + ".yaml",
@@ -54,12 +53,12 @@ func TestConcurrentGroupsShareOneCadenceSafely(t *testing.T) {
 
 	reg := prometheus.NewRegistry()
 	metrics := NewMetrics(reg)
-	cadence := notify.NewCadence(&recordingSender{}, time.Millisecond, notify.DefaultResendTolerance)
+	queue := queueFor(&recordingSender{}, time.Millisecond)
 	clock := newFakeClock(time.Unix(0, 0))
 	q := &countingQuerier{}
 
 	sched := New(&ruleset.Set{Rules: rules}, map[string]Querier{"src1": q},
-		cadence, metrics, clock, DefaultQueryConcurrency, nil, testResend, 0)
+		queue, metrics, clock, DefaultQueryConcurrency, nil, testResend, 0)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

@@ -9,7 +9,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
 	"github.com/dennisme/clickhouse-ruler/internal/lint"
-	"github.com/dennisme/clickhouse-ruler/internal/notify"
 	"github.com/dennisme/clickhouse-ruler/internal/rule"
 	"github.com/dennisme/clickhouse-ruler/internal/ruleset"
 	"github.com/dennisme/clickhouse-ruler/internal/source"
@@ -40,9 +39,9 @@ func reloadSched(t *testing.T, set *ruleset.Set, queriers map[string]Querier) (*
 	reg := prometheus.NewRegistry()
 	metrics := NewMetrics(reg)
 	clock := newFakeClock(time.Unix(0, 0))
-	cadence := notify.NewCadence(&recordingSender{}, time.Minute, notify.DefaultResendTolerance)
+	queue := queueFor(&recordingSender{}, time.Minute)
 
-	return New(set, queriers, cadence, metrics, clock, 0, nil, testResend, 0), metrics, reg, clock
+	return New(set, queriers, queue, metrics, clock, 0, nil, testResend, 0), metrics, reg, clock
 }
 
 // evalAll runs every group once at tickAt, which is what the tests that are

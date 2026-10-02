@@ -12,7 +12,6 @@ import (
 	dto "github.com/prometheus/client_model/go"
 
 	"github.com/dennisme/clickhouse-ruler/internal/alert"
-	"github.com/dennisme/clickhouse-ruler/internal/notify"
 	"github.com/dennisme/clickhouse-ruler/internal/source"
 )
 
@@ -30,7 +29,7 @@ func evalOnce(t *testing.T, queriers map[string]Querier, srcs ...source.Source) 
 
 	metrics := NewMetrics(prometheus.NewRegistry())
 	sched := New(oneRuleSet("Spanning", srcs...), queriers,
-		notify.NewCadence(&recordingSender{}, time.Minute, notify.DefaultResendTolerance),
+		queueFor(&recordingSender{}, time.Minute),
 		metrics, newFakeClock(time.Unix(0, 0)), 0, slog.New(slog.DiscardHandler), testResend, 0)
 
 	sched.groups[0].Eval(context.Background(), time.Unix(0, 0))

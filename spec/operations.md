@@ -261,6 +261,10 @@ Alert state and delivery:
 | `clickhouse_ruler_alerts_sent_total` | counter | `alertmanager` |
 | `clickhouse_ruler_alerts_send_failures_total` | counter | `alertmanager` |
 | `clickhouse_ruler_notification_latency_seconds` | histogram | none |
+| `clickhouse_ruler_notification_queue_length` | gauge | none |
+| `clickhouse_ruler_notification_queue_capacity` | gauge | none |
+| `clickhouse_ruler_notification_queue_wait_seconds` | histogram | none |
+| `clickhouse_ruler_notifications_dropped_total` | counter | none |
 | `clickhouse_ruler_alertmanager_last_probe_successful` | gauge | `alertmanager` |
 
 `clickhouse_ruler_alerts_active` carries the group because an alert name may repeat
@@ -286,6 +290,18 @@ near-constant with two series and an extra matcher on every carried-over
 expression.
 `clickhouse_ruler_alerts_send_failures_total` counts a failed batch once however many
 alerts it held, because it delivered none of them.
+
+**The four queue series are what a send off the evaluation goroutine made
+invisible.** A send is enqueued and drained by one worker, so an Alertmanager
+outage shows up as a filling queue rather than as a group missing iterations,
+and nothing above would have said the queue was filling: depth, what it is
+depth out of, how long an alert waited in it, and what was dropped when it
+filled. They carry no `alertmanager` label although the two counters above do,
+because the queue is per ruler and there is one endpoint to be per; a list of
+endpoints is a queue per endpoint and the label arrives with it. The argument
+for the bound, for dropping the oldest, and for keeping queue wait out of
+`clickhouse_ruler_notification_latency_seconds` is in 6.5, and the buckets are
+the tick delay set from 8.8 for the reason given there.
 
 `clickhouse_ruler_alertmanager_last_probe_successful` is the only series here
 that exists before anything fires, and that is what it is for. Both counters are
@@ -627,6 +643,9 @@ What is logged:
 | warn | the re-check pass could not sample a cluster | `rule_group`, `rule`, `source`, `feed`, `error` |
 | error | metrics listener stopped | `listen`, `error` |
 | warn | shutdown timeout expired with evaluations still running | `timeout` |
+| warn | the send queue is full, dropping the oldest alerts | `dropped`, `capacity` |
+| warn | the send queue was not drained, dropping what was left | `dropped` |
+| warn | alerts dropped: the send queue is closed | `rule_group`, `rule`, `alerts` |
 
 One line per unmatched rule, at startup and on every reload, because
 `clickhouse_ruler_rules_unmatched` is a count per group and a count cannot be
@@ -652,11 +671,23 @@ asking about even though the counter beside it is per source, because the line
 is read by somebody holding one cluster's outage and the rule names what went
 unanswered.
 
-A shutdown that gives up is the only signal an operator gets that a query or a
-send was cut off part way through, which is why it is logged rather than
-returned silently. A shutdown also cancels evaluations already running, and
-each cancelled source logs an evaluation failure like any other, because that
-is what it is: the counter has always recorded it and the log now says so.
+A shutdown that gives up is the only signal an operator gets that a query was
+cut off part way through, which is why it is logged rather than returned
+silently. A shutdown also cancels evaluations already running, and each
+cancelled source logs an evaluation failure like any other, because that is what
+it is: the counter has always recorded it and the log now says so.
+
+The three queue lines are the three ways an alert is not delivered without a
+send having failed, and each says which (6.5). A full queue is the running
+ruler's: it names the capacity beside the count, because the count alone does
+not say whether the bound is too small or delivery has stopped. The other two
+belong to a shutdown, and they are separate because they are different losses: a
+queue the timeout did not finish draining is one line with the depth, where an
+evaluation that returned after the queue closed is one line per rule, naming the
+rule whose alerts went nowhere. All three are warnings rather than errors for
+the reason a drop is survivable: nothing was recorded as sent, so the next
+evaluation re-asserts the same instances, and what is spent is the resend
+tolerance (6.5).
 
 The cardinality rule in 8.3 is written about metrics and the same reasoning
 holds for logs: one line per failed source and one per failed send, never one
@@ -1065,10 +1096,11 @@ delivery lag  =  evaluation_delay        the operator's configuration (6.8)
               +  queue wait              ours, the source's cap (6.11)
               +  query duration          the rule's SQL, and the cluster
               +  for                     the rule author's configuration
+              +  queue wait              ours, the send queue (6.5)
               +  notification latency    ours, and the operator's Alertmanager
 ```
 
-Four terms are ours. The rest are the operator's cluster, the operator's
+Five terms are ours. The rest are the operator's cluster, the operator's
 configuration and the author's SQL, and a single figure covering those would be a
 promise about somebody else's hardware. An end to end latency target from us
 would be that figure, which is why there is not one.
@@ -1084,8 +1116,10 @@ Tick delay stays near zero while a group's evaluation fits inside its interval.
 Queue wait is zero unless the source sets `max_concurrent_queries`, so a
 non-empty histogram means a limit exists and is being reached. Concurrency wait
 is zero while no group asks for more slots at once than the cap holds, so it is
-the term a growing rule file moves first. Notification latency is one send to an
-Alertmanager the operator runs. Naming them is not
+the term a growing rule file moves first. Queue wait is near zero while
+Alertmanager answers, because the worker drains faster than the groups fill, so
+a non-empty histogram there is delivery falling behind rather than scheduling
+(6.5). Notification latency is one send to an Alertmanager the operator runs. Naming them is not
 targeting them: a target needs a deployment somebody has operated, and nobody has
 operated this one, so the numbers wait for evidence rather than being chosen here.
 
@@ -1196,6 +1230,9 @@ And the budget itself, per group, as far as series can carry it:
   ))
 + histogram_quantile(0.99, sum by (rule_group, le) (
     rate(clickhouse_ruler_query_duration_seconds_bucket[1h])
+  ))
++ histogram_quantile(0.99, sum by (le) (
+    rate(clickhouse_ruler_notification_queue_wait_seconds_bucket[1h])
   ))
 + histogram_quantile(0.99, sum by (le) (
     rate(clickhouse_ruler_notification_latency_seconds_bucket[1h])

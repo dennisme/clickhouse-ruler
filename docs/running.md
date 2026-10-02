@@ -131,7 +131,8 @@ cluster and post nothing.
 | `--recheck-interval` | `1h` | how often loaded rules are re-checked against recent data for the map keys they read, which no evaluation can see; `0` turns the pass off. One bounded query per rule per source, sharing `--query-concurrency` with evaluation |
 | `--resend-interval` | `100s` | how often a still-firing alert is re-posted |
 | `--resend-tolerance` | `4` | how many resend periods a firing alert stays valid for, so how many consecutive failed evaluations or sends it survives, and how long a resolved alert is retried for. `4` is Prometheus' own number. Minimum `2` |
-| `--shutdown-timeout` | `30s` | how long an in-flight evaluation gets to finish once shutdown starts |
+| `--notification-queue-capacity` | `10000` | how many alerts may wait to be sent to Alertmanager before the oldest are dropped. The send runs off the evaluation goroutine, so this is what an Alertmanager outage fills instead of a group's interval. Prometheus' notifier bounds itself at the same number in the same unit |
+| `--shutdown-timeout` | `30s` | how long shutdown spends finishing what is in progress: first the evaluations in flight, then whatever they left in the send queue |
 | `--log-level` | `info` | `debug`, `info`, `warn` or `error` |
 | `--enable-reload-endpoint` | off | serve `POST /-/reload`, which re-reads the same files `SIGHUP` does. For deployments where a signal cannot reach the process, such as a sidecar syncing rules into a shared volume |
 
@@ -158,6 +159,10 @@ series per rule.
 | `clickhouse_ruler_alerts_sent_total` | counter | `alertmanager` |
 | `clickhouse_ruler_alerts_send_failures_total` | counter | `alertmanager` |
 | `clickhouse_ruler_notification_latency_seconds` | histogram | none |
+| `clickhouse_ruler_notification_queue_length` | gauge | none |
+| `clickhouse_ruler_notification_queue_capacity` | gauge | none |
+| `clickhouse_ruler_notification_queue_wait_seconds` | histogram | none |
+| `clickhouse_ruler_notifications_dropped_total` | counter | none |
 | `clickhouse_ruler_alertmanager_last_probe_successful` | gauge | `alertmanager` |
 | `clickhouse_ruler_rules_unmatched` | gauge | `rule_group` |
 | `clickhouse_ruler_problem` | gauge | `rule`, `check`, `severity`, `team`, `file`, `source` |
@@ -195,6 +200,21 @@ backoff say, which is the ruler's own configuration rather than anything
 Alertmanager did, so it is counted by
 `clickhouse_ruler_alerts_send_failures_total` and left out of here. Batches
 attempted is this histogram's count plus that counter.
+
+The four queue metrics are the delivery path in front of that. A send is handed
+to one worker and posted from there, so the retry ladder no longer runs on a
+group's goroutine: an Alertmanager outage fills
+`clickhouse_ruler_notification_queue_length` instead of making a group miss
+iterations. Read it against
+`clickhouse_ruler_notification_queue_capacity`, which is
+`--notification-queue-capacity` as a series so no expression has to hardcode it.
+`clickhouse_ruler_notification_queue_wait_seconds` is time spent waiting and is
+deliberately not part of the latency histogram above, which holds only the send
+itself. `clickhouse_ruler_notifications_dropped_total` counts alerts dropped
+because the queue was full, oldest first, or because a shutdown could not
+deliver them in time; nothing was recorded as sent in either case, so the next
+evaluation of that rule enqueues the same instances and the drop spends the same
+`--resend-tolerance` a failed send spends.
 
 The two problem gauges are the only metrics here not addressed to whoever
 operates the ruler, and the only ones worth reading by their labels rather than

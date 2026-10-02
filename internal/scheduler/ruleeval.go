@@ -15,7 +15,6 @@ import (
 
 	"github.com/dennisme/clickhouse-ruler/internal/alert"
 	"github.com/dennisme/clickhouse-ruler/internal/lint"
-	"github.com/dennisme/clickhouse-ruler/internal/notify"
 	"github.com/dennisme/clickhouse-ruler/internal/query"
 	"github.com/dennisme/clickhouse-ruler/internal/rule"
 	"github.com/dennisme/clickhouse-ruler/internal/ruleset"
@@ -153,11 +152,6 @@ type Result struct {
 	// nothing else reports (spec 8.8).
 	ConcurrencyWaits []time.Duration
 
-	// SendError is set when Cadence failed to reach Alertmanager. The alert
-	// state has already been advanced regardless: a notification failure is
-	// a delivery problem, not an evaluation problem (spec 6.5).
-	SendError error
-
 	// Problems holds what this evaluation found about the rule itself: a
 	// result the schema moved under, sources that stopped agreeing, a query
 	// whose measured cost crossed its ceilings, or a query that failed
@@ -229,7 +223,7 @@ type sourceResult struct {
 type RuleEval struct {
 	rule     ruleset.Rule
 	queriers map[string]Querier
-	cadence  *notify.Cadence
+	queue    *SendQueue
 	states   map[string]*alert.State
 
 	// drift compares each evaluation against the last one. Per rule, and per
@@ -247,7 +241,7 @@ type RuleEval struct {
 // resolvedRetention is how long each source's state keeps a resolved instance
 // so its notification can be retried, derived from how long delivery can take
 // rather than picked (spec 6.5).
-func NewRuleEval(r ruleset.Rule, queriers map[string]Querier, cadence *notify.Cadence, limits *queryLimits, resolvedRetention time.Duration) *RuleEval {
+func NewRuleEval(r ruleset.Rule, queriers map[string]Querier, queue *SendQueue, limits *queryLimits, resolvedRetention time.Duration) *RuleEval {
 	states := make(map[string]*alert.State, len(r.Sources))
 	for _, src := range r.Sources {
 		states[src.Name] = alert.New(r.Rule, r.Labels, src, resolvedRetention)
@@ -255,7 +249,7 @@ func NewRuleEval(r ruleset.Rule, queriers map[string]Querier, cadence *notify.Ca
 	return &RuleEval{
 		rule:     r,
 		queriers: queriers,
-		cadence:  cadence,
+		queue:    queue,
 		states:   states,
 		limits:   limits,
 		drift:    newDrift(r),
@@ -400,7 +394,12 @@ func (e *RuleEval) Evaluate(ctx context.Context, now time.Time) Result {
 	if len(current) == 0 {
 		return res
 	}
-	res.SendError = e.cadence.Send(ctx, now, e.rule.Group.Interval, current)
+	// Handed over rather than sent here. The retry ladder is roughly forty two
+	// seconds, longer than a short group's whole interval, so a send on this
+	// goroutine made an Alertmanager outage read as missed iterations
+	// (spec 6.5). What the send failed at is reported by whoever performs it,
+	// which is why the group and the rule travel with the alerts.
+	e.queue.Enqueue(e.rule.GroupID(), e.rule.Alert, now, e.rule.Group.Interval, current)
 	return res
 }
 

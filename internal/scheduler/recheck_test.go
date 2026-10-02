@@ -11,7 +11,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
 	"github.com/dennisme/clickhouse-ruler/internal/lint"
-	"github.com/dennisme/clickhouse-ruler/internal/notify"
 	"github.com/dennisme/clickhouse-ruler/internal/policy"
 	"github.com/dennisme/clickhouse-ruler/internal/query"
 	"github.com/dennisme/clickhouse-ruler/internal/ruleset"
@@ -25,7 +24,7 @@ func recheckSched(t *testing.T, q Querier, src source.Source) (*Scheduler, *Metr
 	log, buf := logBuffer()
 	m := NewMetrics(prometheus.NewRegistry())
 	sched := New(ownedRuleSet(src), map[string]Querier{src.Name: q},
-		notify.NewCadence(&recordingSender{}, time.Minute, notify.DefaultResendTolerance),
+		queueFor(&recordingSender{}, time.Minute),
 		m, newFakeClock(time.Unix(0, 0)), 0, log, testResend, time.Hour)
 
 	return sched, m, buf
@@ -177,7 +176,7 @@ func TestRecheckRecordsThatThePassRan(t *testing.T) {
 
 	src := source.Source{Name: prodSource}
 	sched := New(ownedRuleSet(src), map[string]Querier{src.Name: q},
-		notify.NewCadence(&recordingSender{}, time.Minute, notify.DefaultResendTolerance),
+		queueFor(&recordingSender{}, time.Minute),
 		m, clock, 0, log, testResend, time.Hour)
 
 	sched.recheck.Eval(context.Background(), clock.Now())
@@ -234,7 +233,7 @@ func TestRecheckReadsNothingWhenTheCheckIsOff(t *testing.T) {
 	}}
 
 	sched := New(set, map[string]Querier{"payments_prod": q},
-		notify.NewCadence(&recordingSender{}, time.Minute, notify.DefaultResendTolerance),
+		queueFor(&recordingSender{}, time.Minute),
 		m, newFakeClock(time.Unix(0, 0)), 0, log, testResend, time.Hour)
 
 	sched.recheck.Eval(context.Background(), time.Unix(0, 0))
@@ -253,7 +252,7 @@ func TestRecheckIsOffWithoutAnInterval(t *testing.T) {
 	log, _ := logBuffer()
 	sched := New(ownedRuleSet(source.Source{Name: "payments_prod"}),
 		map[string]Querier{"payments_prod": &fakeQuerier{}},
-		notify.NewCadence(&recordingSender{}, time.Minute, notify.DefaultResendTolerance),
+		queueFor(&recordingSender{}, time.Minute),
 		NewMetrics(prometheus.NewRegistry()), newFakeClock(time.Unix(0, 0)), 0, log, testResend, 0)
 
 	if sched.recheck != nil {
@@ -270,7 +269,7 @@ func TestRecheckRunsOnItsInterval(t *testing.T) {
 
 	sched := New(ownedRuleSet(source.Source{Name: "payments_prod"}),
 		map[string]Querier{"payments_prod": q},
-		notify.NewCadence(&recordingSender{}, time.Minute, notify.DefaultResendTolerance),
+		queueFor(&recordingSender{}, time.Minute),
 		NewMetrics(prometheus.NewRegistry()), clock, 0, log, testResend, time.Hour)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -304,7 +303,7 @@ func TestReloadReplacesWhatTheRecheckPassAsksAbout(t *testing.T) {
 
 	sched := New(ownedRuleSet(source.Source{Name: "payments_prod"}),
 		map[string]Querier{"payments_prod": q},
-		notify.NewCadence(&recordingSender{}, time.Minute, notify.DefaultResendTolerance),
+		queueFor(&recordingSender{}, time.Minute),
 		NewMetrics(prometheus.NewRegistry()), newFakeClock(time.Unix(0, 0)), 0, log, testResend, time.Hour)
 
 	sched.Reload(&ruleset.Set{}, map[string]Querier{})
@@ -325,7 +324,7 @@ func TestRecheckClearsAFindingWhenTheCheckIsSwitchedOff(t *testing.T) {
 	src := source.Source{Name: "payments_prod"}
 
 	sched := New(ownedRuleSet(src), map[string]Querier{src.Name: q},
-		notify.NewCadence(&recordingSender{}, time.Minute, notify.DefaultResendTolerance),
+		queueFor(&recordingSender{}, time.Minute),
 		m, newFakeClock(time.Unix(0, 0)), 0, log, testResend, time.Hour)
 
 	sched.recheck.Eval(context.Background(), time.Unix(0, 0))

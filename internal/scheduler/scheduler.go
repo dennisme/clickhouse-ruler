@@ -10,7 +10,6 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
-	"github.com/dennisme/clickhouse-ruler/internal/notify"
 	"github.com/dennisme/clickhouse-ruler/internal/ruleset"
 	"github.com/dennisme/clickhouse-ruler/internal/source"
 )
@@ -20,15 +19,16 @@ import (
 //
 // What a reload replaces is the group set and the per-rule evaluators; what it
 // keeps is everything above them, which is why they are separated here. The
-// clock, the metrics, the logger and the notify.Cadence outlive any
-// configuration: the Cadence in particular holds when each firing alert was
-// last posted to Alertmanager, so rebuilding it on a reload would re-post every
-// firing alert at once and reset the resend interval of each (spec 6.5).
+// clock, the metrics, the logger and the SendQueue outlive any configuration:
+// the notify.Cadence behind the queue holds when each firing alert was last
+// posted to Alertmanager, so rebuilding it on a reload would re-post every
+// firing alert at once and reset the resend interval of each, and the queue
+// itself holds sends a reload has no business dropping (spec 6.5).
 type Scheduler struct {
 	clock       Clock
 	metrics     *Metrics
 	log         *slog.Logger
-	cadence     *notify.Cadence
+	queue       *SendQueue
 	concurrency int
 	resend      Resend
 
@@ -143,7 +143,7 @@ type namedEval struct {
 func New(
 	set *ruleset.Set,
 	queriers map[string]Querier,
-	cadence *notify.Cadence,
+	queue *SendQueue,
 	metrics *Metrics,
 	clock Clock,
 	queryConcurrency int,
@@ -159,7 +159,7 @@ func New(
 		clock:           clock,
 		metrics:         metrics,
 		log:             log,
-		cadence:         cadence,
+		queue:           queue,
 		concurrency:     queryConcurrency,
 		resend:          resend,
 		recheckInterval: recheckInterval,
@@ -288,7 +288,7 @@ func (s *Scheduler) build(set *ruleset.Set, queriers map[string]Querier, prev ma
 					"file", r.Path, "team", r.Team())
 				continue
 			}
-			eval := NewRuleEval(r, queriers, s.cadence, limits, retention)
+			eval := NewRuleEval(r, queriers, s.queue, limits, retention)
 			key := ruleKey{group: groupName, alert: r.Alert, occurrence: seen[r.Alert]}
 			seen[r.Alert]++
 			if p, ok := prev[key]; ok {
@@ -468,9 +468,10 @@ func staggerOffset(key string, interval time.Duration) time.Duration {
 // spec 8.2 asks for. Labelled by rule_group and rule only (spec 8.3).
 //
 // It also logs what the metrics cannot say: which source refused a query and
-// what it said, and which rule could not be delivered. One line per failed
-// source and one per failed send, never one per alert instance, for the same
-// reason the metrics carry no instance label (spec 8.3).
+// what it said. One line per failed source, never one per alert instance, for
+// the same reason the metrics carry no instance label (spec 8.3). A send that
+// failed is reported by the queue's worker, because the evaluation it came
+// from returned before the send was attempted (spec 6.5).
 //
 // Rules run concurrently. The goroutine per rule is not what bounds load:
 // the limits inside each RuleEval do, around the query itself, so a group
@@ -507,11 +508,6 @@ func evalGroup(groupName string, evals []namedEval, m *Metrics, log *slog.Logger
 				// so one broken template is one line rather than two.
 				for _, ae := range res.AnnotationErrors {
 					m.AnnotationFailures.WithLabelValues(groupName, ne.rule, ae.Annotation).Inc()
-				}
-				if res.SendError != nil {
-					log.Error("sending alerts to alertmanager failed",
-						"rule_group", groupName, "rule", ne.rule,
-						"error", res.SendError.Error())
 				}
 				// A rule that broke while running, reported to whoever owns
 				// it rather than to whoever operates the ruler (spec 6.3.2,
@@ -589,6 +585,10 @@ func (s *Scheduler) Start(ctx context.Context) {
 	defer s.mu.Unlock()
 
 	s.base = ctx
+	// The delivery worker is the ruler's, not a configuration's, so it is
+	// started once here and stopped by Shutdown rather than by every reload
+	// (spec 6.5).
+	s.queue.Start()
 	s.startLocked()
 }
 
@@ -633,32 +633,49 @@ func (s *Scheduler) startLocked() {
 	}
 }
 
-// Shutdown stops every group from ticking again and waits up to timeout for
-// evaluations already in flight to finish, so a query or a send is not cut
-// off mid-way through. A reload arriving afterwards is ignored.
+// Shutdown stops every group from ticking again and spends timeout on
+// finishing what is already in progress: first the evaluations in flight, then
+// whatever they left in the send queue. A reload arriving afterwards is
+// ignored.
+//
+// Both halves share the one budget, because they are one promise. Evaluations
+// alone was the whole of it while the send ran inside an evaluation; with
+// delivery behind a queue, a shutdown that skipped the drain would lose exactly
+// the pages the wait used to deliver (spec 6.5).
 func (s *Scheduler) Shutdown(timeout time.Duration) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	s.stopped = true
-	if s.cancel == nil {
-		return
-	}
-	s.cancel()
-	s.cancel = nil
+	deadline := time.Now().Add(timeout)
 
-	done := make(chan struct{})
-	go func() {
-		s.wg.Wait()
-		close(done)
-	}()
+	if s.cancel != nil {
+		s.cancel()
+		s.cancel = nil
 
-	select {
-	case <-done:
-	case <-time.After(timeout):
-		// The only signal an operator gets that a query or a send was cut off
-		// part way through.
-		s.log.Warn("shutdown timeout expired with evaluations still running",
-			"timeout", timeout.String())
+		done := make(chan struct{})
+		go func() {
+			s.wg.Wait()
+			close(done)
+		}()
+
+		select {
+		case <-done:
+		case <-time.After(timeout):
+			// The only signal an operator gets that a query was cut off part
+			// way through.
+			s.log.Warn("shutdown timeout expired with evaluations still running",
+				"timeout", timeout.String())
+		}
 	}
+
+	// Whatever is left of the budget. Nothing is enqueued after this returns,
+	// because an evaluation that outlives the wait above finds the queue
+	// closed, and what it was carrying is counted as dropped rather than
+	// delivered by a process that is going away.
+	remaining := time.Until(deadline)
+	if remaining < 0 {
+		remaining = 0
+	}
+	s.queue.Drain(remaining)
 }
