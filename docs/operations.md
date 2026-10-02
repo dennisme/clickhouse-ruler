@@ -799,6 +799,36 @@ A reload is all or nothing. Every way it can fail leaves the ruler evaluating
 exactly what it was evaluating before the signal, and raises the refused-reload
 gauge above.
 
+### Rotating a credential or a certificate
+
+A reload is also how a replaced secret reaches the cluster, with one exception
+that needs no action at all.
+
+| Replaced on disk | What picks it up | What you do |
+| --- | --- | --- |
+| `cert_file`, `key_file` | the driver's next handshake | nothing |
+| `ca_file` | a reload, which reopens that source's connection | `SIGHUP`, or `POST /-/reload` |
+| `password_file` | a reload | `SIGHUP`, or `POST /-/reload` |
+
+**The client certificate and its key need nothing.** They are read at each TLS
+handshake rather than held, so a certificate manager that writes a new pair over
+the old paths is picked up on the driver's next connection, which is within the
+hour it keeps one for. Nothing to signal, and no window where the ruler presents
+a certificate that has expired.
+
+**A replaced CA needs a reload.** `crypto/tls` takes its roots as a built pool
+with no way to re-read them, so the connection has to be reopened against a new
+one. The reload does that for the sources whose CA changed and leaves every
+other connection alone. A CA is replaced during a planned migration rather than
+on a rotation schedule, and the old one stays trusted until it is removed, so
+there is normally a long window in which to do it.
+
+**A replaced password needs a reload**, the same as it did before any of this.
+
+Nothing here is watched. If you want a rotation to be picked up at a fixed time
+rather than at the next handshake, reload: it is the same signal, it costs one
+reconnect per changed source, and it reports what it read.
+
 **A file that cannot be read refuses the whole reading.** A file that is not
 valid YAML, a missing sources file, a policy file that will not parse, a rules
 directory that has gone. Including the files in the reading that are fine: a

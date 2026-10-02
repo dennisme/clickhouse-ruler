@@ -105,6 +105,8 @@ sources:
 | `username` | string | required | The ClickHouse user, and therefore the tenancy boundary (6.6). |
 | `password_file` | path | none | Reads the password from a file. Mutually exclusive with `password_env`. |
 | `password_env` | string | none | Reads the password from an environment variable. |
+| `secure` | bool | `false` | Connect over TLS, verifying the server against the host's trust store. |
+| `tls_config` | map | none | TLS against something other than the default trust: a private CA, a client certificate, a name to verify. Implies `secure`. |
 | `table` | string | required | The table rules against this source read. |
 | `timestamp_column` | string | required | The column the evaluation window is applied to. |
 | `evaluation_delay` | duration | `1m` | How far behind live to evaluate (6.8). |
@@ -165,13 +167,153 @@ The password comes from `password_file` or `password_env`:
   auth failure rather than a clear config error.
 - A trailing newline is stripped, because `echo secret > file` adds one and it
   is not part of the password.
-- Neither set is legal: local development, and mTLS where ClickHouse
-  authenticates the client certificate instead.
+- Neither set is legal: local development, and mTLS, where the client
+  certificate named in `tls_config` is what ClickHouse authenticates.
 
 There is deliberately no DSN field. A DSN carries the password through string
 handling, where any error that echoes its input puts the credential in a log.
 Connection options are built field by field instead, and `Source.String`
 redacts the password so printing one with `%v` cannot leak it.
+
+**TLS is off by default, and `secure: true` is the whole of the managed
+case.** A service that accepts only encrypted connections, which is every
+ClickHouse Cloud service, is reached by turning one flag on: the server is
+verified against the host's trust store, and there is nothing else to say.
+
+```yaml
+- name: payments_cloud
+  address: abc123.eu-west-1.aws.clickhouse.cloud:9440
+  database: otel
+  username: ruler_payments
+  password_file: /run/secrets/ruler/payments
+  secure: true
+  table: otel_traces
+  timestamp_column: Timestamp
+```
+
+`tls_config` is for a cluster whose trust is not the default one. Its presence
+turns TLS on by itself, so it is never written beside `secure: true`, and
+`secure: false` with a `tls_config` set is an error rather than a precedence
+rule, for the reason two password sources are: one of the two is stale, and
+silently choosing either connects in a way nobody asked for.
+
+| Field | Type | Default | Purpose |
+|---|---|---|---|
+| `ca_file` | path | the host's trust store | PEM bundle the server's certificate is verified against, replacing the host's trust store rather than adding to it. |
+| `cert_file` | path | none | Client certificate, PEM. With `key_file`, this is mTLS. |
+| `key_file` | path | none | Private key for `cert_file`. Both or neither. |
+| `server_name` | string | the host in `address` | The name verified in the server's certificate. Set it when `address` is an IP or a tunnel. |
+| `insecure_skip_verify` | bool | `false` | Skips verification. Reported by `source/tls-insecure` (7.7). |
+
+Both forms exist because they answer different questions. `secure: true` says
+encrypt this and trust what the host trusts, which needs no knobs; spelling
+that as `tls_config: {}` would read as though there were something to
+configure, and an operator who needs nothing configured should not have to
+write an empty map to say so.
+
+**Key material comes from files, never inline**, the posture `password_file`
+already sets: a certificate or a key pasted into the sources file is a secret
+in a git history. A file that cannot be read, a file that is empty, a PEM that
+holds no certificate, and a `cert_file` without its `key_file` are each an
+error from `source/tls` naming the line of the field. They are read when the
+file is parsed rather than when a connection is made, so `ruler check` fails
+on a path that is wrong instead of a daemon failing at its first evaluation.
+
+`ca_file` replaces the host's trust store rather than adding to it, which is
+what a self-signed cluster wants: the CA that signed it becomes the only thing
+that can vouch for it, and a public CA that mis-issues a certificate for the
+same name is not trusted for this connection. So a private CA is supplied on
+its own, with no `cert_file` and no `key_file`, and nothing else is needed.
+A cluster behind a public CA sets `secure: true` and names no bundle at all.
+
+**The client pair rotates on its own. The CA needs a reload.** The two halves
+are not symmetric, and an operator has to know which is which:
+
+| Replaced on disk | What picks it up | What an operator does |
+|---|---|---|
+| `cert_file`, `key_file` | the driver's next handshake | nothing |
+| `ca_file` | a reload, which reopens that source's connection | `SIGHUP`, or `POST /-/reload` |
+| `password_file` | a reload | `SIGHUP`, or `POST /-/reload` |
+
+The client pair is held as the two paths and read inside `GetClientCertificate`,
+so each handshake presents whatever is on disk at that moment. This is not a
+convenience. A certificate manager rotates a pair on a schedule nobody signals,
+and `clickhouse-go` keeps a connection for an hour by default, so holding the
+bytes would mean presenting the old certificate until a reload and then, once it
+expired, a source that stops evaluating within the hour at a time nobody chose,
+with a sources file that reads as correct. Reading at the handshake removes that
+failure mode rather than documenting it. It also means the private key is never
+held by the process between handshakes.
+
+The CA is held as the bytes that were read, because replacing one has to reopen
+the connection: `crypto/tls` takes its roots as a built pool and offers no
+callback for them, and the alternative is verifying peers by hand, which is not
+a thing to hand-roll. Holding the bytes is also what makes the reload able to
+tell: a reload keeps a connection only when the source it was opened with equals
+the one just read, and a built `tls.Config` could not be compared at all,
+because its certificate pool holds a closure per certificate and two closures
+are never equal. So a replaced bundle reopens the connection, an unchanged one
+keeps it, and a rotated client pair does neither because it does not need to.
+
+That a CA rotation costs a signal is acceptable in a way a certificate rotation
+would not be: a CA is replaced during a planned migration, measured in years,
+and the old one is trusted until it is removed.
+
+This is the split `opentelemetry-collector`'s `configtls` arrives at from the
+other direction. Its `reload_interval` re-reads the certificate and the key
+behind a `GetCertificate` callback and leaves the CA out of it entirely
+(`configtls.go`, `certReloader`). The difference here is the timer: the
+handshake is the moment the material is needed, so reading it there needs no
+interval for an operator to choose and keeps no cache that can serve a
+certificate which has since expired. `prometheus/common` does both halves, the
+CA by hashing the file contents on each round trip and rebuilding the whole
+transport (`http_config.go`, `tlsRoundTripper`), which is available to an HTTP
+client in a way it is not to a pool of long-lived native connections.
+
+`server_name` defaults to the host in `address`, which is what `crypto/tls`
+does with an empty one. The default is the driver's behaviour written down
+rather than a name the ruler computes, and it is overridden for the cases where
+the host is not the name on the certificate: an IP address, or a tunnel.
+
+**`insecure_skip_verify` is an error that an exemption clears.** It is a
+security downgrade an operator chooses, and this repository already has the
+shape for that: `exempt` with a reason and a date (7.7).
+
+```yaml
+- name: payments_staging
+  address: ch-staging:9440
+  database: otel
+  username: ruler_payments
+  tls_config:
+    insecure_skip_verify: true
+  table: otel_traces
+  timestamp_column: Timestamp
+  exempt:
+    - check: source/tls-insecure
+      reason: staging's certificate is self-signed until the internal CA lands
+      until: 2026-12-01
+```
+
+The three other answers are each worse. Silence means a sources file that
+passes every check describes a connection nobody can be sure reached the
+cluster it named, and the diff that added the field looks like any other. A
+warning on every run is a warning nobody reads, and this one is permanent by
+construction: the condition never clears on its own. Refusing it outright
+would make clusters with self-signed certificates unreachable, and a tool that
+cannot reach a real cluster is replaced by one that can.
+
+What the exemption buys is the date. The reason is written down in the
+operator's file, under the CODEOWNERS of 6.6, and on the day it expires the
+file fails until somebody states it again. Whether a downgrade is still agreed
+to is state rather than shape, so it is read with a clock, beside the expiry
+check rather than at parse time.
+
+The connection is still built field by field. The resolved `tls.Config` is
+carried on the source and handed to the driver by the one place that opens a
+connection, so `ruler check --online`, the privileges check in 6.7.2 and the
+re-check pass all reach the cluster the same way. A handshake failure is an
+error out of `internal/query` like any other and goes through the same
+redaction (8.4).
 
 ### 6.3 Evaluation model
 

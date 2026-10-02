@@ -52,7 +52,55 @@ Use `password_env: SOME_VAR` instead if a file does not suit. Setting both is
 an error rather than a precedence rule, because when the two disagree one of
 them is stale and quietly picking either can authenticate with a credential
 that was supposed to have been rotated away. No password at all is fine for
-local development and for mTLS.
+local development, and for mTLS, where the client certificate is what
+ClickHouse authenticates.
+
+**Connections are plaintext unless the source says otherwise.** `secure: true`
+connects over TLS and verifies the server against the host's trust store, which
+is all a managed service needs, ClickHouse Cloud included.
+
+```yaml
+  - name: payments_cloud
+    address: abc123.eu-west-1.aws.clickhouse.cloud:9440
+    database: otel
+    username: ruler_payments
+    password_file: /run/secrets/ruler/payments
+    secure: true
+    table: otel_traces
+    timestamp_column: Timestamp
+```
+
+A cluster whose trust is not the default one uses `tls_config` instead, which
+turns TLS on by itself:
+
+```yaml
+    tls_config:
+      ca_file: /run/secrets/ruler/internal-ca.pem
+      cert_file: /run/secrets/ruler/client.pem
+      key_file: /run/secrets/ruler/client-key.pem
+      server_name: ch-prod.internal
+```
+
+`ca_file` is the CA the server is verified against, and it replaces the host's
+trust store rather than adding to it: a self-signed cluster is reached by
+supplying its own CA and nothing else, and no public CA can then vouch for that
+name. `cert_file` and `key_file` are the pair ClickHouse authenticates for
+mTLS, and a source with them and no password is legal. `server_name` defaults to the host in `address`, so it is
+only written when that host is not the name on the certificate. All four are
+paths, never inline material, for the reason `password_file` is: a key pasted
+into the sources file is a key in a git history. A path that is wrong fails
+`ruler check` rather than the first evaluation.
+
+`insecure_skip_verify: true` turns verification off, and costs an `exempt`
+entry for `source/tls-insecure` with a reason and a date. Giving the ruler the
+self-signed certificate as `ca_file` is the fix that needs no exemption.
+
+**A rotated client certificate needs nothing.** `cert_file` and `key_file` are
+read at each TLS handshake rather than held, so a certificate manager that
+writes a new pair over the same paths is picked up on the driver's next
+connection. A replaced `ca_file` does need a reload, because the roots cannot be
+re-read in place, and so does a replaced `password_file`. See
+[rotating a credential or a certificate](operations.md#rotating-a-credential-or-a-certificate).
 
 **Rules** are author owned. A rule names no source; it carries a `sources`
 selector over source labels, and runs against every source that matches. One

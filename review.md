@@ -10,36 +10,7 @@ the item being fixed.
 
 ## Bugs
 
-### 5. mTLS to ClickHouse is documented and does not exist
-
-Three places say a source with no credentials covers mTLS:
-
-- `internal/source/source.go:336`: "No password at all is legal: local
-  development against the compose stack, and mTLS where ClickHouse
-  authenticates the client certificate."
-- `spec/design.md:168`: "Neither set is legal: local development, and mTLS where
-  ClickHouse authenticates the client certificate instead."
-- `docs/how-it-works.md:55`: "No password at all is fine for local development
-  and for mTLS."
-
-`query.Open` builds `clickhouse.Options` field by field and never sets `TLS`
-(`internal/query/querier.go:46`), so every connection is plaintext native
-protocol. There is no field in the sources file for a CA, a client certificate
-or a key, and nothing anywhere resolves one. An operator who read any of those
-three lines and dropped the password is not authenticating by certificate, they
-are connecting as a ClickHouse user with no password over an unencrypted socket,
-which is the opposite of what they were told they were doing.
-
-So the sources file cannot express TLS at all, not only mTLS: a cluster that
-requires encryption in transit is unreachable by this ruler. That is a larger
-gap than the stale comment, and the comment is what hides it.
-
-Two fixes and they are different sizes. The comment correction is three lines
-and makes the gap visible. Real support is a sources file schema change,
-`tls_config` with the shape the ecosystem already uses, plus the same
-`password_file` posture for the key: an operator concern, in the operator's
-file, under their CODEOWNERS (spec 6.6). Picking the second does not remove the
-need for the first in the meantime.
+None open. The ones that were are under Closed, with their original numbers.
 
 ## Operator unclear
 
@@ -131,6 +102,50 @@ on `--format`. Workable and documented, but a lot of rules for one command.
 
 Original numbering and original text kept, so a reference written before the
 fix still points at the right item.
+
+### 5. mTLS to ClickHouse is documented and does not exist
+
+**Closed by making TLS expressible.** `secure: true` connects over TLS and
+verifies the server against the host's trust store, which is the whole of the
+managed service case, and `tls_config` carries `ca_file`, `cert_file`,
+`key_file`, `server_name` and `insecure_skip_verify` for a cluster whose trust
+is not the default one. Key material is paths, never inline, read when the
+sources file is parsed, so a wrong path is a `source/tls` error with the line of
+the field. `insecure_skip_verify` is a `source/tls-insecure` error that an
+`exempt` entry clears, with a reason and a date. The resolved `tls.Config` is
+carried on the source and handed to the driver by `query.Open`, so the online
+check, the privileges check and the re-check pass all reach the cluster the same
+way. The three sentences are now true: a client certificate with no password is
+a legal source.
+
+Three places say a source with no credentials covers mTLS:
+
+- `internal/source/source.go:336`: "No password at all is legal: local
+  development against the compose stack, and mTLS where ClickHouse
+  authenticates the client certificate."
+- `spec/design.md:168`: "Neither set is legal: local development, and mTLS where
+  ClickHouse authenticates the client certificate instead."
+- `docs/how-it-works.md:55`: "No password at all is fine for local development
+  and for mTLS."
+
+`query.Open` builds `clickhouse.Options` field by field and never sets `TLS`
+(`internal/query/querier.go:46`), so every connection is plaintext native
+protocol. There is no field in the sources file for a CA, a client certificate
+or a key, and nothing anywhere resolves one. An operator who read any of those
+three lines and dropped the password is not authenticating by certificate, they
+are connecting as a ClickHouse user with no password over an unencrypted socket,
+which is the opposite of what they were told they were doing.
+
+So the sources file cannot express TLS at all, not only mTLS: a cluster that
+requires encryption in transit is unreachable by this ruler. That is a larger
+gap than the stale comment, and the comment is what hides it.
+
+Two fixes and they are different sizes. The comment correction is three lines
+and makes the gap visible. Real support is a sources file schema change,
+`tls_config` with the shape the ecosystem already uses, plus the same
+`password_file` posture for the key: an operator concern, in the operator's
+file, under their CODEOWNERS (spec 6.6). Picking the second does not remove the
+need for the first in the meantime.
 
 ### The re-check pass reads production rows by default
 
@@ -283,12 +298,10 @@ past CI is running anyway.
 
 ## Order to fix
 
-1. Bug 5. Decide whether TLS to ClickHouse is a feature or the three comments
-   are wrong, and correct the comments either way in the meantime.
-2. The two spec'd cadence metrics. Without the interval gauge every cadence
+1. The two spec'd cadence metrics. Without the interval gauge every cadence
    expression hardcodes a number the rule file is free to change.
-3. The Alertmanager items, in the order spec 6.5 sets: take the send off the
+2. The Alertmanager items, in the order spec 6.5 sets: take the send off the
    evaluation path, then the list of endpoints.
-4. The consumer toil, starting with what a rule can template: the gap between
+3. The consumer toil, starting with what a rule can template: the gap between
    "a rule names no cluster" and `FROM otel.otel_traces` is the one an author
    meets first.

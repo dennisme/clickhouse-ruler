@@ -52,6 +52,8 @@ Generated from the check table in `internal/lint/checks.go`. Edit the table, the
 | [`source/privileges`](source.md#source-privileges) | `warning` by default | a source's ClickHouse user does not meet the contract the other checks rely on |
 | [`source/table`](source.md#source-table) | fixed, always `error` | a source naming no table |
 | [`source/timestamp-column`](source.md#source-timestamp-column) | fixed, always `error` | a source naming no timestamp column, so no window can be bound |
+| [`source/tls`](source.md#source-tls) | fixed, always `error` | TLS key material that could not be read, or a tls_config that contradicts itself |
+| [`source/tls-insecure`](source.md#source-tls-insecure) | `error` by default | a source that skips certificate verification without an exemption |
 | [`source/username`](source.md#source-username) | fixed, always `error` | a source naming no ClickHouse user, which is the tenancy boundary |
 | [`yaml/syntax`](policy.md#yaml-syntax) | fixed, always `error`, refuses to load | the file is not valid YAML, so nothing in it could be read |
 | [`yaml/type`](policy.md#yaml-type) | fixed, always `error` | a field holding the wrong shape, such as a list where a mapping belongs |
