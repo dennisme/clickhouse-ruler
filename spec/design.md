@@ -926,6 +926,157 @@ cannot hold a secret and the masking has nothing to protect. That is the
 condition, not the calendar: if Alertmanager ever grows one, the masking comes
 back.
 
+**The send does not run on the evaluation goroutine, and what replaces it is a
+bounded queue.** `Cadence.Send` used to be the last thing `Evaluate` did, so
+the retry ladder ran inside the rule's evaluation: four attempts at a ten
+second timeout with doubling backoff is roughly forty two seconds, longer than
+a thirty second group's whole interval. An Alertmanager that stopped answering
+therefore read as
+`clickhouse_ruler_rule_group_iterations_missed_total`, which 8.2 calls the
+single most important operational signal here, for a cause that is not
+evaluation at all. Every query was fine, every cluster was fine, and the panel
+said the ruler could not keep up.
+
+So delivery gets its own goroutine with a queue in front of it. An evaluation
+appends what it produced and returns; one worker drains the queue and calls
+`Cadence.Send`. Nothing about the retry ladder changes. It is the same four
+attempts, paid by the worker instead of by a group's tick.
+
+**The queue goes in front of `Cadence`, not between `Cadence` and the client.**
+The second seam is the smaller change, one more wrapper around the `Sender`
+interface the client already satisfies, and it is wrong. `Cadence` deliberately
+does not record a failed send, so a firing alert whose notification failed is
+due again on the very next evaluation rather than waiting out a resend
+interval, which is the guarantee the tolerance above is the budget for. A queue
+behind `record` writes "delivered" before anything has been delivered, so every
+failure past it would silently cost the alert a full resend interval, and the
+case that guarantee exists for is exactly the case a queue exists for. In
+front, `record` still runs where it always ran: after the POST Alertmanager
+accepted.
+
+Each item therefore carries the alerts, the `now` of the evaluation that
+produced them, and the interval of the group they came from. That pair is not
+decoration. `Cadence` judges what is due against `now`, and sizes every firing
+alert's `endsAt` from whichever of the resend interval and the group's interval
+is longer, so a worker that re-derived either would be answering a different
+question from the one the evaluation asked.
+
+**What the queue carries is what the evaluation produced, not what is due.**
+Due-ness is `Cadence`'s question and it is asked at send time, against the
+record of what was last delivered. Asked at enqueue it would be asked about a
+send that has not happened, against a record only the worker moves. The cost is
+that pending instances, which `Cadence` drops, take up queue space on their way
+to being dropped.
+
+**`endsAt` is stamped from a `now` that may have aged in the queue, and that is
+deliberate.** The alternative is to re-stamp at send time, which claims the
+condition was true at a moment nobody checked: the same refusal as
+re-asserting a failed source's alerts above, one field over. Prometheus stamps
+`ValidUntil` in `sendAlerts`, before its own notifier queue, for the same
+reason. The age is bounded on both sides regardless. The validity is the
+tolerance times the resend period, four of them at the defaults, so an item
+queued for less than one period has spent a quarter of a budget sized for
+precisely this. And nothing was recorded as sent, so the next evaluation of
+that rule enqueues the same instances with a fresh `now` behind the stale copy.
+
+**A full queue drops the oldest alerts, and never blocks.** Blocking is what
+this removes: a full queue that waited would put the evaluation goroutine back
+behind Alertmanager, and for longer than the single retry ladder it was behind
+before. Dropping the newest keeps the wrong half, because with the queue
+persistently full everything delivered is then the stalest thing in it, stamped
+from a `now` far enough back that Alertmanager can expire the alert on arrival:
+a page lost by a send that reported success. Dropping the oldest bounds the age
+of everything delivered by how fast the worker drains.
+
+**A drop is not a lost page, and that is the whole of why dropping is
+allowed.** Nothing was recorded as sent, so the rule's next evaluation
+re-enqueues the same instances, and a resolve is re-asserted across its
+retention window above for the same reason. A drop spends the budget a failed
+send spends, which is the resend tolerance, and the ruler is then in the state
+that budget was sized for. Four consecutive periods of a queue too full to take
+a firing alert does expire it at Alertmanager, and that is the same sentence as
+four consecutive failed sends.
+
+**The bound is counted in alerts, and whole batches drop.**
+`--notification-queue-capacity`, ten thousand alerts, which is Prometheus'
+number and Prometheus' unit. Alerts rather than batches because memory is what
+a bound is for: one item holds one rule's rendered alerts, and a rule that
+returns ten thousand rows produces ten thousand of them. Whole batches rather
+than a truncated one, which is where this parts company with Prometheus' flat
+queue of alerts: a batch here is one rule's evaluation of one tick, and half of
+it is a page nobody can reason about. So the arithmetic is to drop whole oldest
+items until the incoming one fits. A single batch larger than the entire
+capacity is enqueued whole rather than halved, so the bound can be exceeded by
+at most one rule's result, which is 8.3's problem rather than this one's.
+
+**`Result.SendError` is gone.** It was a field on an evaluation's result and
+the send is no longer part of an evaluation: left in place it would read nil on
+every evaluation of a ruler that cannot deliver anything, which is
+indistinguishable from a send that worked. The log line it fed, `sending alerts
+to alertmanager failed`, moves to the worker, which is why each item carries
+the group and the rule it came from (8.4).
+`clickhouse_ruler_alerts_send_failures_total` is untouched, incremented around
+the POST where it always was.
+
+**What a queue makes invisible, and the series for it.** Named here beside the
+decision rather than discovered against a panel that renders an empty graph,
+which is 8.8's rule:
+
+| Metric | Type | Labels |
+| --- | --- | --- |
+| `clickhouse_ruler_notification_queue_length` | gauge | none |
+| `clickhouse_ruler_notification_queue_capacity` | gauge | none |
+| `clickhouse_ruler_notifications_dropped_total` | counter | none |
+| `clickhouse_ruler_notification_queue_wait_seconds` | histogram | none |
+
+No labels on any of them. The queue is per ruler and not per group: scheduling
+is per group (6.11) and delivery is one Alertmanager, so a depth per group is a
+number the ruler does not have. The names are
+`prometheus_notifications_queue_length`, `_queue_capacity` and
+`prometheus_notifications_dropped_total` under our own prefix (8.2), minus the
+`alertmanager` label the Prometheus ones carry, because there is one endpoint.
+A list of endpoints is a queue per endpoint, and the label comes back with it.
+
+The capacity ships as a series for the reason `clickhouse_ruler_query_concurrency`
+does (8.8): a depth of nine thousand says nothing without the number it is nine
+thousand of, and an operator who hardcodes the flag reads every expression
+against a value somebody else can change.
+
+**Queue wait is its own histogram, not folded into
+`clickhouse_ruler_notification_latency_seconds`.** That histogram holds sends
+Alertmanager accepted, and the lag budget in 8.8 sums it as exactly that, so
+folding queue time in would redefine a series an operator already reads and
+hide the one term this adds. It is a new term in that budget instead, between
+query duration and notification latency.
+
+Its buckets are the tick delay set from 8.8, exponential from fifty
+milliseconds by a factor of three, nine of them, for the same reason that one
+cannot take the defaults: this is a delay read against a group's interval, and
+`prometheus.DefBuckets` stops at ten seconds where one retry ladder alone is
+forty two. A queue drained promptly lands in the first bucket, and a queue
+minutes deep stays distinguishable from one seconds deep instead of sharing
+`+Inf` with it.
+
+**Shutdown drains the queue inside the shutdown timeout.** `Shutdown` already
+waits for evaluations in flight so a send is not cut off part way through;
+without the drain, the queue is simply where a restart loses the pages that
+wait used to deliver. Draining is not a flag, unlike Prometheus'
+`--alertmanager.drain-notification-queue-on-shutdown`, because the timeout is
+already the knob: an operator who will not wait sets a shorter one. Whatever is
+still queued when it expires is counted as dropped and logged with its depth,
+so a restart that lost pages says so.
+
+It also makes true something the previous shape claimed and did not do.
+`Shutdown` cancels the context every evaluation runs under and then waits, so a
+send on that context was cut off at the cancel rather than finished by the
+wait. The worker's sends do not run on an evaluation's context, so the wait now
+means what it says.
+
+**When the list of Alertmanagers lands, this is what it lands on.** Fan-out
+multiplies the worst case by the number of endpoints, which is why the ordering
+below puts it behind this, and the shape it arrives in is a queue and a worker
+per endpoint with the `alertmanager` label back on all four series above.
+
 **One URL or a list of them.** Today `--alertmanager` takes one, and
 Alertmanager's own documentation says that is the wrong shape:
 
@@ -976,14 +1127,16 @@ the process, so there is nothing to reconcile, where a target that discovery
 drops would leave a gauge at 0 that nothing can clear, which is the series
 lifecycle problem `deleteSource` exists for.
 
-**Not before the send leaves the evaluation goroutine.** `Cadence.Send` runs
-inside the rule's evaluation today, and its retries are already enough to make
-an Alertmanager outage read as missed iterations, which 8.2 calls the single
-most important operational signal. Fan-out multiplies that worst case by the
-number of endpoints. The ordering is therefore: take the send off the evaluation
-path, then add the list. Until the list exists, `docs/running.md` says plainly
-that one URL means the operator supplies a single reachable address, and names
-the upstream guidance, so the gap is a stated position rather than an omission.
+**Not before the send leaves the evaluation goroutine, and it has left it.**
+`Cadence.Send` used to run inside the rule's evaluation, where its retries were
+enough on their own to make an Alertmanager outage read as missed iterations,
+which 8.2 calls the single most important operational signal. Fan-out
+multiplies that worst case by the number of endpoints, so the ordering was:
+take the send off the evaluation path, then add the list. The queue above is
+the first half, and the list is now unblocked. Until it exists,
+`docs/running.md` says plainly that one URL means the operator supplies a
+single reachable address, and names the upstream guidance, so the gap is a
+stated position rather than an omission.
 
 **What vmalert does, recorded so this is not researched twice.** Flags for the
 simple case and a file for discovery. Every notifier flag is an array aligned
