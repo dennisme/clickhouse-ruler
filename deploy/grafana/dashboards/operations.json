@@ -78,7 +78,7 @@
     },
     {
       "title": "Evaluation failures",
-      "description": "Evaluations that did not happen, per rule. A broken annotation is not one of these and has its own panel on the alert rules dashboard.",
+      "description": "Evaluations that did not happen, per rule, counted one per cluster the rule failed against. The rate beside it counts the same unit, so the two divide into a share: a rule matching four clusters with one down reads a quarter. A broken annotation is not one of these and has its own panel on the alert rules dashboard.",
       "type": "timeseries",
       "datasource": {
         "type": "prometheus",
@@ -233,7 +233,7 @@
     },
     {
       "title": "Notification latency",
-      "description": "Time spent posting a batch to Alertmanager. Latency climbing alongside send failures is Alertmanager, not the ruler.",
+      "description": "Time spent posting a batch Alertmanager accepted. A failed send is not in here: its duration is the retry policy giving up rather than anything Alertmanager did, so it would fire this panel for a delivery outage that send failures already reports. High here with failures at zero is Alertmanager accepting slowly; failures above zero is a delivery problem whatever this shows.",
       "type": "timeseries",
       "datasource": {
         "type": "prometheus",

@@ -170,6 +170,20 @@ where a metric name has to speak for itself. Carrying a Prometheus dashboard
 over already means rewriting the prefix, so this costs nothing that was free
 before.
 
+**One name diverges deliberately, and it is the evaluation pair.**
+`clickhouse_ruler_rule_evaluations_total` and
+`clickhouse_ruler_rule_evaluation_failures_total` count one evaluation of one
+rule against one cluster, where Prometheus counts one evaluation of one rule.
+The equivalence was never real: Prometheus has no source dimension, and here a
+rule's selector can match an estate, so a rule against four clusters is four
+queries, four alert states, four `for` timers and four independent ways to fail
+(6.10.1). Counted once per rule, the failure counter could exceed its own
+denominator, and the ratio this repository ships read 4.0 for a rule whose four
+clusters all failed, which is not a share of anything. A counter that counts
+what the ruler does beats a counter that reads the same as Prometheus' and
+lies. The single-source deployment is the common case and is unchanged by this:
+one cluster, one evaluation per tick, the same number either way.
+
 Go runtime and process collectors come from `client_golang` defaults.
 
 **What a rule group is called.** `rule_group` is the rule file's path relative
@@ -212,7 +226,9 @@ It is the single most important operational signal here, because alerts are
 then silently late.
 
 `clickhouse_ruler_rule_evaluation_failures_total` counts evaluations that did not happen,
-which is what the Prometheus metric it is named after counts. An annotation
+one per cluster the rule failed against, which is the unit
+`clickhouse_ruler_rule_evaluations_total` counts too so that the ratio of the
+two is a share (see the divergence above). An annotation
 that would not render is not one of those: the evaluation produced alerts and
 they were delivered, carrying a marker where the annotation should be and the
 template error in `ruler_error` beside it (6.5). It gets its own counter rather than a label on this one, because a label
@@ -253,7 +269,21 @@ series. It remains a count per rule, never a series per instance (8.3).
 
 `clickhouse_ruler_alerts_sent_total` counts alerts, not batches, so it reads the same way
 as the Prometheus metric it is named after. The latency histogram already
-carries a count per send, so there is no separate batch counter.
+carries a count per accepted send, so there is no separate batch counter:
+batches attempted is that count plus
+`clickhouse_ruler_alerts_send_failures_total`.
+
+**The histogram observes only sends Alertmanager accepted.** A failed send's
+duration is the retry ladder giving up, so it is a number the resend policy
+decides rather than one Alertmanager produced: four attempts at a ten second
+timeout plus backoff is forty seconds of "notification latency" that measures
+our own configuration. Folded in, it put a delivery outage into the p99 that
+the latency alert reads, and that alert's whole purpose is to separate
+Alertmanager being slow from Alertmanager being gone, which the failure counter
+beside it already reports. Labelling by outcome was the alternative and buys
+little: the failing population's shape is fixed by the retry policy, so it is a
+near-constant with two series and an extra matcher on every carried-over
+expression.
 `clickhouse_ruler_alerts_send_failures_total` counts a failed batch once however many
 alerts it held, because it delivered none of them.
 

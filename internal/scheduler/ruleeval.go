@@ -262,6 +262,11 @@ func NewRuleEval(r ruleset.Rule, queriers map[string]Querier, cadence *notify.Ca
 	}
 }
 
+// sources is how many evaluations one tick of this rule makes, one per cluster
+// its selector matched. It is the denominator the failure counter is read
+// against, so both have to count the same unit (spec 8.2).
+func (e *RuleEval) sources() int { return len(e.rule.Sources) }
+
 // attribution is what this rule's queries are recorded against: its group,
 // which names them in system.query_log, and its team, which their cost is
 // billed to (spec 8.5, 8.2).

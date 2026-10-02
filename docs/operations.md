@@ -53,9 +53,15 @@ sum by (rule_group, rule) (rate(clickhouse_ruler_rule_evaluation_failures_total[
 ```
 
 **Trouble above 10% for 10 minutes.** A failed evaluation did not happen at
-all, so the rule cannot fire while this is raised. Below that threshold it is
-usually one cluster in a set being briefly unreachable, which the next
-evaluation picks up.
+all, so the rule cannot fire for that cluster while this is raised. Below the
+threshold it is usually one cluster in a set being briefly unreachable, which
+the next evaluation picks up.
+
+Both halves count one evaluation of one rule against one cluster, so this is a
+share and nothing else: a rule matching four clusters where one is down reads
+0.25, and a single-source rule reads 0 or 1. That is a deliberate difference
+from a Prometheus ruler, which has no cluster to count per; counted once per
+rule, this expression could read 4.0 for a rule whose four clusters all failed.
 
 The counter does not say why. The log line `rule evaluation failed against a
 source` does, and it names the source and what the database replied.
@@ -193,8 +199,22 @@ histogram_quantile(0.99, sum by (le) (rate(clickhouse_ruler_notification_latency
 
 **Trouble above five seconds at p99.** Sending is in the evaluation path, so
 latency here becomes evaluation duration, and evaluation duration becomes the
-missed iterations above. Latency climbing alongside send failures is
-Alertmanager being overloaded rather than the ruler.
+missed iterations above.
+
+This measures sends Alertmanager accepted, and nothing else. A send that failed
+took as long as the retry policy says it takes, four attempts plus backoff, so
+counting it here would put your own `--resend-tolerance` arithmetic into a
+latency threshold and fire this alert for a delivery outage that
+[send failures](#send-failures) already reports. So read the two together: high
+here with failures at zero is Alertmanager accepting batches slowly, and
+failures above zero is a delivery problem whatever this says. Five seconds
+remains the threshold, and it means more than it used to: a batch that was
+accepted after five seconds is Alertmanager struggling rather than the ruler
+retrying.
+
+Batches attempted, if you want it, is
+`clickhouse_ruler_notification_latency_seconds_count` plus
+`clickhouse_ruler_alerts_send_failures_total`.
 
 ### A rule reading more than it should
 

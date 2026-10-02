@@ -176,6 +176,24 @@ series per rule.
 | `clickhouse_ruler_queries_in_flight` | gauge | none |
 | `clickhouse_ruler_build_info` | gauge | `version`, `revision`, `goversion` |
 
+`clickhouse_ruler_rule_evaluations_total` and
+`clickhouse_ruler_rule_evaluation_failures_total` count one evaluation of one
+rule against one cluster. A rule selects sources by label, so a rule matching
+four clusters makes four evaluations per tick, each with its own alert state and
+its own way to fail. This is the one metric here that means something different
+from the Prometheus ruler's metric of the same name, which has no cluster to
+count per, and it is what makes the failure ratio in
+[operations](operations.md#evaluation-failures) a share: counted once per rule, a
+rule whose four clusters all failed read 4.0. A single-source ruler reads the
+same number either way.
+
+`clickhouse_ruler_notification_latency_seconds` holds sends Alertmanager
+accepted. A send that failed took as long as `--resend-tolerance` and the retry
+backoff say, which is the ruler's own configuration rather than anything
+Alertmanager did, so it is counted by
+`clickhouse_ruler_alerts_send_failures_total` and left out of here. Batches
+attempted is this histogram's count plus that counter.
+
 The two problem gauges are the only metrics here not addressed to whoever
 operates the ruler, and the only ones worth reading by their labels rather than
 their value. `clickhouse_ruler_problem` is a rule that broke after it merged, so
