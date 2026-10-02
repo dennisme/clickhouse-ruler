@@ -207,6 +207,14 @@ func (r *runner) connect(ctx context.Context, cfg *config) error {
 
 	r.metrics.ConfigLastReloadSuccessful.Set(1)
 	r.metrics.ConfigLastReloadTimestamp.Set(float64(r.clock.Now().Unix()))
+
+	// One series, naming the configuration now running. Reset rather than
+	// added to, because a second revision on one ruler would read as two
+	// configurations evaluating at once (spec 8.2). A refused reload never
+	// reaches here, which is the same thing the timestamp gauge above says:
+	// both describe what is running rather than the last attempt.
+	r.metrics.ConfigInfo.Reset()
+	r.metrics.ConfigInfo.WithLabelValues(cfg.set.Revision, cfg.set.Dir).Set(1)
 	return nil
 }
 

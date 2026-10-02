@@ -43,6 +43,7 @@ type Metrics struct {
 
 	ConfigLastReloadSuccessful prometheus.Gauge
 	ConfigLastReloadTimestamp  prometheus.Gauge
+	ConfigInfo                 *prometheus.GaugeVec
 
 	QueryReadRowsTotal  *prometheus.CounterVec
 	QueryReadBytesTotal *prometheus.CounterVec
@@ -237,6 +238,29 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 			Name: "clickhouse_ruler_config_last_reload_timestamp_seconds",
 			Help: "Unix timestamp of the load that produced the configuration this ruler is evaluating.",
 		}),
+
+		// Which configuration is running, the shape build_info already uses:
+		// always 1, one series, the labels are the whole payload. The pair of
+		// questions during a rollout is which binary each replica runs and
+		// which rules each replica loaded, and the second had no answer
+		// (spec 8.2).
+		//
+		// `revision` is a hash of the files the ruler read rather than a
+		// commit, because the ruler fetches nothing and nothing hands it a
+		// sha. It is also the stronger answer to whether a fleet agrees: two
+		// replicas on one commit whose volumes disagree carry the same sha and
+		// different rules.
+		//
+		// `rules_root` is the resolved root they were read from, which is where
+		// a commit rides along when a deployment named one: under git-sync the
+		// root is a worktree named after the commit (spec 10.2), so the sha is
+		// on the metric without the ruler claiming to know that is what it is.
+		// A label here rather than a dimension of every series, because it
+		// changes on every sync whether the rules did or not.
+		ConfigInfo: f.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "clickhouse_ruler_config_info",
+			Help: "Always 1. The revision of the rules this ruler is evaluating and the root they were read from, as labels.",
+		}, []string{"revision", "rules_root"}),
 
 		// What a rule costs the cluster, read from the driver's callbacks
 		// during the query rather than from system.query_log afterwards

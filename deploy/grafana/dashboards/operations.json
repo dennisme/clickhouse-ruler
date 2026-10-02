@@ -493,11 +493,27 @@
       ]
     },
     {
+      "title": "Running configuration",
+      "description": "Always 1, one series per configuration version, and it is here for its labels. `revision` is a hash of the rule files and team policy files the ruler loaded, which is the only revision it can state: it fetches nothing, so nothing hands it a commit. Two series at once across a fleet is two rulers evaluating different rules, whatever either of them was told the commit was. `rules_root` is the resolved root the files were read from, which is the worktree under git-sync, so the commit rides along without the ruler claiming to know that is what it is (spec 8.2, 10.2).",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 6, "w": 24, "x": 0, "y": 65 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "clickhouse_ruler_config_info",
+          "legendFormat": "{{revision}} {{rules_root}}"
+        }
+      ]
+    },
+    {
       "title": "Build",
       "description": "Always 1, one series per build, and it is here for its labels: which version, commit and Go version each replica is running. Two series at once is a rollout in progress or a rollout that only half landed, which is the reading that explains two rulers behaving differently from the same files. `dev` is a binary built outside a release (spec 8.2).",
       "type": "timeseries",
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
-      "gridPos": { "h": 6, "w": 24, "x": 0, "y": 65 },
+      "gridPos": { "h": 6, "w": 24, "x": 0, "y": 71 },
       "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
       "targets": [
         {

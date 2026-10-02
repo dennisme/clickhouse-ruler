@@ -161,6 +161,7 @@ series per rule.
 | `clickhouse_ruler_source_problem` | gauge | `source`, `check`, `severity`, `file` |
 | `clickhouse_ruler_config_last_reload_successful` | gauge | none |
 | `clickhouse_ruler_config_last_reload_timestamp_seconds` | gauge | none |
+| `clickhouse_ruler_config_info` | gauge | `revision`, `rules_root` |
 | `clickhouse_ruler_query_read_rows_total` | counter | `rule`, `team`, `source` |
 | `clickhouse_ruler_query_read_bytes_total` | counter | `rule`, `team`, `source` |
 | `clickhouse_ruler_query_memory_usage_bytes` | histogram | `rule` |
@@ -197,6 +198,24 @@ reload the ruler refused holds it at 0 until one succeeds;
 load that succeeded, so it dates the configuration actually being evaluated.
 [Operating the ruler](operations.md) has what a reload refuses and what survives
 one.
+
+`clickhouse_ruler_config_info` names the configuration itself, and is always 1
+for its labels the way `clickhouse_ruler_build_info` is: that one says which
+binary a replica runs, this one says which rules it loaded. `revision` is a hash
+over the rule files and team policy files read from the rules root, each with its
+path in the tree and its contents, truncated to twelve hex characters. It is a
+hash and not a commit because the ruler fetches nothing, so nothing hands it a
+sha, and because the hash is the better answer to whether a fleet agrees:
+`count by (revision) (clickhouse_ruler_config_info)` reads 1 when every replica
+is evaluating the same files, whatever each of them was told the commit was.
+`rules_root` is the resolved root they came from, which is where a commit rides
+along when a deployment named one.
+
+The `rule_group` label, and the `file` label on `clickhouse_ruler_problem`, name
+a rule by its path inside the rules tree: `payments/checkout.yaml:checkout`. Not
+by where the tree is mounted, because a deployment publishes a revision by
+pointing a symlink at a directory named after the commit, and an identity built
+from that path would rename every series on every merge.
 
 The four query cost metrics come from the ClickHouse driver's own callbacks
 as the query runs, so they cost no extra query and do not depend on how long
