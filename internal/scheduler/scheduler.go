@@ -32,9 +32,8 @@ type Scheduler struct {
 	concurrency int
 	resend      Resend
 
-	// recheckInterval is how often the re-check pass runs, zero when an
-	// operator did not ask for it. The pass reads real data, so nothing runs
-	// on a ruler that never configured it (spec 10.4).
+	// recheckInterval is how often the re-check pass runs, an hour unless an
+	// operator said otherwise and zero when they turned it off (spec 10.4).
 	recheckInterval time.Duration
 
 	// mu guards the loaded configuration and the goroutines running it, so a

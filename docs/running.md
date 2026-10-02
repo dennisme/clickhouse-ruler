@@ -233,6 +233,20 @@ load that succeeded, so it dates the configuration actually being evaluated.
 [Operating the ruler](operations.md) has what a reload refuses and what survives
 one.
 
+**The re-check pass is on by default, and what it costs is arithmetic you can
+do.** One bounded query per rule per matched source per interval: 800 rules each
+matching four clusters is 3,200 queries an hour, roughly one a second, sharing
+`--query-concurrency` with evaluation so it cannot outrun the cap your rules
+already run under. Each one reads recent data for the map keys a rule uses and
+nothing else.
+
+It ships on because it is the only thing that sees a renamed OTel map key: a
+query that still parses, still returns its columns, still succeeds on every tick
+and matches nothing for ever. Off, it would be a check that does not exist on
+every ruler whose operator never read this page. `--recheck-interval=0` turns it
+off, and a longer interval is the answer if the reads are too many rather than
+turning it off entirely.
+
 The three re-check metrics are about the pass `--recheck-interval` runs, and they
 exist because it is the one feed whose silence reads as good news: a renamed map
 key is only ever found by sampling recent data, so a pass that stopped running
