@@ -10,17 +10,6 @@ the item being fixed.
 
 ## Bugs
 
-### 2. `rate(failures)/rate(evaluations)` can exceed 1
-
-`internal/scheduler/scheduler.go:489` increments `EvaluationsTotal` once per rule
-per tick, then `:491` adds `len(res.SourceErrors)` to `EvaluationFailuresTotal`. A rule
-matching four sources that all fail records 4 failures against 1 evaluation.
-
-`docs/operations.md:51` ships exactly that ratio with `> 0.1`, read as "10% of
-evaluations failing". For a four-source rule, one bad cluster reads 1.0 rather
-than 0.25. Either count the denominator per source-evaluation, or drop the ratio
-for a plain failure rate.
-
 ### 5. mTLS to ClickHouse is documented and does not exist
 
 Three places say a source with no credentials covers mTLS:
@@ -114,13 +103,6 @@ without ever overrunning an interval reads healthy.
 Spec 8.4 declines it until somebody asks. Asking: structured `slog` output in
 text form means every Kubernetes log pipeline re-parses it. One handler swap.
 
-### The notification latency histogram includes failed sends
-
-`internal/scheduler/sender.go:24` observes before the error check, so a 42s retry
-storm lands in the p99 that the `> 5s` alert at `docs/operations.md:191` reads.
-A reachability problem then fires the latency alert as well. Either skip the
-observation on error, or label it by outcome.
-
 ### No reload attempt counter
 
 `config_last_reload_successful` is a gauge, so a reload that failed and then
@@ -160,6 +142,37 @@ on `--format`. Workable and documented, but a lot of rules for one command.
 
 Original numbering and original text kept, so a reference written before the
 fix still points at the right item.
+
+### 2. `rate(failures)/rate(evaluations)` can exceed 1
+
+**Closed.** Both counters now count one evaluation of one rule against one
+cluster, so the ratio is a share: a rule matching four clusters with one down
+reads 0.25. Recorded in spec 8.2 as a deliberate divergence from the Prometheus
+metric of the same name, which has no cluster to count per. A single-source
+ruler reads the same number either way.
+
+`internal/scheduler/scheduler.go:489` increments `EvaluationsTotal` once per rule
+per tick, then `:491` adds `len(res.SourceErrors)` to `EvaluationFailuresTotal`. A rule
+matching four sources that all fail records 4 failures against 1 evaluation.
+
+`docs/operations.md:51` ships exactly that ratio with `> 0.1`, read as "10% of
+evaluations failing". For a four-source rule, one bad cluster reads 1.0 rather
+than 0.25. Either count the denominator per source-evaluation, or drop the ratio
+for a plain failure rate.
+
+### The notification latency histogram includes failed sends
+
+**Closed.** The histogram observes only sends Alertmanager accepted. Labelling
+by outcome was the alternative and buys little: the failing population's shape
+is fixed by the retry policy, so it is a near-constant plus an extra matcher on
+every expression. Batches attempted is the histogram's count plus
+`clickhouse_ruler_alerts_send_failures_total`, which spec 8.2 and the docs now
+say.
+
+`internal/scheduler/sender.go:24` observes before the error check, so a 42s retry
+storm lands in the p99 that the `> 5s` alert at `docs/operations.md:191` reads.
+A reachability problem then fires the latency alert as well. Either skip the
+observation on error, or label it by outcome.
 
 ### 3. The readiness probe blocks for the whole reload
 
@@ -260,13 +273,12 @@ past CI is running anyway.
 
 ## Order to fix
 
-1. Bug 2 and the notification latency histogram. Both small, both make an
-   expression this repository ships in `docs/operations.md` read wrong, which is
-   worse than a missing metric: an operator trusts the number.
-2. The re-check pass default. One of the flag default and the comment beside it
+1. The re-check pass default. One of the flag default and the comment beside it
    is wrong, and the consent posture everywhere else says the default should be
    off.
-3. Bug 5. Decide whether TLS to ClickHouse is a feature or the three comments
+2. Bug 5. Decide whether TLS to ClickHouse is a feature or the three comments
    are wrong, and correct the comments either way in the meantime.
-4. The two spec'd cadence metrics. Without the interval gauge every cadence
+3. The two spec'd cadence metrics. Without the interval gauge every cadence
    expression hardcodes a number the rule file is free to change.
+4. The Alertmanager items, in the order spec 6.5 sets: take the send off the
+   evaluation path, then the list of endpoints.
