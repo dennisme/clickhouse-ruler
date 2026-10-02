@@ -13,13 +13,20 @@ import (
 	"github.com/dennisme/clickhouse-ruler/internal/ruleset"
 )
 
-// DefaultRecheckInterval is how often the re-check pass runs when an operator
-// asks for it without saying how often.
+// DefaultRecheckInterval is how often the re-check pass runs on a ruler whose
+// operator said nothing about it, which is to say the pass ships on.
 //
 // An hour, because the pass reads real data: one bounded query per rule per
 // source, which is affordable hourly and absurd every minute. How often a schema
 // moves is a property of the organisation rather than something derivable, so
 // this is a default and not a rule (spec 10.4).
+//
+// On rather than off, because this pass is the only thing that sees a renamed
+// map key: a query that still parses, still returns its columns, still succeeds
+// on every tick and matches nothing for ever. Shipped off it would be a check
+// that does not exist on any ruler nobody configured, and the reads it is
+// consented to are reads this ruler already makes against the same tables on
+// every tick (spec 10.4).
 const DefaultRecheckInterval = time.Hour
 
 // The two feeds into clickhouse_ruler_problem, as the log says which one found a

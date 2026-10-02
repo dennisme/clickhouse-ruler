@@ -67,17 +67,6 @@ Either bound the send by the group interval, or say this next to the missed
 iterations expression in `docs/operations.md`. Spec 6.5 makes this a blocker for
 a list of Alertmanagers rather than a standalone annoyance.
 
-### The re-check pass reads production rows by default
-
-`--recheck-interval` defaults to `1h` (`cmd/ruler/run.go:54`,
-`spec/operations.md:1992`), but `internal/scheduler/scheduler.go:35` says "zero
-when an operator did not ask for it. The pass reads real data, so nothing runs on
-a ruler that never configured it."
-
-One of those is wrong. The consent posture everywhere else, where `-sample` and
-`-backfill` are opt-in per spec 7.3, argues the default should be off. At
-minimum, fix the comment.
-
 ### Flags need a restart and the docs do not say it
 
 `SIGHUP` re-reads three files. `--alertmanager`, `--query-concurrency`,
@@ -142,6 +131,27 @@ on `--format`. Workable and documented, but a lot of rules for one command.
 
 Original numbering and original text kept, so a reference written before the
 fix still points at the right item.
+
+### The re-check pass reads production rows by default
+
+**Closed by deciding it stays on.** The reads it was measured against are reads
+this ruler already makes on every tick, and 7.3's consent posture is about
+`ruler check` on somebody's laptop rather than a running daemon. What was
+actually wrong was the documentation: the comment in `internal/scheduler` claimed
+nothing runs unless configured, the constant was documented as the value used
+"when an operator asks", and spec 10.4 said an hour by default and in the same
+sentence that it must not start unless asked. All three now say the same thing,
+`docs/running.md` carries the cost arithmetic, and a test pins the wired
+default.
+
+`--recheck-interval` defaults to `1h` (`cmd/ruler/run.go:54`,
+`spec/operations.md:1992`), but `internal/scheduler/scheduler.go:35` says "zero
+when an operator did not ask for it. The pass reads real data, so nothing runs on
+a ruler that never configured it."
+
+One of those is wrong. The consent posture everywhere else, where `-sample` and
+`-backfill` are opt-in per spec 7.3, argues the default should be off. At
+minimum, fix the comment.
 
 ### 2. `rate(failures)/rate(evaluations)` can exceed 1
 
@@ -273,12 +283,12 @@ past CI is running anyway.
 
 ## Order to fix
 
-1. The re-check pass default. One of the flag default and the comment beside it
-   is wrong, and the consent posture everywhere else says the default should be
-   off.
-2. Bug 5. Decide whether TLS to ClickHouse is a feature or the three comments
+1. Bug 5. Decide whether TLS to ClickHouse is a feature or the three comments
    are wrong, and correct the comments either way in the meantime.
-3. The two spec'd cadence metrics. Without the interval gauge every cadence
+2. The two spec'd cadence metrics. Without the interval gauge every cadence
    expression hardcodes a number the rule file is free to change.
-4. The Alertmanager items, in the order spec 6.5 sets: take the send off the
+3. The Alertmanager items, in the order spec 6.5 sets: take the send off the
    evaluation path, then the list of endpoints.
+4. The consumer toil, starting with what a rule can template: the gap between
+   "a rule names no cluster" and `FROM otel.otel_traces` is the one an author
+   meets first.
