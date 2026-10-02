@@ -18,17 +18,34 @@ import (
 // needs an older server reachable has a server to fix.
 const tlsMinVersion = uint16(tls.VersionTLS12)
 
-// TLS is a source's transport security: the material, not the driver's
-// configuration.
+// TLS is a source's transport security.
 //
-// The PEM bytes rather than a built tls.Config, because a reload reuses a
-// connection only when the source it was opened with is reflect.DeepEqual to
-// the one just read (cmd/ruler/reload.go). A tls.Config carries a
-// x509.CertPool, which holds a closure per certificate, and two closures are
-// never equal: every reload would reopen every source that configured TLS, and
-// a rotated certificate would be indistinguishable from an unchanged one.
-// Bytes compare, so an unchanged file keeps its connection and a rotated one
-// replaces it.
+// The two halves are held differently, because they rotate differently.
+//
+// The CA is the bytes that were read, because a reload reuses a connection
+// only when the source it was opened with is reflect.DeepEqual to the one just
+// read (cmd/ruler/reload.go), and replacing a CA is the one TLS change that
+// has to reopen the connection: crypto/tls takes its roots as a built pool and
+// offers no callback for them. Bytes compare, so a replaced bundle reopens the
+// connection and an unchanged one keeps it. A built tls.Config could not do
+// this job: its x509.CertPool holds a closure per certificate and two closures
+// are never equal, so every reload would reopen every source that configured
+// TLS.
+//
+// The client pair is the two paths, read at each handshake. A certificate
+// manager rotates that pair on its own schedule and expects nothing to be
+// signalled, and the pair is the half crypto/tls does offer a callback for.
+// Holding the bytes instead would present the old certificate until somebody
+// reloaded, and once it expired the source would stop evaluating within the
+// hour clickhouse-go keeps a connection for. Keeping the paths also means the
+// private key is never held by this process between handshakes.
+//
+// Which is the split opentelemetry-collector's configtls arrives at from the
+// other direction: its reload_interval re-reads the certificate and the key
+// behind a GetCertificate callback and leaves the CA alone (configtls.go,
+// certReloader). The difference is the timer. The handshake is the moment the
+// material is needed, so reading it there needs no interval to be chosen and
+// no cache to go stale.
 type TLS struct {
 	// CA is the PEM bundle the server is verified against. Empty means the
 	// host's trust store, and a bundle here replaces it rather than adding to
@@ -36,8 +53,9 @@ type TLS struct {
 	// cluster it signed.
 	CA []byte
 
-	// Cert and Key are the client pair ClickHouse authenticates for mTLS.
-	Cert, Key []byte
+	// CertFile and KeyFile are the client pair ClickHouse authenticates for
+	// mTLS, read at the handshake rather than kept.
+	CertFile, KeyFile string
 
 	// ServerName is the name verified in the server's certificate. Empty
 	// leaves crypto/tls verifying the host in Address, which is the name on
@@ -47,22 +65,11 @@ type TLS struct {
 	InsecureSkipVerify bool
 }
 
-// String redacts the private key so that printing a TLS with %v or %s cannot
-// put it in a log.
-func (t *TLS) String() string {
-	material := "server verification only"
-	if len(t.Cert) > 0 {
-		material = "client certificate, key xxxxx"
-	}
-	return "tls (" + material + ")"
-}
-
 // Config is what the driver connects with.
 //
-// Built per connection rather than kept, for the reason above. The error is
-// what parsing already reported as a finding: a source that failed its checks
-// is a source whose material is wrong, and this is the second place that would
-// discover it.
+// Built per connection rather than kept. The error is what parsing already
+// reported as a finding: a source that failed its checks is a source whose
+// material is wrong, and this is the second place that would discover it.
 func (t *TLS) Config() (*tls.Config, error) {
 	cfg := &tls.Config{
 		MinVersion: tlsMinVersion,
@@ -80,15 +87,29 @@ func (t *TLS) Config() (*tls.Config, error) {
 		cfg.RootCAs = pool
 	}
 
-	if len(t.Cert) > 0 {
-		pair, err := tls.X509KeyPair(t.Cert, t.Key)
-		if err != nil {
-			return nil, fmt.Errorf("loading the client certificate: %w", err)
-		}
-		cfg.Certificates = []tls.Certificate{pair}
+	if t.CertFile != "" {
+		cfg.GetClientCertificate = t.clientCertificate
 	}
 
 	return cfg, nil
+}
+
+// clientCertificate reads the pair at each handshake, which is what makes a
+// rotation on disk reach the cluster with nothing signalled.
+//
+// Not cached. A handshake happens when the driver opens a connection and when
+// it replaces one it has held for its connection lifetime, which is an hour by
+// default, so two file reads per handshake cost nothing worth a cache that
+// could serve a certificate that has since expired.
+func (t *TLS) clientCertificate(*tls.CertificateRequestInfo) (*tls.Certificate, error) {
+	pair, err := tls.LoadX509KeyPair(t.CertFile, t.KeyFile)
+	if err != nil {
+		// Named, because this is reported at a handshake rather than against
+		// the line of a file, and the paths are the only thing an operator has
+		// to go on. Neither error from crypto/tls echoes key material.
+		return nil, fmt.Errorf("reading cert_file %q with key_file %q: %w", t.CertFile, t.KeyFile, err)
+	}
+	return &pair, nil
 }
 
 // tlsRef is what a source said about transport security.
@@ -207,16 +228,18 @@ func (s Source) readClientCertificate(r *lint.Reader, material *TLS, ref tlsRef)
 		return
 	}
 
-	// The pair is parsed here and the bytes are kept, so half a rotation is a
-	// finding rather than a handshake failure. The reason crypto/tls gives
-	// names neither file, so the finding names both: which of the two is
-	// stale is the question an operator has.
+	// Parsed here and then discarded: the paths are what the handshake reads,
+	// so this is a check rather than a load. It is worth doing anyway, because
+	// half a rotation is otherwise a handshake failure at an arbitrary hour
+	// rather than a finding in front of whoever changed the file. The reason
+	// crypto/tls gives names neither file, so the finding names both: which of
+	// the two is stale is the question an operator has.
 	if _, err := tls.X509KeyPair(cert, key); err != nil {
 		r.Add(line, lint.CheckSourceTLS, lint.SeverityError,
 			"cert_file %q and key_file %q are not a pair: %s", ref.certFile, ref.keyFile, err)
 		return
 	}
-	material.Cert, material.Key = cert, key
+	material.CertFile, material.KeyFile = ref.certFile, ref.keyFile
 }
 
 // readMaterial reads one PEM file, reporting what password_file reports for

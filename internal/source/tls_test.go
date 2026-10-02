@@ -1,9 +1,11 @@
 package source
 
 import (
+	"bytes"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
@@ -185,8 +187,84 @@ func TestClientCertificateWithNoPasswordIsLegal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("building the driver's configuration: %v", err)
 	}
-	if len(cfg.Certificates) != 1 {
-		t.Fatalf("got %d client certificates, want 1", len(cfg.Certificates))
+	if cfg.GetClientCertificate == nil {
+		t.Fatal("no client certificate callback, so ClickHouse is offered nothing")
+	}
+
+	pair, err := cfg.GetClientCertificate(&tls.CertificateRequestInfo{})
+	if err != nil {
+		t.Fatalf("loading the client certificate: %v", err)
+	}
+	if len(pair.Certificate) == 0 {
+		t.Error("the callback returned no certificate")
+	}
+}
+
+// The pair is read at the handshake rather than held, so a certificate manager
+// rotating it on disk reaches the cluster on the driver's next reconnect with
+// no operator action. Without this the old pair is presented until a reload,
+// and once it expires the source stops evaluating about an hour later, which
+// is how long clickhouse-go keeps a connection (spec 6.2).
+func TestARotatedClientPairIsReadAtTheHandshake(t *testing.T) {
+	dir := t.TempDir()
+	certFile, keyFile := writeCertAndKey(t, dir)
+	body := fmt.Sprintf("    tls_config:\n      cert_file: %s\n      key_file: %s\n", certFile, keyFile)
+
+	f, problems := parseSourceYAML(t, body)
+	if len(problems) != 0 {
+		t.Fatalf("expected no problems, got %v", problems)
+	}
+	cfg, err := f.Sources[0].TLS.Config()
+	if err != nil {
+		t.Fatalf("building the driver's configuration: %v", err)
+	}
+
+	before, err := cfg.GetClientCertificate(&tls.CertificateRequestInfo{})
+	if err != nil {
+		t.Fatalf("loading the client certificate: %v", err)
+	}
+
+	// Same paths, new material, which is what a projected secret volume does.
+	writeCertAndKey(t, dir)
+
+	after, err := cfg.GetClientCertificate(&tls.CertificateRequestInfo{})
+	if err != nil {
+		t.Fatalf("loading the rotated client certificate: %v", err)
+	}
+	if bytes.Equal(before.Certificate[0], after.Certificate[0]) {
+		t.Error("the handshake kept the old pair, so rotation needs a reload")
+	}
+
+	// And nothing had to reopen the connection to get there: the paths did not
+	// change, so a reload sees the same source it opened.
+	second, _ := parseSourceYAML(t, body)
+	if !reflect.DeepEqual(f.Sources[0].TLS, second.Sources[0].TLS) {
+		t.Error("a rotated pair compares unequal, so every rotation reopens the connection")
+	}
+}
+
+// A pair that went missing after the file was parsed can only be reported at
+// the handshake, and the driver is what surfaces it.
+func TestAVanishedClientPairFailsTheHandshake(t *testing.T) {
+	dir := t.TempDir()
+	certFile, keyFile := writeCertAndKey(t, dir)
+
+	f, _ := parseSourceYAML(t, fmt.Sprintf(
+		"    tls_config:\n      cert_file: %s\n      key_file: %s\n", certFile, keyFile))
+	cfg, err := f.Sources[0].TLS.Config()
+	if err != nil {
+		t.Fatalf("building the driver's configuration: %v", err)
+	}
+	if err := os.Remove(certFile); err != nil {
+		t.Fatalf("removing the certificate: %v", err)
+	}
+
+	_, err = cfg.GetClientCertificate(&tls.CertificateRequestInfo{})
+	if err == nil {
+		t.Fatal("a missing certificate completed the handshake")
+	}
+	if !strings.Contains(err.Error(), certFile) {
+		t.Errorf("the error does not name the file: %v", err)
 	}
 }
 
@@ -353,17 +431,17 @@ func TestTLSMinimumVersion(t *testing.T) {
 	}
 }
 
-// The key is secret material, so printing a source's TLS must not put it in a
-// log, the same posture Source.String takes with the password.
-func TestTLSStringRedactsTheKey(t *testing.T) {
+// The private key is never held, which is a stronger statement than redacting
+// it: reading it at the handshake means nothing printed from a Source can
+// contain it, whatever it is printed with.
+func TestThePrivateKeyIsNeverHeld(t *testing.T) {
 	dir := t.TempDir()
 	certFile, keyFile := writeCertAndKey(t, dir)
 
 	f, _ := parseSourceYAML(t, fmt.Sprintf(
 		"    tls_config:\n      cert_file: %s\n      key_file: %s\n", certFile, keyFile))
 
-	printed := fmt.Sprintf("%v", f.Sources[0].TLS)
-	if strings.Contains(printed, "PRIVATE KEY") {
+	if printed := fmt.Sprintf("%#v", f.Sources[0].TLS); strings.Contains(printed, "PRIVATE KEY") {
 		t.Errorf("the key reached the printed form: %q", printed)
 	}
 }
@@ -407,18 +485,19 @@ func TestTwoReadingsOfTheSameFileAreEqual(t *testing.T) {
 	}
 }
 
-// And a rotated certificate has to compare unequal, which is what makes the
-// reload pick it up.
-func TestARotatedCertificateIsNotEqual(t *testing.T) {
+// A replaced CA has to compare unequal, because a reload is the only thing
+// that picks one up: crypto/tls has no callback for the roots, so the
+// connection has to be reopened against a new pool.
+func TestAReplacedCAIsNotEqual(t *testing.T) {
 	dir := t.TempDir()
-	certFile, keyFile := writeCertAndKey(t, dir)
-	body := fmt.Sprintf("    tls_config:\n      cert_file: %s\n      key_file: %s\n", certFile, keyFile)
+	caFile, _ := writeCertAndKey(t, dir)
+	body := fmt.Sprintf("    tls_config:\n      ca_file: %s\n", caFile)
 
 	before, _ := parseSourceYAML(t, body)
 	writeCertAndKey(t, dir)
 	after, _ := parseSourceYAML(t, body)
 
 	if reflect.DeepEqual(before.Sources[0].TLS, after.Sources[0].TLS) {
-		t.Error("a rotated pair compares equal, so a reload would keep using the old one")
+		t.Error("a replaced CA compares equal, so a reload would keep the old pool")
 	}
 }

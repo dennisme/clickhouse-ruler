@@ -201,6 +201,11 @@ like a cluster refusing a credential it was never offered.
 host is not the name on the certificate: an IP address, or a tunnel. A client
 certificate with no password at all is a legal source, which is what mTLS is.
 
+The pair is read again at each handshake, so rotating it on disk needs no
+reload. A replaced `ca_file` does need one. Both are checked here when the file
+is read, which is what catches half a rotation: a certificate and a key that are
+not a pair is a finding rather than a handshake failure at an arbitrary hour.
+
 <a id="source-tls-insecure"></a>
 
 ### source/tls-insecure

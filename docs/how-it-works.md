@@ -95,12 +95,12 @@ into the sources file is a key in a git history. A path that is wrong fails
 entry for `source/tls-insecure` with a reason and a date. Giving the ruler the
 self-signed certificate as `ca_file` is the fix that needs no exemption.
 
-**A rotated certificate needs a reload.** An open connection holds the
-material that was read when the sources file was read, so a new certificate on
-disk reaches the cluster on the next `SIGHUP` or `POST /-/reload`, which
-reopens every source whose definition changed. There is no refresh interval:
-rotation here works the way `password_file` rotation already does, and a
-certificate manager that replaces a secret signals the process.
+**A rotated client certificate needs nothing.** `cert_file` and `key_file` are
+read at each TLS handshake rather than held, so a certificate manager that
+writes a new pair over the same paths is picked up on the driver's next
+connection. A replaced `ca_file` does need a reload, because the roots cannot be
+re-read in place, and so does a replaced `password_file`. See
+[rotating a credential or a certificate](operations.md#rotating-a-credential-or-a-certificate).
 
 **Rules** are author owned. A rule names no source; it carries a `sources`
 selector over source labels, and runs against every source that matches. One
