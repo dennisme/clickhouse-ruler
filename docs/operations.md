@@ -543,6 +543,56 @@ the rules this ruler is evaluating" rather than "when did somebody last try".
 On a ruler nobody reloads it climbs from the moment it started, which is
 correct and not worth alerting on by itself.
 
+### The re-check pass stopped running
+
+```promql
+time() - clickhouse_ruler_recheck_last_completion_timestamp_seconds
+  > 3 * 3600
+```
+
+**Trouble, and it is the quietest kind.** The pass behind
+[`rule/attribute-key`](checks/rule.md#rule-attribute-key) is the only thing that
+catches a renamed OTel map key: a query that still parses, still returns the
+columns it always did, still succeeds on every tick, and matches nothing forever.
+Nothing else can see it, so a pass that stopped reports no findings and reads
+exactly like an estate where nobody renamed anything.
+
+Substitute your own `--recheck-interval` for the hour above. Three of them is a
+threshold, not a law: one skipped pass is a slow cluster, three is something that
+is not coming back on its own.
+
+Read it against what the last pass cost:
+
+```promql
+clickhouse_ruler_recheck_last_duration_seconds
+```
+
+The pass asks its rules one at a time, so this grows with the rule file while the
+interval does not. A duration approaching the interval is the warning before the
+first dropped pass, and the answer is a longer `--recheck-interval` rather than
+anything about a rule. Both series are empty on a ruler started with
+`--recheck-interval=0`, which turns the pass off.
+
+### A cluster the re-check could not sample
+
+```promql
+sum by (source) (rate(clickhouse_ruler_recheck_sample_failures_total[5m])) > 0
+```
+
+**Yours to fix, and nothing about a rule is broken.** The pass asked a cluster
+for a sample and the cluster would not answer. The log line beside it carries the
+database's own reply with credentials removed, which is usually the same cause as
+an evaluation failure against that source: a grant, a cap, or a cluster that is
+down.
+
+What it costs is the part worth knowing. `rule/attribute-key` keeps its previous
+answer for that cluster rather than being re-asked, which is deliberate: the ruler
+could not ask, so claiming a key is fine would be a lie and clearing the finding
+would read as somebody having fixed it. The consequence is that a key renamed
+while this is non-zero goes unreported until the cluster answers again. Both of
+these are on *clickhouse-ruler / operations*, as *Re-check pass* and *Clusters the
+re-check could not sample*.
+
 ## If the rule is yours
 
 Most of this page is for whoever runs the ruler. Two of the signals above are
@@ -598,6 +648,8 @@ about what they typed.
 | warn | `shutdown timeout expired with evaluations still running` | A query or a send was cut off part way through. This is the only signal that says so. If it happens on every restart, raise `--shutdown-timeout` above your slowest evaluation. |
 | warn | `a rule broke while running` | Not an operator's problem to fix. `team` and `file` say whose rule it is and where, `source` says which cluster it was found against, `check` names the page explaining it, `feed` says which clock found it, and `problem` says what changed. On [`annotations/template`](checks/rule.md#annotations-template) it also carries `error`, the template error itself, which is on the alert as well and nowhere else: the alert was delivered with `<ruler: annotation "NAME" failed...>` where that annotation should be, so somebody is reading a marker on their page. One line per broken template, however many rows the rule returned. The rule is still evaluating and still paging. Warned rather than errored however severe the finding is, because nothing about the ruler is failing. |
 | warn | `refusing a source that failed the user contract` | Deliberate, see below. |
+| warn | `rule loaded with a finding that should have blocked the merge` | Not an operator's problem to fix, and the one line that says a review did not happen: this file would have been blocked in CI and merged anyway, so it is running with nobody told. `team` and `file` say whose and where, `check` names the page, `feed` reads `load`. The two expensive ones are a rule missing a time bound and a rule setting its own `SETTINGS`. |
+| warn | `the re-check pass could not sample a cluster` | Yours. The cluster would not answer the pass, and `error` is the database's own reply with credentials removed. Nothing about a rule is broken: [`rule/attribute-key`](checks/rule.md#rule-attribute-key) simply keeps its previous answer for that cluster rather than being re-asked, so a map key renamed while this is happening goes unreported. `clickhouse_ruler_recheck_sample_failures_total` counts it. |
 | info | `reloading` / `reloaded` | Nothing. A `SIGHUP` or a `POST /-/reload` arrived and the files were re-read. `reloaded` carries the `rules` and `sources` count now running, which is the pair to compare against the `ruler running` line. |
 | error | `refusing the reload, the previous configuration keeps running` | Read `reason`, then the findings on stderr. The ruler is still evaluating the rules it had before the signal. Nothing is degraded and nothing was applied. |
 

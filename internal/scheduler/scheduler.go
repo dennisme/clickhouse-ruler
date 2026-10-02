@@ -318,6 +318,12 @@ func (s *Scheduler) build(set *ruleset.Set, queriers map[string]Querier, prev ma
 //
 // Staggered like a group, and by the same function, so a fleet of rulers sharing
 // an interval do not all read rows on the same minute.
+//
+// The pass reports its own run here rather than where it is started, which is
+// where a group's reporting is wired. A group reports what one tick of it cost
+// and the ruler has many of them, so that belongs to starting them; this is one
+// pass per ruler and saying it ran is part of what the pass is, so nothing that
+// evaluates it can leave the reporting out.
 func (s *Scheduler) recheckSpec(
 	rules []recheckRule,
 	queriers map[string]Querier,
@@ -327,11 +333,25 @@ func (s *Scheduler) recheckSpec(
 	if s.recheckInterval <= 0 || len(rules) == 0 {
 		return nil
 	}
+
+	pass := recheckPass(rules, queriers, limits, s.metrics, s.log)
 	return &GroupSpec{
 		Name:     "recheck",
 		Interval: s.recheckInterval,
 		Start:    now.Add(staggerOffset("recheck", s.recheckInterval)),
-		Eval:     recheckPass(rules, queriers, limits, s.metrics, s.log),
+		Eval: func(ctx context.Context, tickAt time.Time) {
+			start := s.clock.Now()
+			pass(ctx, tickAt)
+			done := s.clock.Now()
+
+			// Stamped with when the pass finished rather than with the tick it
+			// was woken by, because the reading is `time() - this`, held against
+			// the interval: a pass that takes most of an hour has not gone quiet
+			// and a pass that started and never returned has, and the tick time
+			// cannot tell them apart.
+			s.metrics.RecheckLastDuration.Set(done.Sub(start).Seconds())
+			s.metrics.RecheckLastCompletion.Set(float64(done.Unix()))
+		},
 	}
 }
 

@@ -89,9 +89,10 @@ func TestQueryDurationKeepsOneSeriesPerSource(t *testing.T) {
 	}
 }
 
-// A source that left the configuration takes its cost series with it, or they
-// read as a cluster this ruler still bills for and still measures (spec 8.8).
-func TestDeleteSourceClearsCostSeries(t *testing.T) {
+// A source that left the configuration takes every series labelled by it, or
+// they read as a cluster this ruler still bills for, still measures and still
+// fails to sample (spec 8.8, 10.4).
+func TestDeleteSourceClearsTheSeriesOfASourceThatLeft(t *testing.T) {
 	reg := prometheus.NewRegistry()
 	m := NewMetrics(reg)
 
@@ -100,12 +101,14 @@ func TestDeleteSourceClearsCostSeries(t *testing.T) {
 		m.QueryReadBytesTotal.WithLabelValues("HighLatency", "payments", src).Add(1)
 		m.QueryDuration.WithLabelValues("HighLatency", "api", "payments", src).Observe(1)
 		m.QueryQueueWait.WithLabelValues(src).Observe(1)
+		m.RecheckSampleFailures.WithLabelValues(src).Add(1)
 	}
 
 	m.deleteSource("prod_eu")
 
 	for _, c := range []prometheus.Collector{
 		m.QueryReadRowsTotal, m.QueryReadBytesTotal, m.QueryDuration, m.QueryQueueWait,
+		m.RecheckSampleFailures,
 	} {
 		if got := testutil.CollectAndCount(c); got != 1 {
 			t.Errorf("series = %d, want only the source still configured", got)

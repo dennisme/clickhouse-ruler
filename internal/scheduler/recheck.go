@@ -66,7 +66,22 @@ func recheckPass(
 ) func(context.Context, time.Time) {
 	return func(ctx context.Context, now time.Time) {
 		for _, rr := range rules {
-			problems, asked := recheckRuleOnce(ctx, rr.rule, queriers, limits, now)
+			problems, asked, refused := recheckRuleOnce(ctx, rr.rule, queriers, limits, now)
+
+			// A cluster that would not answer is the operator's to fix and says
+			// nothing about the rule, so it is counted and said out loud rather
+			// than raised as a finding against an author (spec 10.4). Warned
+			// rather than errored for the reason a finding is: the rule is still
+			// evaluating and still paging, and all that failed is a question
+			// nobody is waiting on.
+			for _, sf := range refused {
+				m.RecheckSampleFailures.WithLabelValues(sf.Source).Inc()
+
+				log.Warn("the re-check pass could not sample a cluster",
+					"rule_group", rr.rule.GroupID(), "rule", rr.rule.Alert,
+					"source", sf.Source, "feed", feedRecheck,
+					"error", sf.Err.Error())
+			}
 
 			// Per source, because a cluster that answered says nothing about
 			// the one beside it: blanking a series for a cluster nobody
@@ -92,23 +107,27 @@ func recheckPass(
 }
 
 // recheckRuleOnce samples one rule against every source it matched, and says
-// which of them answered.
+// which of them answered and which refused.
 //
 // A source whose sample failed is not a finding about the rule, the same line
 // the online pass draws: the ruler could not ask, and saying nothing is the only
-// honest answer. A source the check is off for is not sampled at all, because
-// honouring `off` afterwards would mean reading rows an operator asked nobody to
-// read (spec 7.3); it still counts as answered, so switching the check off
-// clears what it had raised rather than freezing it.
+// honest answer. It is still returned, because saying nothing about the rule is
+// not the same as saying nothing at all: a cluster refusing every sample is why
+// this check stopped reporting, and the caller is what makes that visible. A
+// source the check is off for is not sampled at all, because honouring `off`
+// afterwards would mean reading rows an operator asked nobody to read
+// (spec 7.3); it still counts as answered, so switching the check off clears
+// what it had raised rather than freezing it.
 func recheckRuleOnce(
 	ctx context.Context,
 	r ruleset.Rule,
 	queriers map[string]Querier,
 	limits *queryLimits,
 	now time.Time,
-) ([]Finding, []string) {
+) ([]Finding, []string, []SourceError) {
 	var problems []Finding
 	var asked []string
+	var refused []SourceError
 
 	for _, src := range r.Sources {
 		q, ok := queriers[src.Name]
@@ -128,6 +147,7 @@ func recheckRuleOnce(
 		findings, err := q.Sample(ctx, r.Rule, recheckAttribution(r), checks, now)
 		release()
 		if err != nil {
+			refused = append(refused, SourceError{Source: src.Name, Err: err})
 			continue
 		}
 		asked = append(asked, src.Name)
@@ -139,7 +159,7 @@ func recheckRuleOnce(
 		}
 	}
 
-	return problems, asked
+	return problems, asked, refused
 }
 
 // recheckAttribution is what the pass's queries are recorded against: the same
