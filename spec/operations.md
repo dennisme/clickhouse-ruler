@@ -1864,6 +1864,21 @@ its cluster is quiet. What does have to happen is that a source nothing reaches
 any more loses its series, since clearing one takes a pass against that cluster:
 the reconciliation that closes a connection deletes them (8.2).
 
+The rule and the path it was raised against are the other half of the same
+obligation, and they are a pair rather than two facts. Both feeds clear by the
+rule and the `file` label together, so a pair no loaded rule holds is a pair no
+pass can reach: a rule moved to another file goes on raising its findings under
+the new path while the old path's series stand at 1 for the life of the process,
+which is a page addressed to an owner with no fix available to them. So a reload
+deletes the series of every rule and path pair the new configuration does not
+hold, whether the rule moved, was renamed or was deleted. A pair rather than
+either half, because two rules sharing an alert name in one file raise under one
+pair and it outlives either of them, and the same name in another file is a
+different pair whose findings are current. This is not the rule key the alert
+state is carried over by, and not the name the cost series are keyed on: the
+gauge carries no group, so neither of those can say when its series have stopped
+being reachable.
+
 **No feed ships without its page.** The evaluator feed's is the
 "a rule that broke while running" section of the operations page, with the
 paragraph on how evaluation notices drift at all on how-it-works. The signal is addressed to somebody who
