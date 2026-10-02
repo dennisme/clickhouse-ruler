@@ -152,6 +152,8 @@ series per rule.
 | `clickhouse_ruler_rule_group_iterations_missed_total` | counter | `rule_group` |
 | `clickhouse_ruler_rule_group_last_evaluation_timestamp_seconds` | gauge | `rule_group` |
 | `clickhouse_ruler_rule_group_last_duration_seconds` | gauge | `rule_group` |
+| `clickhouse_ruler_rule_group_interval_seconds` | gauge | `rule_group` |
+| `clickhouse_ruler_rule_group_tick_delay_seconds` | histogram | `rule_group` |
 | `clickhouse_ruler_alerts_active` | gauge | `rule_group`, `rule`, `state` |
 | `clickhouse_ruler_alerts_sent_total` | counter | `alertmanager` |
 | `clickhouse_ruler_alerts_send_failures_total` | counter | `alertmanager` |

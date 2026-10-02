@@ -766,14 +766,15 @@ checked without a running system; labels need series. The stack in 9.8 is
 where that half is answered, and until it exists this gate is the weaker of
 the two claims this section makes.
 
-One further omission worth stating rather than discovering. Duration is shown
-against nothing, because the group's interval is configuration and 8.2 exposes
-no metric carrying it. A panel cannot draw the line an operator is meant to
-read the duration against, so it says so in its description instead. Exposing
-the interval as a gauge is the obvious fix, and declining it here rested on its
-only consumer being a dashboard. 8.8 is where that stops being true: the interval
-is what every cadence expression is read against, so the gauge is carried there
-with the rest of the cadence work rather than as a panel's convenience.
+One further omission worth stating rather than discovering, because the
+reasoning that closed it is the reasoning that nearly left it open. Duration was
+shown against nothing: the group's interval is configuration, 8.2 exposed no
+metric carrying it, and a panel cannot draw the line an operator is meant to
+read a duration against. Exposing the interval as a gauge was the obvious fix,
+and declining it rested on its only consumer being a dashboard. 8.8 is where
+that stops being true, because the interval is what every cadence expression is
+read against, so the gauge is carried there and the duration panel draws it as
+a line like anything else.
 
 ### 8.7 The operations page
 

@@ -338,6 +338,76 @@ climbing query duration is the cluster, and raising the cap makes it worse. The
 other fixes are the interval and splitting the group, both under missed
 iterations above.
 
+### How late a group is running
+
+**Scheduling here is per group, not per rule.** One group is one goroutine on
+one interval, and the rules in it are all evaluated on the same tick,
+concurrently. So every expression below is per group, there is no such thing as
+one rule running late on its own, and the fix for a late group is a fix to the
+group: a cheaper query, a longer interval, more slots, or a split.
+
+How far apart a group's runs actually were, against how far apart they were
+configured to be:
+
+```promql
+3600 / increase(clickhouse_ruler_rule_group_iterations_total[1h])
+- max by (rule_group) (clickhouse_ruler_rule_group_interval_seconds)
+```
+
+**Trouble at anything above a few percent of the interval.** Zero means the
+group ran on its interval for the hour. The number can only be positive: a group
+advances an absolute schedule, so it cannot run early. A positive number is the
+mean seconds of spacing above what the rule file asked for, and where that time
+went is the next two expressions, which are different faults.
+
+Whole intervals lost, which is [missed iterations](#missed-iterations) above:
+
+```promql
+increase(clickhouse_ruler_rule_group_iterations_missed_total[1h]) > 0
+```
+
+Lateness inside an interval, which the counter above reads as healthy:
+
+```promql
+histogram_quantile(0.99, sum by (rule_group, le) (
+  rate(clickhouse_ruler_rule_group_tick_delay_seconds_bucket[1h])
+))
+```
+
+**Trouble when it is a noticeable fraction of the group's interval.** This is a
+tick woken exactly on schedule that then started late, waiting for a query slot
+against the ruler's cap or against the source's own limit. Nothing overran an
+interval, so no iteration was missed and every panel above reads healthy, while
+every alert in the group goes out that much later than it should. The two wait
+expressions above say which cap it was.
+
+The delay budget for one group, as far as series can carry it:
+
+```promql
+  max by (rule_group) (clickhouse_ruler_rule_group_interval_seconds)
++ histogram_quantile(0.99, sum by (rule_group, le) (
+    rate(clickhouse_ruler_rule_group_tick_delay_seconds_bucket[1h])
+  ))
++ histogram_quantile(0.99, sum by (rule_group, le) (
+    rate(clickhouse_ruler_query_concurrency_wait_seconds_bucket[1h])
+  ))
++ histogram_quantile(0.99, sum by (rule_group, le) (
+    rate(clickhouse_ruler_query_duration_seconds_bucket[1h])
+  ))
++ histogram_quantile(0.99, sum by (le) (
+    rate(clickhouse_ruler_notification_latency_seconds_bucket[1h])
+  ))
+```
+
+**It is a floor, and there is no threshold here to give you.** It is seconds
+from a condition being true in ClickHouse to a notification leaving the ruler,
+and it leaves out three terms nothing here can join: the source's own queue
+wait, which is labelled by cluster rather than by group, so a group reading a
+capped source adds that histogram itself; `evaluation_delay` on the source; and
+`for` on the rule. The last two are configuration rather than measurement. What
+the number is worth is the comparison: run it before and after a change, and
+read which term moved.
+
 ### Rules that will never run
 
 ```promql
