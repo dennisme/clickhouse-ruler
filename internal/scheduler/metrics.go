@@ -35,6 +35,8 @@ type Metrics struct {
 	AlertsSendFailures  *prometheus.CounterVec
 	NotificationLatency prometheus.Histogram
 
+	AlertmanagerLastProbeSuccessful *prometheus.GaugeVec
+
 	RulesUnmatched *prometheus.GaugeVec
 	Problem        *prometheus.GaugeVec
 	SourceProblem  *prometheus.GaugeVec
@@ -161,6 +163,31 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 			Name: "clickhouse_ruler_notification_latency_seconds",
 			Help: "Time spent sending an alert batch to Alertmanager.",
 		}),
+
+		// The one delivery series that exists before anything fires, which is
+		// the whole reason for it. Both counters above are labelled
+		// alertmanager, so neither has a series until a send has been
+		// attempted, and an expression over send failures cannot fire on a
+		// ruler that has never delivered anything. A ruler pointed at a host
+		// that does not resolve is exactly that ruler, and pre-creating the
+		// counters at zero would not reach it either: zero failures is the
+		// healthy reading, and no count of deliveries answers whether the
+		// address answers before the first delivery (spec 8.2).
+		//
+		// Filled by a probe on its own timer rather than by a send, so it has
+		// a reading on a ruler that has been quiet since it started. Not a
+		// readiness term and not a startup refusal, because an Alertmanager is
+		// one service every replica points at: a rolling restart of it would
+		// take a whole deployment unready at once and stop any rollout in
+		// progress, which is 8.1's trap with every replica failing together.
+		//
+		// The label is the configured URL with its password removed. A label
+		// is scraped, stored and shown on a dashboard, so the rule that keeps
+		// credentials out of a log is not weaker here (spec 8.4).
+		AlertmanagerLastProbeSuccessful: f.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "clickhouse_ruler_alertmanager_last_probe_successful",
+			Help: "Whether the configured Alertmanager answered the last probe of its readiness endpoint.",
+		}, []string{"alertmanager"}),
 
 		RulesUnmatched: f.NewGaugeVec(prometheus.GaugeOpts{
 			Name: "clickhouse_ruler_rules_unmatched",

@@ -711,6 +711,58 @@ This is memory only, as it is in Prometheus. Retention buys surviving a failed
 send, not surviving a restart: a ruler that stops mid-window forgets the resolve
 either way, and that is 12.2's problem rather than this one's.
 
+**How the ruler authenticates to Alertmanager is not yet designed, and today
+the answer is that it does not.** `--alertmanager` takes a URL and the client
+sends an unauthenticated POST. There is no field for a credential, a token or a
+certificate, so an Alertmanager behind basic auth, behind a bearer token, or
+requiring TLS to be reachable at all is not reachable by this ruler as
+configured.
+
+One thing does work, by accident and not by design. Go's `http.Client` turns
+userinfo in a request URL into an `Authorization: Basic` header, so
+`--alertmanager http://user:pass@alertmanager:9093` authenticates. Nothing in
+this repository asks for that, no test pins it, and a password in a flag is in
+`ps` output, in the pod spec, in the rendered chart manifest and in any dump
+that echoes argv, where no amount of redaction can reach it. The sources file
+already settled this question for ClickHouse: a credential comes from a file or
+the environment, named in a file the operator owns, never from a flag (6.2,
+6.6).
+
+**What it should grow into is Prometheus' own `http_config`,** because an
+operator configuring an Alertmanager has written that block before and the names
+should mean the same thing here:
+
+- `basic_auth` with `username`, and `password_file` or `password`
+- `authorization` with `type` and `credentials_file`, which is the bearer token
+  case
+- `tls_config` with `ca_file`, `cert_file`, `key_file`, `server_name` and
+  `insecure_skip_verify`
+- `proxy_url`, for the estates that reach Alertmanager through one
+- `oauth2`, last and only if somebody asks
+
+Where that block lives is the open question and the reason this is a note rather
+than a decision. The sources file is per source and this is one target, the
+policy file is about checks, and a third file is a third file. A flag per
+credential is already ruled out above.
+
+**When it lands, userinfo in `--alertmanager` stops being supported.** Not
+deprecated, refused: `parseAlertmanagerURL` rejects a URL carrying userinfo and
+says which field to use instead, so there is one way to authenticate rather than
+two, one of which is the insecure one nobody documented. Two pieces of
+machinery exist only to make the accidental path safe and are deleted in the same
+change, not kept:
+
+- the removal of credentials from `net/http` errors in `internal/notify`, which
+  exists because a `*url.Error` prints the URL it was built from (8.4)
+- the redacted spelling of the URL used for the `alertmanager` metric label and
+  the log lines naming it (8.2), which collapses back to the URL itself once no
+  URL can hold a password
+
+A credential read from a file never reaches a URL, so neither has anything left
+to protect once the URL cannot carry one. Leaving them behind would mean the
+codebase still reads as though the flag might hold a password, which is exactly
+the state this change ends.
+
 Alertmanager owns grouping, silences, inhibition, and routing. The ruler does
 not.
 

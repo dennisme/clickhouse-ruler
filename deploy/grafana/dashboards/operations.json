@@ -241,7 +241,7 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 24,
+        "w": 12,
         "x": 0,
         "y": 25
       },
@@ -269,6 +269,38 @@
           },
           "expr": "histogram_quantile(0.5, sum by (le) (rate(clickhouse_ruler_notification_latency_seconds_bucket[$__rate_interval])))",
           "legendFormat": "p50"
+        }
+      ]
+    },
+    {
+      "title": "Alertmanager answering",
+      "description": "Whether the address in --alertmanager answers its own readiness endpoint, probed every 30 seconds. Zero on a ruler that has delivered nothing is the typo'd host this panel exists for: the send counters have no series until something fires, so an expression over send failures cannot fire on a ruler that was never asked to deliver anything. Zero on a ruler that was delivering is Alertmanager being down or not ready, which the send failures beside it will show as well. The probe sends no alert and touches no alert state, and it is deliberately not part of /-/ready: one Alertmanager serves every replica, so a readiness term here would take a whole deployment unready at once (spec 8.1, 8.2).",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 25
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "clickhouse_ruler_alertmanager_last_probe_successful",
+          "legendFormat": "{{alertmanager}} answered its last probe"
         }
       ]
     },

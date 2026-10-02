@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -14,6 +15,11 @@ import (
 )
 
 const alertsPath = "/api/v2/alerts"
+
+// readyPath is Alertmanager's own readiness endpoint. The question a probe
+// asks is whether it would accept an alert now, not whether a socket opens
+// (spec 8.2).
+const readyPath = "/-/ready"
 
 // Defaults chosen so a rolling Alertmanager restart is ridden out rather than
 // dropping a page, without holding an evaluation for long.
@@ -93,13 +99,13 @@ func (c *Client) Send(ctx context.Context, alerts []alert.Alert) error {
 func (c *Client) post(ctx context.Context, body []byte) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.URL+alertsPath, bytes.NewReader(body))
 	if err != nil {
-		return err
+		return scrub(err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
-		return retryableError{err}
+		return retryableError{scrub(err)}
 	}
 	defer func() { _ = resp.Body.Close() }()
 
@@ -110,6 +116,49 @@ func (c *Client) post(ctx context.Context, body []byte) error {
 		return fmt.Errorf("alertmanager returned %s", resp.Status)
 	}
 	return nil
+}
+
+// Probe reports whether the configured Alertmanager answers.
+//
+// One request, no retry: the caller probes on a timer, so the next tick is the
+// retry, and a probe that retried would report a 25 second outage as a healthy
+// reading (spec 8.2). It sends no alert and touches no alert state, so a
+// failure here is a fact about the address rather than about a notification.
+func (c *Client) Probe(ctx context.Context) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.URL+readyPath, nil)
+	if err != nil {
+		return scrub(err)
+	}
+
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return scrub(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode >= 300 {
+		return fmt.Errorf("alertmanager returned %s", resp.Status)
+	}
+	return nil
+}
+
+// scrub removes the credentials an error out of net/http echoes. A *url.Error
+// prints the URL the request was built from, and that URL is --alertmanager,
+// which may carry userinfo. The scheme, host and path survive, because
+// whoever reads the line needs them; the password does not (spec 8.4).
+func scrub(err error) error {
+	var uerr *url.Error
+	if !errors.As(err, &uerr) {
+		return err
+	}
+
+	// A URL this package cannot parse is one it cannot redact either, so it
+	// is dropped rather than printed on the chance it holds no password.
+	safe := "the alertmanager URL"
+	if u, perr := url.Parse(uerr.URL); perr == nil {
+		safe = u.Redacted()
+	}
+	return fmt.Errorf("%s %s: %w", uerr.Op, safe, uerr.Err)
 }
 
 // retryableError marks a failure worth repeating with the same payload.
