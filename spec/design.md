@@ -763,6 +763,114 @@ to protect once the URL cannot carry one. Leaving them behind would mean the
 codebase still reads as though the flag might hold a password, which is exactly
 the state this change ends.
 
+**Whether the credential belongs in the URL at all is the cheaper half of this,
+and it is worth doing first.** Go's client builds the `Authorization` header
+from userinfo at request time, which is why the accidental path works. Building
+it once at client construction and clearing `User` from the stored URL is
+identical on the wire and changes what the rest of the code has to defend
+against: no error, label or log line can hold a credential, because the URL no
+longer has one. That deletes the removal in `internal/notify` and both uses of
+the redacted spelling, and leaves the `alertmanager` label as the host. It is
+also the shape the real work lands on: the header stops being read from the URL
+and starts being read from a file, in one place.
+
+**What stays deleted, and the test for it.** vmalert masks notifier URLs
+permanently rather than removing the need to: `-notifier.showURL` defaults to
+hidden and `notifier.url` is registered as a secret flag, because a
+VictoriaMetrics URL can carry an `authKey` query parameter, so no amount of
+auth configuration makes the URL safe to print. Alertmanager has no
+query-parameter auth convention, so once userinfo is refused the URL provably
+cannot hold a secret and the masking has nothing to protect. That is the
+condition, not the calendar: if Alertmanager ever grows one, the masking comes
+back.
+
+**One URL or a list of them.** Today `--alertmanager` takes one, and
+Alertmanager's own documentation says that is the wrong shape:
+
+> It's important not to load balance traffic between Prometheus and its
+> Alertmanagers, but instead, point Prometheus to a list of all Alertmanagers.
+
+The reason is how its clustering works. Members gossip and deduplicate
+identical alerts, so a sender posting to every member gets resilience out of the
+deduplication it already has. A balancer in front collapses that: it picks one
+member, and a member partitioned from its peers accepts a notification no other
+member ever learns about. Nothing on either side reports it, because the POST
+succeeded.
+
+So a single URL does not merely lack high availability, it pushes an operator
+toward the one topology upstream warns against, and nothing in `docs/running.md`
+says a balancer is needed at all. Silence there reads as an endorsement of
+whatever the reader already built.
+
+**This does not reopen the source address decision, and the analogy that
+decision uses does not carry.** A source names one endpoint because a proxy in
+front of ClickHouse is the normal recommended topology and a client-side list is
+a worse load balancer than the one an operator runs; see `decisions.md`. For
+Alertmanager the direction is reversed, and most of the costs named there are
+absent: there is no `system.query_log` readback to split (8.5), no cluster
+topology entering the rules repository because this is a flag rather than a
+source block, and no attribution problem because no alert says which
+Alertmanager accepted it. A list of Alertmanagers is also not failover. It is
+fan-out to every member, which makes no balancing decisions at all, so the
+"balancer without health checks, weighting or draining" objection has nothing to
+attach to.
+
+**What it looks like when it lands.** A repeated `--alertmanager`, posted to
+concurrently, each endpoint keeping the retry policy above. A send is delivered
+when at least one endpoint accepted it, because gossip carries it to the rest.
+
+**The list is one Alertmanager cluster, not two destinations,** and that has to
+be written where an operator reads it rather than inferred. Read the other way,
+somebody lists two unrelated Alertmanagers, gets "delivered" from the one that
+answered, and silently loses every page the other was meant to route while it is
+down.
+
+**No service discovery, and that is a decision rather than a phase.** vmalert
+offers `consul_sd_configs` and `dns_sd_configs`; the sources file is static and
+reviewable on purpose (6.2, 6.6), and a ruler that discovers where its pages go
+is a ruler whose delivery path cannot be read in a pull request. It also keeps
+the reachability gauge in 8.2 trivial: a static list is fixed for the life of
+the process, so there is nothing to reconcile, where a target that discovery
+drops would leave a gauge at 0 that nothing can clear, which is the series
+lifecycle problem `deleteSource` exists for.
+
+**Not before the send leaves the evaluation goroutine.** `Cadence.Send` runs
+inside the rule's evaluation today, and its retries are already enough to make
+an Alertmanager outage read as missed iterations, which 8.2 calls the single
+most important operational signal. Fan-out multiplies that worst case by the
+number of endpoints. The ordering is therefore: take the send off the evaluation
+path, then add the list. Until the list exists, `docs/running.md` says plainly
+that one URL means the operator supplies a single reachable address, and names
+the upstream guidance, so the gap is a stated position rather than an omission.
+
+**What vmalert does, recorded so this is not researched twice.** Flags for the
+simple case and a file for discovery. Every notifier flag is an array aligned
+positionally with repeated `-notifier.url`, so auth is per endpoint by index:
+`-notifier.basicAuth.username` and `.password`, `-notifier.bearerToken`,
+`-notifier.oauth2.clientID` and friends, `-notifier.tlsCAFile`, `.tlsCertFile`,
+`.tlsKeyFile`, `.tlsServerName`, `.tlsInsecureSkipVerify`,
+`-notifier.sendTimeout` defaulting to 10s, `-notifier.headers`, and
+`-notifier.blackhole` to drop notifications entirely. Every secret has a `*File`
+variant beside it, which is the posture the sources file already takes.
+`-notifier.config` carries `static_configs`, `consul_sd_configs`,
+`dns_sd_configs`, `scheme`, `path_prefix`, `alert_relabel_configs`, and an
+embedded HTTP client config holding `basic_auth`, `bearer_token`, `oauth2`,
+`tls_config` and `headers`.
+
+Two things are worth knowing about its delivery. It posts once with no retry,
+where the retry above is deliberate. And it exposes three metrics, all labelled
+`addr`: `vmalert_alerts_sent_total`, `vmalert_alerts_send_errors_total` and
+`vmalert_alerts_send_duration_seconds`, with no health check or probe anywhere
+in its Alertmanager client. So the hole 8.2's reachability gauge fills is shared
+by both upstreams. That is a reason to re-read the idea rather than a reason to
+feel ahead, and the re-read is in 8.2.
+
+**What is deliberately not taken from it: `alert_relabel_configs`.** Rewriting
+alert labels on the way out would make the rule file stop describing what gets
+delivered, and Alertmanager owns routing (below). A label is for routing and
+nothing else (6.1), which is a property of what the author wrote, not of what
+the sender edited.
+
 Alertmanager owns grouping, silences, inhibition, and routing. The ruler does
 not.
 
@@ -1204,7 +1312,9 @@ cluster topology inside the rules repository, a `system.query_log` readback
 that silently covers one node of several, and a load balancer worse than the
 one an operator already runs. The node is still both a point of failure and
 the coordinator for every distributed query, and making it not be is the
-operator's job, the same way the Alertmanager URL is.
+operator's job. The Alertmanager URL was the analogy used here and 6.5 now
+qualifies it: Alertmanager's clustering expects a sender to post to every
+member, so that endpoint is the one place a list is the right answer.
 
 **The cost caps are per node.** `max_execution_time` and `max_memory_usage`
 are enforced by each node independently, so on a sharded cluster the real

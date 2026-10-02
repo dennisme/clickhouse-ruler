@@ -502,9 +502,8 @@ and are what the code comments cite.
   and the operator queries on the operations page cover a fraction of the
   traffic and nothing says which. And it is a load balancer with no health
   checks, no weighting and no draining, competing with the one the operator
-  runs. So the endpoint is the operator's to make available, the same way the
-  Alertmanager URL is, and the ruler's behaviour when it disappears is already
-  correct: the evaluation fails, alert state is untouched, `for` timers keep
+  runs. So the endpoint is the operator's to make available, and the ruler's
+  behaviour when it disappears is already correct: the evaluation fails, alert state is untouched, `for` timers keep
   running and firing alerts keep being sent (6.3.2, 8.7). The case this leaves
   out is a bare cluster with no name and no balancer in front of it, where the
   answer is that a source is cheap: point a second one at another coordinator
@@ -531,8 +530,11 @@ and are what the code comments cite.
   bring back the attribution problem this decision exists to avoid. And it
   carries no `checks:` block, because policy merges as a strictest-wins maximum
   with deliberately no precedence (7.7), which is the opposite of the override a
-  default needs, and one block holding both rules would be unreadable. See 6.6,
-  6.9, 6.10.1, 7.7.
+  default needs, and one block holding both rules would be unreadable. The
+  Alertmanager URL was originally cited here as the same case and is not one:
+  Alertmanager's clustering expects a sender to post to every member rather than
+  to a balancer, so a list is the right answer there for reasons none of the
+  above touch. 6.5 has that argument. See 6.5, 6.6, 6.9, 6.10.1, 7.7.
 - **`table:` is the table a rule reads, so on a sharded cluster it is the
   Distributed table.** 6.9 left this open on the assumption that getting it
   wrong was a tenancy hole; 6.7.1 settled that it is not, so what is at stake is
