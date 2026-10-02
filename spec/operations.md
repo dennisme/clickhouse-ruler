@@ -231,6 +231,9 @@ Validation and config:
 | `clickhouse_ruler_config_last_reload_successful` | gauge | none |
 | `clickhouse_ruler_config_last_reload_timestamp_seconds` | gauge | none |
 | `clickhouse_ruler_config_info` | gauge | `revision`, `rules_root` |
+| `clickhouse_ruler_recheck_last_completion_timestamp_seconds` | gauge | none |
+| `clickhouse_ruler_recheck_last_duration_seconds` | gauge | none |
+| `clickhouse_ruler_recheck_sample_failures_total` | counter | `source` |
 
 `clickhouse_ruler_problem` is the `pint` analog, and it is aimed at somebody
 other than the operator. A rule that broke under a schema change is fixed by
@@ -345,6 +348,50 @@ the configuration running and this is where it came from, and it belongs here
 rather than on every series because it changes on every sync whether the rules
 did or not.
 
+**The three re-check metrics are what the pass says about itself**, and they are
+here because every other feed is observable through the evaluation that carries
+it. Iterations move, durations are observed, and a group that stopped shows up
+as a last evaluation going stale. The re-check pass had none of that, and it is
+the one feed whose silence reads as good news: `rule/attribute-key` is raised
+only by sampling recent data, so a pass that never runs reports no findings and
+looks exactly like an estate where no map key was ever renamed. That is 8.6's
+empty panel, applied to a whole pass rather than to one graph.
+
+`clickhouse_ruler_recheck_last_completion_timestamp_seconds` is stamped when a
+pass finished rather than with the tick it was woken by, because the reading is
+`time() - it` held against the interval, and a pass that takes most of an hour
+has not gone quiet where a pass that started and never returned has. The tick
+time cannot tell those apart. `clickhouse_ruler_recheck_last_duration_seconds`
+is what that is read against: the pass asks its rules one at a time, so its cost
+grows with the rule file while the interval does not, and an overrun drops whole
+passes rather than running them late. A gauge rather than a histogram, because
+one observation an hour fills no buckets worth reading and the question is what
+the last pass cost, which is the same reasoning
+`clickhouse_ruler_rule_group_last_duration_seconds` is a gauge for.
+
+`clickhouse_ruler_recheck_sample_failures_total` is a cluster that would not
+answer, and it is a counter and a log line rather than a finding on
+`clickhouse_ruler_problem`. 10.4 is why: the ruler could not ask, which says
+nothing about the rule, so raising one would blame an author for an outage and
+clearing it would read as a key somebody put back. What it costs is worth
+stating, because it is the whole reason the counter exists: the check keeps its
+previous answer for that cluster rather than being re-asked, so a key renamed
+while this is non-zero goes unreported. It is labelled by source and not by
+rule, for the reason the queue wait histogram is: a cluster refusing one sample
+refuses all of them, so which rule happened to be asked says nothing about what
+to change. Cardinality is the sources the loaded rules reach, and a source
+nothing reaches any more loses its series with the rest of that cluster's.
+
+None of the three is labelled `rule_group`, and none is folded into the group
+metrics under a `rule_group` of `recheck`. The pass is one per ruler rather than
+one per group, it takes no interval from a rule file and it evaluates nothing,
+so a series there would land in the `rule_group` dashboard variable and in every
+cadence expression an operator carried over from a Prometheus ruler, including
+the missed-iterations alert on 8.7's page. It would also never be deleted,
+because the group series are reconciled against the groups a ruleset holds and
+that set never contains this pass. Process-scoped metrics are the honest shape,
+which is the one the config gauges already use.
+
 The query cost table above is read from the driver's callbacks as the query
 runs. Progress packets carry what each block read rather than a running
 total, so they are added; memory arrives as a per-thread gauge, so the
@@ -416,6 +463,8 @@ What is logged:
 | error | rule evaluation failed against a source | `rule_group`, `rule`, `source`, `error` |
 | error | sending alerts to alertmanager failed | `rule_group`, `rule`, `error` |
 | warn | a rule broke while running | `rule_group`, `rule`, `check`, `severity`, `team`, `file`, `feed`, `problem`, and `error` on an `annotations/template` finding |
+| warn | rule loaded with a finding that should have blocked the merge | `rule`, `check`, `severity`, `team`, `file`, `feed`, `problem` |
+| warn | the re-check pass could not sample a cluster | `rule_group`, `rule`, `source`, `feed`, `error` |
 | error | metrics listener stopped | `listen`, `error` |
 | warn | shutdown timeout expired with evaluations still running | `timeout` |
 
@@ -426,6 +475,13 @@ read back into names. The names are in the loader's findings too, under
 reading the gauge weeks later has neither the terminal nor the checkout. `info`
 rather than `warn`: on a ruler per datacenter reading a shared repository this is
 the normal state, and the check at authoring time already decided how loud it is.
+
+A cluster the re-check pass could not sample is warned rather than errored, for
+the reason a finding is: the rule is still evaluating and still paging, and all
+that failed is a question nobody is waiting on. It carries the rule it was
+asking about even though the counter beside it is per source, because the line
+is read by somebody holding one cluster's outage and the rule names what went
+unanswered.
 
 A shutdown that gives up is the only signal an operator gets that a query or a
 send was cut off part way through, which is why it is logged rather than
