@@ -1,0 +1,71 @@
+# The rules repository the sidecar syncs from, served by git daemon.
+#
+# Read only: receive-pack is off, so nothing can push over the wire. The test
+# commits by executing git inside this pod, which is also what makes a commit
+# observable, since the sha it prints is what every later assertion waits for.
+#
+# The image is a Debian one because git daemon is not in alpine/git at all, and
+# the repository is served over git:// rather than as static files because
+# git-sync fetches shallow by default and the dumb HTTP transport cannot
+# (spec 10.2).
+apiVersion: v1
+kind: Service
+metadata:
+  name: git
+spec:
+  selector:
+    app: git
+  ports:
+    - name: git
+      port: 9418
+      targetPort: 9418
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: git
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: git
+  template:
+    metadata:
+      labels:
+        app: git
+    spec:
+      containers:
+        - name: git
+          # Pinned by digest because bookworm-scm is a rolling tag and there
+          # is no narrower one. The tag is kept beside it so a reader can see
+          # which image this is.
+          image: buildpack-deps:bookworm-scm@sha256:b42f74a50a22540b839042134919504ff7c51e7cf8d751b79d0f94c56566cb92
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -e
+              git config --global user.email ruler-tests@example.com
+              git config --global user.name "ruler tests"
+              git config --global init.defaultBranch main
+              mkdir -p /srv/rules.git
+              git init --bare --quiet /srv/rules.git
+              git clone --quiet /srv/rules.git /work
+              exec git daemon --export-all --base-path=/srv \
+                --reuseaddr --listen=0.0.0.0 --port=9418
+          ports:
+            - containerPort: 9418
+          readinessProbe:
+            tcpSocket:
+              port: 9418
+            periodSeconds: 2
+            failureThreshold: 30
+          volumeMounts:
+            - name: repos
+              mountPath: /srv
+            - name: work
+              mountPath: /work
+      volumes:
+        - name: repos
+          emptyDir: {}
+        - name: work
+          emptyDir: {}

@@ -136,6 +136,13 @@ pre-commit:
 compose-up:
     docker compose up -d --wait
 
+# The kind cluster the deployment chain tests act on, and the image tag they
+# install. The tag is local and never pushed: a published image is the last
+# release and these tests are about this checkout (spec 10.2).
+kube_context := env("RULER_KUBE_CONTEXT", "kind-ruler-chain")
+kind_cluster := "ruler-chain"
+cluster_image := "clickhouse-ruler:cluster-test"
+
 # Off by default. Every assertion in the tree was written against a table only
 # tests write to, and rows arriving on their own would be a second author of the
 # data all of them read (spec 9.2).
@@ -143,6 +150,38 @@ compose-up:
 # Add background telemetry to a running stack.
 compose-volume:
     docker compose --profile volume up -d telemetrygen
+
+# Create the cluster and put this checkout's image in it.
+#
+# The image is built here rather than pulled, for the reason the compose stack
+# builds it: a published image is the last release (spec 9.1 item 5).
+#
+# Start the kind cluster for the deployment chain tests.
+cluster-up:
+    kind create cluster --name {{kind_cluster}} --wait 120s
+    docker build -t {{cluster_image}} .
+    kind load docker-image {{cluster_image}} --name {{kind_cluster}}
+
+# Needs the cluster: `just cluster-up` first.
+#
+# Separate from `integration` on purpose. A cluster is slower and flakier than
+# anything else in the tree, and it must not gate the legs that are not.
+#
+# Run the deployment chain tests against a running cluster.
+cluster-test:
+    RULER_KUBE_CONTEXT="{{kube_context}}" \
+        env -u GOROOT GOTOOLCHAIN=auto go test -tags=cluster -count=1 -timeout=30m ./internal/cluster/
+
+# Bring the cluster up, run the chain tests, then always delete it.
+cluster-clean: cluster-up
+    #!/usr/bin/env bash
+    set -euo pipefail
+    trap 'just cluster-down' EXIT
+    just cluster-test
+
+# Delete the kind cluster.
+cluster-down:
+    kind delete cluster --name {{kind_cluster}}
 
 # Tear down the stack and delete its volumes, orphans and locally built images.
 compose-down:

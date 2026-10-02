@@ -1,0 +1,93 @@
+# Proves the deployment chain on a real cluster: a commit reaches the sidecar
+# and the ruler reloads. The helm workflow renders the chart and validates the
+# manifests, which is cheap and cannot show that a commit arrives (spec 10.2).
+#
+# Separate from the Go tests workflow on purpose. A cluster is slower and
+# flakier than anything else in the tree, and it must not gate the legs that
+# are not.
+name: cluster
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - deploy/chart/**
+      - deploy/kind/**
+      - deploy/clickhouse/init/**
+      - internal/cluster/**
+      - Dockerfile
+      - justfile
+      - .github/workflows/cluster.yaml
+  pull_request:
+    paths:
+      - deploy/chart/**
+      - deploy/kind/**
+      - deploy/clickhouse/init/**
+      - internal/cluster/**
+      - Dockerfile
+      - justfile
+      - .github/workflows/cluster.yaml
+
+permissions:
+  contents: read
+
+jobs:
+  chain:
+    name: deployment chain
+    runs-on: ubuntu-latest
+
+    # The whole job, because a hung kubectl wait is the failure mode here and
+    # the step timeouts below cannot cover cluster creation.
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Install just
+        uses: extractions/setup-just@v3
+
+      # install_only, because the cluster is created by the recipe a developer
+      # runs rather than by the action. kubectl is already on the runner.
+      - name: Install kind
+        uses: helm/kind-action@v1
+        with:
+          install_only: true
+          version: v0.30.0
+
+      - name: Install helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.19.0
+
+      # The lifecycle is three steps here rather than `just cluster-clean`,
+      # whose trap would delete the cluster before anything could be read out
+      # of it.
+      - name: Create the cluster
+        run: just cluster-up
+
+      - name: Deployment chain tests
+        run: just cluster-test
+
+      # What the chain looks like when it did not happen. Only on failure: a
+      # green run's objects say nothing anybody reads.
+      - name: What was in the cluster
+        if: failure()
+        run: |
+          kubectl get pods --all-namespaces || true
+          for ns in $(kubectl get namespaces -o name | grep chain- || true); do
+            kubectl describe "$ns" || true
+            kubectl -n "${ns#namespace/}" get events --sort-by=.lastTimestamp || true
+            kubectl -n "${ns#namespace/}" logs -l app.kubernetes.io/name=clickhouse-ruler \
+              --all-containers --tail=200 || true
+          done
+
+      - name: Delete the cluster
+        if: always()
+        run: just cluster-down

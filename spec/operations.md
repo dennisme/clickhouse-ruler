@@ -1327,6 +1327,67 @@ every rule twice and reports each as a duplicate of itself. The compose stack
 this repository already runs is the third case and the simplest, a real
 directory and a signal.
 
+#### Proving the chain on a cluster
+
+The chain above is rendered rather than run. `helm.yaml` templates the chart
+over every values file that matters and validates the output against the
+Kubernetes schemas, which catches the ordinary breakage cheaply and cannot show
+that a commit arrives. What is unproven is every link after the merge, and the
+two symlink layouts the paragraph above says constrain the loader: both are unit
+tested, and neither has met a real kubelet or a real git-sync worktree.
+
+**`kind`, not `k3d`.** Either would do. `kind` is what the chart ecosystem
+tests on, its action is maintained, and `kind load docker-image` puts the image
+built from this checkout into the cluster in one command. That last part is not
+a convenience: the stack's ruler is built rather than pulled (9.1 item 5) for
+the reason a published image is the last release, and the same reason applies
+here.
+
+**The rules repository is served by `git daemon`, read only.** It is a
+one-container Deployment in the test's own namespace, `--export-all` over a
+`--base-path`, with `receive-pack` left off so nothing can push to it over the
+wire. The test commits by executing git inside that pod, which is also what
+makes the commit observable: the sha it produces is what every later assertion
+waits for.
+
+Two things were tried first and are recorded because each would look like the
+obvious choice. The image is not `alpine/git`, which ships no `git-daemon` at
+all. And the repository is not served as static files by a web server, which is
+the cheaper setup and refuses the chart's own default: git-sync fetches with
+`--depth 1`, the dumb HTTP transport does not support shallow capabilities, and
+turning the default depth off to accommodate the fixture would mean the test no
+longer covers what an install does.
+
+`git://` is what git-sync is pointed at, and it takes it: the flag is a
+repository rather than a scheme, and a sync over it produces the same worktree
+and the same symlink an SSH remote does. `ci/git-sync-values.yaml` keeps its
+SSH remote and mounted Secret, because that file documents a real deployment and
+a credential nothing checks is worse than none; the test gets its own values
+file with `credentialsSecret` empty.
+
+**What each link is waited on.** The commit's sha, then the symlink at the rules
+path pointing at the worktree holding it, then the merged rule's group appearing
+in `clickhouse_ruler_rule_group_iterations_total`, then
+`clickhouse_ruler_config_last_reload_successful` reading 1. Metrics rather than
+log lines, because 8.2 exists so that this chain is observable from outside and
+a test reading logs would be proving something nobody operates on.
+
+The one metric that is not waited on is
+`clickhouse_ruler_config_last_reload_timestamp_seconds`, and the reason is the
+exposition rather than the gauge. A unix timestamp printed as a float carries
+nine significant digits, so what a scrape reads is rounded to the nearest ten
+seconds and two reloads inside that window are the same number. It is the right
+thing for the alert 8.2 asks for, which is how old the running configuration is,
+and the wrong thing to decide that a particular reload happened. The group
+appearing is the stronger claim anyway: it says the merged rule is evaluating,
+which is the question a rule author asks after a merge.
+
+The refusal path is the other half and is asserted too. The exec hook posts to
+`/-/reload` with `--fail`, so a reload the ruler refused has to be a failed hook
+that git-sync retries, leaving the previous configuration running. A hook
+reporting success on a refused reload would hide exactly the case the severities
+in 7.9 are about.
+
 #### Running more than one ruler
 
 The highly available topology above is worth spelling out, because "mostly

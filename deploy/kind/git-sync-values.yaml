@@ -1,0 +1,36 @@
+# The chart as the cluster tests install it with git-sync delivery.
+#
+# Separate from the chart's own ci/git-sync-values.yaml, which keeps its SSH
+# remote and mounted Secret because that file documents a real deployment. Here
+# the repository is unauthenticated, so credentialsSecret stays empty: a
+# credential nothing checks is worse than none (spec 10.2).
+image:
+  repository: clickhouse-ruler
+  tag: cluster-test
+  pullPolicy: Never
+
+alertmanagerURL: http://alertmanager:9093
+
+# --enable-reload-endpoint is not a value: the chart always passes it, because
+# the only thing that reloads a git-sync delivery is the hook and a hook cannot
+# signal another container.
+
+rules:
+  delivery: git-sync
+  subdirectory: rules
+  gitSync:
+    repo: git://git/rules.git
+    ref: main
+    # Short, because the lag a test waits through is this plus one reload.
+    period: 2s
+
+sources:
+  - name: otel_traces
+    labels:
+      team: payments
+    address: clickhouse:9000
+    database: otel
+    username: ruler_payments
+    table: otel_traces
+    timestamp_column: Timestamp
+    evaluation_delay: 0s

@@ -1,0 +1,34 @@
+# The chart as the cluster tests install it with ConfigMap delivery.
+#
+# The small-estate case in 10.2, and a different mechanism rather than a
+# different setting: there is no exec hook, so nothing here reloads. What it is
+# installed for is the mount's own shape, where the real files sit in a
+# timestamped directory, `..data` is a symlink to it and every file at the root
+# is a symlink through `..data`. A loader that does not skip `..*` finds every
+# rule twice and reports each as a duplicate of itself.
+#
+# subdirectory is empty because a ConfigMap key cannot hold a path separator, so
+# every rule file is at the mount's root.
+image:
+  repository: clickhouse-ruler
+  tag: cluster-test
+  pullPolicy: Never
+
+alertmanagerURL: http://alertmanager:9093
+
+rules:
+  delivery: configMap
+  subdirectory: ""
+  configMap:
+    name: rules
+
+sources:
+  - name: otel_traces
+    labels:
+      team: payments
+    address: clickhouse:9000
+    database: otel
+    username: ruler_payments
+    table: otel_traces
+    timestamp_column: Timestamp
+    evaluation_delay: 0s
