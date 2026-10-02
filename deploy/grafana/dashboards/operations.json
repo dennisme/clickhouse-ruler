@@ -493,11 +493,49 @@
       ]
     },
     {
+      "title": "Re-check pass",
+      "description": "Whether the pass that catches a renamed map key is still running, and what it costs. This is the one feed whose silence reads as good news: rule/attribute-key is raised only by sampling recent data, so a pass that stopped reports no findings and looks exactly like an estate where nothing was renamed. The first series is how long ago a pass finished, read against --recheck-interval: comfortably under it is healthy, a multiple of it means passes are being dropped. The second is what the last pass took, which is the term that grows with the rule file while the interval does not, so a pass approaching its interval is the warning before the first drop. Both are empty on a ruler started with --recheck-interval=0 (spec 8.2, 10.4).",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 65 },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "time() - clickhouse_ruler_recheck_last_completion_timestamp_seconds",
+          "legendFormat": "since the last pass finished"
+        },
+        {
+          "refId": "B",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "clickhouse_ruler_recheck_last_duration_seconds",
+          "legendFormat": "the last pass took"
+        }
+      ]
+    },
+    {
+      "title": "Clusters the re-check could not sample",
+      "description": "Clusters that would not answer the pass, by source. Yours to fix, and deliberately not a finding against a rule author: the ruler could not ask, so it learned nothing about the rules reading that cluster, and raising one would blame them for an outage. What it costs is that rule/attribute-key keeps its previous answer for that cluster rather than being re-asked, so a key renamed while this is non-zero goes unreported. The log line beside it carries the database's own reply (spec 10.4).",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 65 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "sum by (source) (rate(clickhouse_ruler_recheck_sample_failures_total[$__rate_interval]))",
+          "legendFormat": "{{source}}"
+        }
+      ]
+    },
+    {
       "title": "Running configuration",
       "description": "Always 1, one series per configuration version, and it is here for its labels. `revision` is a hash of the rule files and team policy files the ruler loaded, which is the only revision it can state: it fetches nothing, so nothing hands it a commit. Two series at once across a fleet is two rulers evaluating different rules, whatever either of them was told the commit was. `rules_root` is the resolved root the files were read from, which is the worktree under git-sync, so the commit rides along without the ruler claiming to know that is what it is (spec 8.2, 10.2).",
       "type": "timeseries",
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
-      "gridPos": { "h": 6, "w": 24, "x": 0, "y": 65 },
+      "gridPos": { "h": 6, "w": 24, "x": 0, "y": 73 },
       "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
       "targets": [
         {
@@ -513,7 +551,7 @@
       "description": "Always 1, one series per build, and it is here for its labels: which version, commit and Go version each replica is running. Two series at once is a rollout in progress or a rollout that only half landed, which is the reading that explains two rulers behaving differently from the same files. `dev` is a binary built outside a release (spec 8.2).",
       "type": "timeseries",
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
-      "gridPos": { "h": 6, "w": 24, "x": 0, "y": 71 },
+      "gridPos": { "h": 6, "w": 24, "x": 0, "y": 79 },
       "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
       "targets": [
         {

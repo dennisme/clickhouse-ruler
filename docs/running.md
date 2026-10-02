@@ -162,6 +162,9 @@ series per rule.
 | `clickhouse_ruler_config_last_reload_successful` | gauge | none |
 | `clickhouse_ruler_config_last_reload_timestamp_seconds` | gauge | none |
 | `clickhouse_ruler_config_info` | gauge | `revision`, `rules_root` |
+| `clickhouse_ruler_recheck_last_completion_timestamp_seconds` | gauge | none |
+| `clickhouse_ruler_recheck_last_duration_seconds` | gauge | none |
+| `clickhouse_ruler_recheck_sample_failures_total` | counter | `source` |
 | `clickhouse_ruler_query_read_rows_total` | counter | `rule`, `team`, `source` |
 | `clickhouse_ruler_query_read_bytes_total` | counter | `rule`, `team`, `source` |
 | `clickhouse_ruler_query_memory_usage_bytes` | histogram | `rule` |
@@ -198,6 +201,20 @@ reload the ruler refused holds it at 0 until one succeeds;
 load that succeeded, so it dates the configuration actually being evaluated.
 [Operating the ruler](operations.md) has what a reload refuses and what survives
 one.
+
+The three re-check metrics are about the pass `--recheck-interval` runs, and they
+exist because it is the one feed whose silence reads as good news: a renamed map
+key is only ever found by sampling recent data, so a pass that stopped running
+reports no findings and looks exactly like an estate where nothing was renamed.
+`clickhouse_ruler_recheck_last_completion_timestamp_seconds` is read as
+`time() - it` against the interval, and
+`clickhouse_ruler_recheck_last_duration_seconds` is what the last pass cost,
+which grows with the rule file while the interval does not.
+`clickhouse_ruler_recheck_sample_failures_total` counts clusters that would not
+answer, which is the operator's to fix and deliberately not a finding against a
+rule author: the ruler could not ask, so it learned nothing about the rules
+reading that cluster. All three are absent on a ruler started with
+`--recheck-interval=0`.
 
 `clickhouse_ruler_config_info` names the configuration itself, and is always 1
 for its labels the way `clickhouse_ruler_build_info` is: that one says which

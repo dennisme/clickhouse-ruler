@@ -39,6 +39,10 @@ type Metrics struct {
 	Problem        *prometheus.GaugeVec
 	SourceProblem  *prometheus.GaugeVec
 
+	RecheckLastCompletion prometheus.Gauge
+	RecheckLastDuration   prometheus.Gauge
+	RecheckSampleFailures *prometheus.CounterVec
+
 	BuildInfo *prometheus.GaugeVec
 
 	ConfigLastReloadSuccessful prometheus.Gauge
@@ -212,6 +216,60 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 			Help: "Sources whose ClickHouse user does not meet the contract the checks rely on, by check. " +
 				"Fixed by the operator.",
 		}, []string{"source", "check", "severity", "file"}),
+
+		// What the re-check pass says about itself (spec 8.2, 10.4).
+		//
+		// Everything else here is raised by the evaluation, which an operator
+		// can see ticking: iterations move, durations are observed, and a group
+		// that stopped shows up as a last evaluation going stale. The re-check
+		// pass had none of that, and it is the one feed whose silence is
+		// indistinguishable from good news: rule/attribute-key is raised only by
+		// sampling recent data, so a pass that never runs reports no findings and
+		// reads exactly like an estate where no map key was ever renamed.
+		//
+		// Not labelled by rule_group, and not folded into the group metrics under
+		// a rule_group of "recheck". The pass is one per ruler rather than one per
+		// group, it has no interval from a rule file and evaluates nothing, so a
+		// series there would land in the rule_group dashboard variable and in
+		// every expression an operator carried over from a Prometheus ruler,
+		// including this repository's own missed-iterations alert. It would also
+		// never be deleted, because the group series are reconciled against the
+		// groups a ruleset holds and that set never contains this pass.
+		//
+		// Process-scoped, so these take the shape the config gauges already use.
+		RecheckLastCompletion: f.NewGauge(prometheus.GaugeOpts{
+			Name: "clickhouse_ruler_recheck_last_completion_timestamp_seconds",
+			Help: "Unix timestamp of the moment the last re-check pass finished.",
+		}),
+
+		// Read against the interval the pass is configured on, which says it is
+		// growing toward overrunning it. The pass asks its rules one at a time,
+		// so its cost grows with the rule file while the interval does not, and an
+		// overrun silently drops whole passes rather than running them late.
+		//
+		// A gauge rather than a histogram: one observation an hour fills no
+		// buckets worth reading, and the question is what the last pass cost
+		// rather than how a population of them is distributed. The same reasoning
+		// clickhouse_ruler_rule_group_last_duration_seconds is a gauge for.
+		RecheckLastDuration: f.NewGauge(prometheus.GaugeOpts{
+			Name: "clickhouse_ruler_recheck_last_duration_seconds",
+			Help: "How long the last re-check pass took.",
+		}),
+
+		// A cluster the pass could not sample. Deliberately not a finding on
+		// clickhouse_ruler_problem: the ruler could not ask, which says nothing
+		// about the rule, and raising one would blame an author for an outage
+		// while clearing it would read as a key somebody put back (spec 10.4).
+		//
+		// Labelled by source and not by rule, for the reason the queue wait
+		// histogram is: a cluster that refuses one sample refuses all of them, so
+		// which rule happened to be asked says nothing about what to change.
+		// Cardinality is the sources the loaded rules reach, and a source nothing
+		// reaches any more loses its series with the rest of that cluster's.
+		RecheckSampleFailures: f.NewCounterVec(prometheus.CounterOpts{
+			Name: "clickhouse_ruler_recheck_sample_failures_total",
+			Help: "Total number of times the re-check pass could not sample a cluster, so it learned nothing about the rules reading it.",
+		}, []string{"source"}),
 
 		// What the two reload gauges say, and deliberately not the same thing.
 		//
@@ -449,4 +507,8 @@ func (m *Metrics) deleteSource(source string) {
 	// nothing can ever clear, because clearing it takes a pass against that
 	// cluster (spec 8.2).
 	m.Problem.DeletePartialMatch(labels)
+
+	// Nothing samples a cluster no rule reaches, so a counter left here reads
+	// as a re-check that goes on failing against it.
+	m.RecheckSampleFailures.DeletePartialMatch(labels)
 }

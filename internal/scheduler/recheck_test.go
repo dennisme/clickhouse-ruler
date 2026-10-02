@@ -165,6 +165,59 @@ func TestRecheckKeepsFindingsWhenAPassCouldNotAsk(t *testing.T) {
 	}
 }
 
+// The pass has to say it ran. It is the one feed whose silence reads as good
+// news: rule/attribute-key is raised only by sampling recent data, so a pass
+// that stopped reports no findings and looks exactly like an estate where no map
+// key was ever renamed (spec 8.6).
+func TestRecheckRecordsThatThePassRan(t *testing.T) {
+	q := &fakeQuerier{}
+	clock := newFakeClock(time.Unix(3600, 0))
+	log, _ := logBuffer()
+	m := NewMetrics(prometheus.NewRegistry())
+
+	src := source.Source{Name: prodSource}
+	sched := New(ownedRuleSet(src), map[string]Querier{src.Name: q},
+		notify.NewCadence(&recordingSender{}, time.Minute, notify.DefaultResendTolerance),
+		m, clock, 0, log, testResend, time.Hour)
+
+	sched.recheck.Eval(context.Background(), clock.Now())
+
+	if got := testutil.ToFloat64(m.RecheckLastCompletion); got != 3600 {
+		t.Errorf("last completion is %v, want 3600: nothing says the pass ran", got)
+	}
+	if got := testutil.ToFloat64(m.RecheckLastDuration); got != 0 {
+		t.Errorf("last duration is %v, want 0 on a clock that did not advance", got)
+	}
+}
+
+// A cluster the pass could not sample is the operator's problem and not the
+// author's. It has to be counted and said out loud, and it must stay off
+// clickhouse_ruler_problem: the ruler could not ask, so it knows nothing about
+// the rule, and a finding there would blame an author for an outage (spec 10.4).
+func TestRecheckCountsAClusterItCouldNotSample(t *testing.T) {
+	q := &fakeQuerier{sampleErr: errors.New("connection refused")}
+	sched, m, buf := recheckSched(t, q, source.Source{Name: prodSource})
+
+	sched.recheck.Eval(context.Background(), time.Unix(0, 0))
+
+	if got := testutil.ToFloat64(m.RecheckSampleFailures.WithLabelValues(prodSource)); got != 1 {
+		t.Errorf("sample failures for %s = %v, want 1", prodSource, got)
+	}
+	if got := testutil.CollectAndCount(m.Problem); got != 0 {
+		t.Errorf("the problem gauge carries %d series, want none: the pass could not ask", got)
+	}
+
+	lines := logLines(t, buf)
+	if len(lines) != 1 {
+		t.Fatalf("got %d log lines, want 1 naming the cluster: %v", len(lines), lines)
+	}
+	wantFields(t, lines[0], map[string]string{
+		"level":  "WARN",
+		"source": prodSource,
+		"error":  "connection refused",
+	})
+}
+
 // Honouring off after the fact would mean reading rows an operator asked nobody
 // to read, so a rule whose check is off is never sampled at all (spec 7.3).
 func TestRecheckReadsNothingWhenTheCheckIsOff(t *testing.T) {
