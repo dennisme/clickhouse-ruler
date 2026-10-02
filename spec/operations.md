@@ -72,6 +72,40 @@ cluster out of twelve is a finding for `source/privileges` and the evaluation
 failure counters, not a reason to declare the whole ruler unfit, and a probe
 that flaps with any cluster's availability gets disabled by whoever is on call.
 
+**Where alerts go is not a readiness term either, and not a startup refusal.**
+A ruler whose Alertmanager is unreachable delivers nothing, which sounds like
+the question readiness asks and is not it.
+
+On the probe, Alertmanager is not a different case from a source, it is the
+worse case of the same one. The paragraph above refuses a term that flaps with
+one cluster's availability because whoever is on call disables a probe they
+cannot trust. An Alertmanager is a single service every replica of the ruler
+points at, so a rolling restart of it does not take one replica out of a
+deployment, it takes all of them out together: every pod unready at once, any
+rollout in progress stopped, and replicas that were evaluating correctly the
+whole time restarted for something that was never theirs.
+
+On the refusal, the same rollout argument and a stronger one. Refusing to start
+would mean an Alertmanager that is down for ten minutes is a ruler that cannot
+be restarted for ten minutes, exactly when an operator is most likely to be
+restarting things, and Prometheus refuses nothing here either. It is also not
+what a delivery outage costs us: alert state is kept across a failed send, a
+firing alert is re-posted on the resend interval, and a resolve is retried for
+its retention window (6.5). An Alertmanager that comes back inside that window
+loses nothing at all.
+
+**The URL it was given is a different question, and that one is answered at
+startup.** Parsing a URL needs no network, so `--alertmanager localhost:9093`
+is refused the way an unparseable `--log-level` is: no scheme, a scheme that is
+not `http` or `https`, or no host, and the process exits 2 saying which. Left
+unparsed it is accepted, and the first `http.NewRequestWithContext` of the
+ruler's life fails on an unsupported scheme, which is the first page it was ever
+asked to deliver. A refusal at startup is read by the person who typed it; that
+one is read by whoever is paged instead.
+
+So reachability is a metric and a log line rather than a probe term, and 8.2 is
+what shape.
+
 ### 8.2 Metric names
 
 Names track the Prometheus ruler's own metrics wherever an equivalent exists,
@@ -166,6 +200,7 @@ Alert state and delivery:
 | `clickhouse_ruler_alerts_sent_total` | counter | `alertmanager` |
 | `clickhouse_ruler_alerts_send_failures_total` | counter | `alertmanager` |
 | `clickhouse_ruler_notification_latency_seconds` | histogram | none |
+| `clickhouse_ruler_alertmanager_last_probe_successful` | gauge | `alertmanager` |
 
 `clickhouse_ruler_alerts_active` carries the group because an alert name may repeat
 across groups (7.6), and without it two same-named rules would report into one
@@ -176,6 +211,54 @@ as the Prometheus metric it is named after. The latency histogram already
 carries a count per send, so there is no separate batch counter.
 `clickhouse_ruler_alerts_send_failures_total` counts a failed batch once however many
 alerts it held, because it delivered none of them.
+
+`clickhouse_ruler_alertmanager_last_probe_successful` is the only series here
+that exists before anything fires, and that is what it is for. Both counters are
+labelled `alertmanager`, so neither has a series until a send has been
+attempted, and
+`rate(clickhouse_ruler_alerts_send_failures_total[5m]) > 0` cannot fire on a
+ruler that has never delivered anything. A typo'd host is precisely that ruler.
+
+**Pre-creating the counters at zero was the cheaper answer and it is not
+enough.** It makes the expression above evaluate rather than return nothing,
+which is worth having on its own, and it still never fires for the case this
+exists for: a ruler pointed at a host that does not resolve has zero send
+failures for as long as nothing fires, and zero is the healthy reading. The
+question an operator needs answered is whether the address in the flag answers
+at all, and no counter of deliveries can answer it before the first delivery.
+So this is a gauge the ruler fills on its own timer, 1 when the configured
+Alertmanager answered its last probe and 0 when it did not, which has a reading
+on a ruler that has been quiet since it started.
+
+A probe is a request to somebody else's service, so it is bounded and it is
+fixed: `GET /-/ready` on the configured base URL, every 30 seconds, each
+attempt given 5 seconds and no retry. Alertmanager's own readiness endpoint,
+because the question is whether it would accept an alert now rather than whether
+a socket opens. No retry, because the next tick is the retry and a probe that
+retried would report a 25-second outage as healthy. No flag either: 30 seconds
+is a scrape interval, and nothing about a deployment makes this number theirs to
+choose. The probe never sends an alert and never touches the alert state, so a
+ruler whose Alertmanager is down has one failed request per 30 seconds and
+otherwise behaves exactly as it does today.
+
+**No `prometheus_notifications_*` name carries over.** Prometheus has
+`prometheus_notifications_alertmanagers_discovered`, and discovery is not a
+probe: it counts the Alertmanagers service discovery handed it, none of which
+have been asked anything, and Prometheus learns nothing about any of them until
+it sends. This ruler is configured with exactly one URL by flag, so a count of
+them is a count of one and answers nothing. The rest of that family,
+`_sent_total`, `_errors_total` and `_queue_length`, are about deliveries that
+happened, which is the two counters above and the gap this fills. So the name is
+ours, and it takes the shape
+`clickhouse_ruler_config_last_reload_successful` already uses here: an attempt
+the ruler makes on its own, reported as whether the last one worked.
+
+The `alertmanager` label is the configured URL with its password removed, and so
+is every log line naming it. A URL may carry userinfo, a metric label is
+scraped, stored and shown on a dashboard, and credentials never reach a log
+(8.4) is not a weaker rule for the series beside it. The redaction is temporary for the
+reason the one in 8.4 is: a URL carries a password only until 6.5 gives a
+credential somewhere better to live, and then the label is just the URL.
 
 ClickHouse query cost. Nothing else in this space exposes these, and they are
 what make the guard rails in 6.7 observable rather than theoretical:
@@ -462,6 +545,8 @@ What is logged:
 | info | shutting down | `timeout` |
 | error | rule evaluation failed against a source | `rule_group`, `rule`, `source`, `error` |
 | error | sending alerts to alertmanager failed | `rule_group`, `rule`, `error` |
+| warn | the alertmanager did not answer its probe | `alertmanager`, `error` |
+| info | the alertmanager answered its probe again | `alertmanager` |
 | warn | a rule broke while running | `rule_group`, `rule`, `check`, `severity`, `team`, `file`, `feed`, `problem`, and `error` on an `annotations/template` finding |
 | warn | rule loaded with a finding that should have blocked the merge | `rule`, `check`, `severity`, `team`, `file`, `feed`, `problem` |
 | warn | the re-check pass could not sample a cluster | `rule_group`, `rule`, `source`, `feed`, `error` |
@@ -475,6 +560,15 @@ read back into names. The names are in the loader's findings too, under
 reading the gauge weeks later has neither the terminal nor the checkout. `info`
 rather than `warn`: on a ruler per datacenter reading a shared repository this is
 the normal state, and the check at authoring time already decided how loud it is.
+
+The two probe lines are written on a change of state and not on every probe. A
+probe every 30 seconds is 2,880 lines a day on a ruler whose Alertmanager is
+down over a weekend, which buries the line that says when it went down, and the
+gauge beside it is already the answer to "is it answering now". The first
+failure carries the request error, which is what says whether the host does not
+resolve, the port refuses, or Alertmanager answered and is not ready. Warned
+rather than errored: nothing about the ruler is failing, and 8.1 is why this is
+not a refusal either.
 
 A cluster the re-check pass could not sample is warned rather than errored, for
 the reason a finding is: the rule is still evaluating and still paging, and all
@@ -498,6 +592,15 @@ Credentials never reach a log. A ClickHouse driver error may echo connection
 detail, so every error `internal/query` returns goes through `redact` first.
 The address and the database survive, because an operator reading the line
 needs them; the password does not.
+
+The Alertmanager URL is the same hazard from the other side. An error from
+`net/http` is a `*url.Error`, and it prints the request URL it was built from,
+userinfo and all, so a send failure or a failed probe against
+`http://user:pass@alertmanager:9093` would put that password in a log line. It
+goes through the same removal the driver errors do, which leaves the scheme,
+host and path a reader needs. It is also the only reason that
+removal exists, so it goes when 6.5's authentication options land and a URL can
+no longer carry a credential.
 
 ### 8.5 Finding the ruler's queries in ClickHouse
 
@@ -533,7 +636,8 @@ because there are two audiences and one dashboard for both serves neither.
 - **Operations.** Is the ruler doing its job: missed iterations first, because
   that is 8.2's most important signal, then evaluation failures, evaluation
   duration against the group interval, staleness of the last evaluation, send
-  failures and notification latency. Then the three things about the process
+  failures, notification latency and whether the configured Alertmanager answers
+  at all. Then the three things about the process
   rather than about an evaluation: whether the last reload was accepted and when
   the running configuration was read, the sources whose user no longer meets the
   contract, and which build each replica is running.
