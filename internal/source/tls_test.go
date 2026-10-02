@@ -11,6 +11,7 @@ import (
 	"math/big"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -93,18 +94,26 @@ func TestSecureUsesTheHostTrustStore(t *testing.T) {
 		t.Fatalf("expected no problems, got %v", problems)
 	}
 
-	cfg := f.Sources[0].TLS
-	if cfg == nil {
-		t.Fatal("secure: true built no TLS config, so the connection would be plaintext")
+	material := f.Sources[0].TLS
+	if material == nil {
+		t.Fatal("secure: true read no TLS material, so the connection would be plaintext")
+	}
+	if len(material.CA) != 0 {
+		t.Error("a CA is set, so the host's trust store is not what verifies the server")
+	}
+	if material.ServerName != "" {
+		t.Errorf("ServerName = %q, want empty so crypto/tls takes the host in address", material.ServerName)
+	}
+	if material.InsecureSkipVerify {
+		t.Error("InsecureSkipVerify is on for a source that did not ask for it")
+	}
+
+	cfg, err := material.Config()
+	if err != nil {
+		t.Fatalf("building the driver's configuration: %v", err)
 	}
 	if cfg.RootCAs != nil {
 		t.Error("RootCAs is set, so the host's trust store is not what verifies the server")
-	}
-	if cfg.ServerName != "" {
-		t.Errorf("ServerName = %q, want empty so crypto/tls takes the host in address", cfg.ServerName)
-	}
-	if cfg.InsecureSkipVerify {
-		t.Error("InsecureSkipVerify is on for a source that did not ask for it")
 	}
 }
 
@@ -128,15 +137,27 @@ func TestTLSConfigImpliesSecure(t *testing.T) {
 		t.Fatalf("expected no problems, got %v", problems)
 	}
 
-	cfg := f.Sources[0].TLS
-	if cfg == nil {
-		t.Fatal("tls_config built no TLS config, so the connection would be plaintext")
+	material := f.Sources[0].TLS
+	if material == nil {
+		t.Fatal("tls_config read no TLS material, so the connection would be plaintext")
+	}
+	if material.ServerName != "ch.internal" {
+		t.Errorf("ServerName = %q, want ch.internal", material.ServerName)
+	}
+
+	// A ca_file replaces the host's trust store rather than adding to it: the
+	// CA that signed a private cluster is the only one that should be able to
+	// vouch for it.
+	cfg, err := material.Config()
+	if err != nil {
+		t.Fatalf("building the driver's configuration: %v", err)
 	}
 	if cfg.RootCAs == nil {
-		t.Error("ca_file was not read into RootCAs")
+		t.Fatal("ca_file did not reach RootCAs, so the host's trust store verifies the server")
 	}
-	if cfg.ServerName != "ch.internal" {
-		t.Errorf("ServerName = %q, want ch.internal", cfg.ServerName)
+	ca := readFile(t, certFile)
+	if !cfg.RootCAs.Equal(poolOf(t, ca)) {
+		t.Error("RootCAs holds something other than the ca_file, so it is not exclusive")
 	}
 }
 
@@ -157,10 +178,15 @@ func TestClientCertificateWithNoPasswordIsLegal(t *testing.T) {
 		t.Errorf("password = %q, want empty", s.Password)
 	}
 	if s.TLS == nil {
-		t.Fatal("no TLS config, so ClickHouse would never see a client certificate")
+		t.Fatal("no TLS material, so ClickHouse would never see a client certificate")
 	}
-	if len(s.TLS.Certificates) != 1 {
-		t.Fatalf("got %d client certificates, want 1", len(s.TLS.Certificates))
+
+	cfg, err := s.TLS.Config()
+	if err != nil {
+		t.Fatalf("building the driver's configuration: %v", err)
+	}
+	if len(cfg.Certificates) != 1 {
+		t.Fatalf("got %d client certificates, want 1", len(cfg.Certificates))
 	}
 }
 
@@ -258,8 +284,8 @@ func TestMismatchedClientKeyIsAFinding(t *testing.T) {
 	if problems[0].Check != lint.CheckSourceTLS {
 		t.Errorf("check = %s, want %s", problems[0].Check, lint.CheckSourceTLS)
 	}
-	if !strings.Contains(problems[0].Text, "cert_file") {
-		t.Errorf("text does not name the field: %q", problems[0].Text)
+	if !strings.Contains(problems[0].Text, "are not a pair") {
+		t.Errorf("text does not say what is wrong: %q", problems[0].Text)
 	}
 }
 
@@ -318,7 +344,81 @@ func TestInsecureSkipVerifyIsClearedByAnExemption(t *testing.T) {
 
 func TestTLSMinimumVersion(t *testing.T) {
 	f, _ := parseSourceYAML(t, "    secure: true\n")
-	if got := f.Sources[0].TLS.MinVersion; got != tlsMinVersion {
-		t.Errorf("MinVersion = %x, want %x", got, tlsMinVersion)
+	cfg, err := f.Sources[0].TLS.Config()
+	if err != nil {
+		t.Fatalf("building the driver's configuration: %v", err)
+	}
+	if cfg.MinVersion != tlsMinVersion {
+		t.Errorf("MinVersion = %x, want %x", cfg.MinVersion, tlsMinVersion)
+	}
+}
+
+// The key is secret material, so printing a source's TLS must not put it in a
+// log, the same posture Source.String takes with the password.
+func TestTLSStringRedactsTheKey(t *testing.T) {
+	dir := t.TempDir()
+	certFile, keyFile := writeCertAndKey(t, dir)
+
+	f, _ := parseSourceYAML(t, fmt.Sprintf(
+		"    tls_config:\n      cert_file: %s\n      key_file: %s\n", certFile, keyFile))
+
+	printed := fmt.Sprintf("%v", f.Sources[0].TLS)
+	if strings.Contains(printed, "PRIVATE KEY") {
+		t.Errorf("the key reached the printed form: %q", printed)
+	}
+}
+
+func readFile(t *testing.T, path string) []byte {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading %s: %v", path, err)
+	}
+	return data
+}
+
+func poolOf(t *testing.T, pem []byte) *x509.CertPool {
+	t.Helper()
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(pem) {
+		t.Fatalf("the fixture certificate is not PEM")
+	}
+	return pool
+}
+
+// A reload reuses a connection only when the source's whole definition is
+// reflect.DeepEqual to the one it was opened with (cmd/ruler/reload.go). So
+// two readings of an unchanged file have to compare equal, or every SIGHUP
+// reopens every source that configured TLS.
+func TestTwoReadingsOfTheSameFileAreEqual(t *testing.T) {
+	dir := t.TempDir()
+	certFile, keyFile := writeCertAndKey(t, dir)
+	body := fmt.Sprintf("    tls_config:\n      ca_file: %s\n      cert_file: %s\n      key_file: %s\n",
+		certFile, certFile, keyFile)
+
+	first, problems := parseSourceYAML(t, body)
+	if len(problems) != 0 {
+		t.Fatalf("expected no problems, got %v", problems)
+	}
+	second, _ := parseSourceYAML(t, body)
+
+	if !reflect.DeepEqual(first.Sources[0].TLS, second.Sources[0].TLS) {
+		t.Error("two readings of one file are not equal, so every reload reopens the connection")
+	}
+}
+
+// And a rotated certificate has to compare unequal, which is what makes the
+// reload pick it up.
+func TestARotatedCertificateIsNotEqual(t *testing.T) {
+	dir := t.TempDir()
+	certFile, keyFile := writeCertAndKey(t, dir)
+	body := fmt.Sprintf("    tls_config:\n      cert_file: %s\n      key_file: %s\n", certFile, keyFile)
+
+	before, _ := parseSourceYAML(t, body)
+	writeCertAndKey(t, dir)
+	after, _ := parseSourceYAML(t, body)
+
+	if reflect.DeepEqual(before.Sources[0].TLS, after.Sources[0].TLS) {
+		t.Error("a rotated pair compares equal, so a reload would keep using the old one")
 	}
 }

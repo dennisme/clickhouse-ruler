@@ -1,7 +1,6 @@
 package source
 
 import (
-	"crypto/tls"
 	"errors"
 	"os"
 	"strings"
@@ -56,14 +55,15 @@ type Source struct {
 	// never included in String.
 	Password string
 
-	// TLS is the resolved transport security, nil for a plaintext connection.
+	// TLS is the transport security, nil for a plaintext connection.
 	//
-	// Resolved when the file is parsed, for the reason the password is: key
+	// Read when the file is parsed, for the reason the password is: key
 	// material comes from files an operator owns, and a path that is wrong is
 	// a finding with a line number rather than a handshake failure hours
-	// later. The one place that opens a connection hands it to the driver, so
-	// every path that reaches a cluster reaches it the same way (spec 6.2).
-	TLS *tls.Config
+	// later. The one place that opens a connection builds the driver's
+	// configuration from it, so every path that reaches a cluster reaches it
+	// the same way (spec 6.2).
+	TLS *TLS
 
 	Table           string
 	TimestampColumn string

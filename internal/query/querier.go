@@ -43,7 +43,11 @@ type Attribution struct {
 // A nil Recorder means nothing is recorded, which is what the check paths
 // want: they run from a command line with no registry to report into.
 func Open(src source.Source, rec Recorder) (*Querier, error) {
-	conn, err := clickhouse.Open(options(src))
+	opts, err := options(src)
+	if err != nil {
+		return nil, fmt.Errorf("source %q: %s", src.Name, redact(err.Error(), src.Password))
+	}
+	conn, err := clickhouse.Open(opts)
 	if err != nil {
 		return nil, fmt.Errorf("source %q: connecting: %s", src.Name, redact(err.Error(), src.Password))
 	}
@@ -54,19 +58,29 @@ func Open(src source.Source, rec Recorder) (*Querier, error) {
 // --online, the privileges check and the re-check pass all open a connection
 // through Open, so transport security cannot be wired for evaluation alone
 // (spec 6.2).
-func options(src source.Source) *clickhouse.Options {
-	return &clickhouse.Options{
+func options(src source.Source) (*clickhouse.Options, error) {
+	opts := &clickhouse.Options{
 		Addr: []string{src.Address},
 		Auth: clickhouse.Auth{
 			Database: src.Database,
 			Username: src.Username,
 			Password: src.Password,
 		},
-		// Nil for a plaintext connection, which is what the driver reads it
-		// as. A handshake failure comes back through the same redaction as
-		// every other error out of this package (spec 8.4).
-		TLS: src.TLS,
 	}
+
+	// Nil TLS is a plaintext connection, which is what the driver reads it as.
+	// The material was validated when the sources file was parsed, so the
+	// error here is one that file already reported as a finding. A handshake
+	// failure comes back through the same redaction as every other error out
+	// of this package (spec 8.4).
+	if src.TLS != nil {
+		cfg, err := src.TLS.Config()
+		if err != nil {
+			return nil, err
+		}
+		opts.TLS = cfg
+	}
+	return opts, nil
 }
 
 func (q *Querier) Close() error { return q.conn.Close() }

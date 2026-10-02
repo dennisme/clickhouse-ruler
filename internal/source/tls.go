@@ -3,6 +3,7 @@ package source
 import (
 	"crypto/tls"
 	"crypto/x509"
+	"fmt"
 	"os"
 	"time"
 
@@ -17,11 +18,84 @@ import (
 // needs an older server reachable has a server to fix.
 const tlsMinVersion = uint16(tls.VersionTLS12)
 
+// TLS is a source's transport security: the material, not the driver's
+// configuration.
+//
+// The PEM bytes rather than a built tls.Config, because a reload reuses a
+// connection only when the source it was opened with is reflect.DeepEqual to
+// the one just read (cmd/ruler/reload.go). A tls.Config carries a
+// x509.CertPool, which holds a closure per certificate, and two closures are
+// never equal: every reload would reopen every source that configured TLS, and
+// a rotated certificate would be indistinguishable from an unchanged one.
+// Bytes compare, so an unchanged file keeps its connection and a rotated one
+// replaces it.
+type TLS struct {
+	// CA is the PEM bundle the server is verified against. Empty means the
+	// host's trust store, and a bundle here replaces it rather than adding to
+	// it: a private CA is the only thing that should be able to vouch for the
+	// cluster it signed.
+	CA []byte
+
+	// Cert and Key are the client pair ClickHouse authenticates for mTLS.
+	Cert, Key []byte
+
+	// ServerName is the name verified in the server's certificate. Empty
+	// leaves crypto/tls verifying the host in Address, which is the name on
+	// the certificate in every case but an IP or a tunnel.
+	ServerName string
+
+	InsecureSkipVerify bool
+}
+
+// String redacts the private key so that printing a TLS with %v or %s cannot
+// put it in a log.
+func (t *TLS) String() string {
+	material := "server verification only"
+	if len(t.Cert) > 0 {
+		material = "client certificate, key xxxxx"
+	}
+	return "tls (" + material + ")"
+}
+
+// Config is what the driver connects with.
+//
+// Built per connection rather than kept, for the reason above. The error is
+// what parsing already reported as a finding: a source that failed its checks
+// is a source whose material is wrong, and this is the second place that would
+// discover it.
+func (t *TLS) Config() (*tls.Config, error) {
+	cfg := &tls.Config{
+		MinVersion: tlsMinVersion,
+		ServerName: t.ServerName,
+		// The downgrade an operator asked for, reported by File.InsecureTLS,
+		// which needs a clock to read the exemption that clears it.
+		InsecureSkipVerify: t.InsecureSkipVerify, //nolint:gosec // G402: reported by source/tls-insecure
+	}
+
+	if len(t.CA) > 0 {
+		pool := x509.NewCertPool()
+		if !pool.AppendCertsFromPEM(t.CA) {
+			return nil, fmt.Errorf("the certificate authority holds no PEM certificate")
+		}
+		cfg.RootCAs = pool
+	}
+
+	if len(t.Cert) > 0 {
+		pair, err := tls.X509KeyPair(t.Cert, t.Key)
+		if err != nil {
+			return nil, fmt.Errorf("loading the client certificate: %w", err)
+		}
+		cfg.Certificates = []tls.Certificate{pair}
+	}
+
+	return cfg, nil
+}
+
 // tlsRef is what a source said about transport security.
 //
-// Paths rather than material. resolve reads them, so a certificate that cannot
-// be read is a finding with the line of the field that named it, found by
-// `ruler check` rather than by a daemon at its first evaluation (spec 6.2).
+// Paths rather than material. resolveTLS reads them, so a certificate that
+// cannot be read is a finding with the line of the field that named it, found
+// by `ruler check` rather than by a daemon at its first evaluation (spec 6.2).
 type tlsRef struct {
 	// set is whether a tls_config block was written at all, which is what
 	// turns TLS on without `secure`.
@@ -61,14 +135,14 @@ func parseTLSConfig(r *lint.Reader, n *yaml.Node, lines lint.Lines) tlsRef {
 	return ref
 }
 
-// resolveTLS builds the connection's TLS configuration, nil for a plaintext
-// connection.
+// resolveTLS reads the material a source's transport security is built from,
+// nil for a plaintext connection.
 //
 // secure on its own means the host's trust store, which is the whole of the
 // managed service case. A tls_config turns TLS on by itself, so `secure: false`
 // beside one is a contradiction rather than a precedence rule: one of the two
 // is stale, and silently choosing either connects in a way nobody asked for.
-func (s Source) resolveTLS(r *lint.Reader, secure bool, ref tlsRef) *tls.Config {
+func (s Source) resolveTLS(r *lint.Reader, secure bool, ref tlsRef) *TLS {
 	line := s.lines.Of("secure", "tls_config")
 
 	switch {
@@ -80,54 +154,39 @@ func (s Source) resolveTLS(r *lint.Reader, secure bool, ref tlsRef) *tls.Config 
 		return nil
 	}
 
-	cfg := &tls.Config{
-		MinVersion: tlsMinVersion,
-		// Empty leaves crypto/tls verifying the host in Address, which is the
-		// name on the certificate in every case but an IP or a tunnel.
-		ServerName: ref.serverName,
-		// The downgrade an operator asked for. It is reported by
-		// File.InsecureTLS, which needs a clock to read the exemption that
-		// clears it, so nothing here refuses it.
-		InsecureSkipVerify: ref.insecureSkipVerify, //nolint:gosec // G402: reported by source/tls-insecure
+	material := &TLS{
+		ServerName:         ref.serverName,
+		InsecureSkipVerify: ref.insecureSkipVerify,
 	}
-
 	if ref.caFile != "" {
-		cfg.RootCAs = s.rootCAs(r, ref.caFile)
+		material.CA = s.readCA(r, ref.caFile)
 	}
-	s.clientCertificate(r, cfg, ref)
+	s.readClientCertificate(r, material, ref)
 
-	return cfg
+	return material
 }
 
-// rootCAs reads the PEM bundle the server is verified against.
-func (s Source) rootCAs(r *lint.Reader, path string) *x509.CertPool {
+// readCA reads the PEM bundle the server is verified against.
+func (s Source) readCA(r *lint.Reader, path string) []byte {
 	line := s.lines.Of("tls_config.ca_file", "tls_config")
 
-	// Read errors name the path, as password_file's do.
-	raw, err := os.ReadFile(path) //nolint:gosec // an operator-supplied path is the input
-	if err != nil {
-		r.Add(line, lint.CheckSourceTLS, lint.SeverityError,
-			"cannot read ca_file %q: %s", path, errReason(err))
+	raw, ok := s.readMaterial(r, line, "ca_file", path)
+	if !ok {
 		return nil
 	}
-	// A projected secret volume that has not populated yet reads as empty, and
-	// an empty pool verifies nothing rather than failing visibly.
-	if len(raw) == 0 {
-		r.Add(line, lint.CheckSourceTLS, lint.SeverityError, "ca_file %q is empty", path)
-		return nil
-	}
-
-	pool := x509.NewCertPool()
-	if !pool.AppendCertsFromPEM(raw) {
+	// Checked here rather than left to the handshake: a bundle with no
+	// certificate in it verifies nothing, and the driver would report that as
+	// a failure to connect.
+	if !x509.NewCertPool().AppendCertsFromPEM(raw) {
 		r.Add(line, lint.CheckSourceTLS, lint.SeverityError,
 			"ca_file %q contains no PEM certificate", path)
 		return nil
 	}
-	return pool
+	return raw
 }
 
-// clientCertificate loads the pair ClickHouse authenticates for mTLS.
-func (s Source) clientCertificate(r *lint.Reader, cfg *tls.Config, ref tlsRef) {
+// readClientCertificate reads the pair ClickHouse authenticates for mTLS.
+func (s Source) readClientCertificate(r *lint.Reader, material *TLS, ref tlsRef) {
 	if ref.certFile == "" && ref.keyFile == "" {
 		return
 	}
@@ -140,17 +199,42 @@ func (s Source) clientCertificate(r *lint.Reader, cfg *tls.Config, ref tlsRef) {
 		return
 	}
 
-	pair, err := tls.LoadX509KeyPair(ref.certFile, ref.keyFile)
-	if err != nil {
-		// The reason comes from crypto/tls and names neither file, so the
-		// finding names both: half a rotation leaves a key that is not the
-		// certificate's, and which of the two is stale is the question.
-		r.Add(s.lines.Of("tls_config.cert_file", "tls_config"),
-			lint.CheckSourceTLS, lint.SeverityError,
-			"cannot load cert_file %q with key_file %q: %s", ref.certFile, ref.keyFile, errReason(err))
+	line := s.lines.Of("tls_config.cert_file", "tls_config")
+	cert, certOK := s.readMaterial(r, line, "cert_file", ref.certFile)
+	key, keyOK := s.readMaterial(r,
+		s.lines.Of("tls_config.key_file", "tls_config"), "key_file", ref.keyFile)
+	if !certOK || !keyOK {
 		return
 	}
-	cfg.Certificates = []tls.Certificate{pair}
+
+	// The pair is parsed here and the bytes are kept, so half a rotation is a
+	// finding rather than a handshake failure. The reason crypto/tls gives
+	// names neither file, so the finding names both: which of the two is
+	// stale is the question an operator has.
+	if _, err := tls.X509KeyPair(cert, key); err != nil {
+		r.Add(line, lint.CheckSourceTLS, lint.SeverityError,
+			"cert_file %q and key_file %q are not a pair: %s", ref.certFile, ref.keyFile, err)
+		return
+	}
+	material.Cert, material.Key = cert, key
+}
+
+// readMaterial reads one PEM file, reporting what password_file reports for
+// the same two failures and for the same reasons: a read error names the path
+// and never the contents, and an empty file is a projected secret volume that
+// has not populated yet.
+func (s Source) readMaterial(r *lint.Reader, line int, field, path string) ([]byte, bool) {
+	raw, err := os.ReadFile(path) //nolint:gosec // an operator-supplied path is the input
+	if err != nil {
+		r.Add(line, lint.CheckSourceTLS, lint.SeverityError,
+			"cannot read %s %q: %s", field, path, errReason(err))
+		return nil, false
+	}
+	if len(raw) == 0 {
+		r.Add(line, lint.CheckSourceTLS, lint.SeverityError, "%s %q is empty", field, path)
+		return nil, false
+	}
+	return raw, true
 }
 
 // InsecureTLS reports every source that turned certificate verification off
