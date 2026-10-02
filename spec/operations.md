@@ -72,6 +72,51 @@ cluster out of twelve is a finding for `source/privileges` and the evaluation
 failure counters, not a reason to declare the whole ruler unfit, and a probe
 that flaps with any cluster's availability gets disabled by whoever is on call.
 
+**A probe does not wait for a reload, and what it answers during one is the
+configuration that is running.** Until the scheduler has swapped, the previous
+rules are the ones evaluating and delivering, so answering from them is the
+current answer rather than a stale one. The rules being loaded are not running
+yet, and a probe reporting on them would be claiming something that is not true
+of this process. So the state the probe reads is published at the moment the
+scheduler starts evaluating it, and not before.
+
+That makes the probe's own cost the thing to get right, because a reload is the
+slowest thing the ruler does: it opens a connection per source and then waits
+for every in-flight evaluation of the previous configuration to finish. A probe
+that waits on any of that reports on the reload instead of on the ruler, and
+kubelet hangs up first, so a `SIGHUP` behind one slow cluster takes a replica
+out of service while it is evaluating perfectly. 10.2's rollout safety depends
+on readiness meaning what it says.
+
+**Snapshotting under the reload's lock is not the fix, because that is what it
+already did.** The probe read its two values under the lock and pinged outside
+it; the contention was never the ping, it was acquiring a lock a reload holds
+from end to end. So the answer is that the state readiness reads is one
+immutable value, published as a whole and read without a lock.
+
+**A probe may therefore ping a connection the reload is closing,** because it
+can hold the previous value while the reload closes what the new one replaced.
+That costs one probe: the driver answers "connection is closed", readiness needs
+only one source answering, and the probe repeats on its period. The alternative
+is making a reload wait for in-flight probes to drain, which is the same bug
+pointed the other way.
+
+**Pings go out concurrently and the first success answers.** Asked in sequence,
+one cluster that hangs spends the entire budget before the second is tried, so a
+ruler with one dead cluster and eleven healthy ones can report not ready, and
+which cluster happened to be asked first decides it. Map iteration order is not
+something readiness should depend on.
+
+**The probe's budget has to fit inside what the supervisor gives it.** The
+handler's own timeout was five seconds against a chart that allows three, so
+kubelet gave up before the body carrying the reason arrived, and the reason is
+the whole point of answering with one rather than with a bare 503. The binary's
+number is what moves, down to two seconds, rather than the chart's going up: the
+chart is one deployment of many and the default has to be right for whoever
+never uses it, and a cluster that cannot answer a ping inside two seconds is not
+answering in any sense readiness cares about. A test reads the chart's value so
+the two cannot drift apart again.
+
 **Where alerts go is not a readiness term either, and not a startup refusal.**
 A ruler whose Alertmanager is unreachable delivers nothing, which sounds like
 the question readiness asks and is not it.
