@@ -4,38 +4,16 @@ A read of the running code against `spec/` and the git history, from three
 angles: what an operator cannot see, what a rule author has to put up with, and
 what is outright broken. All tests pass as of this review.
 
+Items that have since been fixed are at the bottom under Closed, with what
+closed them. Numbering never changes, so a reference to one of these survives
+the item being fixed.
+
 ## Bugs
-
-### 1. `clickhouse_ruler_problem` leaks a stuck series when a rule file is renamed
-
-The evaluation and re-check feeds clear by `{rule, file, check, source}`
-(`internal/scheduler/scheduler.go:476`, `internal/scheduler/recheck.go:75`).
-Nothing in the reload path clears by `file`:
-
-- `deleteGroup` does not touch `Problem` (`internal/scheduler/metrics.go:385`)
-- `deleteRule` does not touch `Problem` (`internal/scheduler/metrics.go:401`)
-- `deleteRuleName` does, but only when no group holds that alert name any more
-  (`internal/scheduler/scheduler.go`, `deleteGoneSeries`). A rename keeps the
-  name, so it never fires.
-- `ReportLoadFindings` clears by `check`, and only for load-owned checks
-  (`internal/scheduler/load.go:31`)
-
-Move a rule from `payments/checkout.yaml` to `payments/checkout_latency.yaml`
-and the old series sits at 1 until the process restarts. `clickhouse_ruler_problem > 0`
-is the shipped alert (`docs/operations.md:327`), so it pages forever with no fix
-available to the person it is addressed to. Spec 8.2 says a finding that went
-away has to stop being a series; this breaks that contract.
-
-The same leak happens when a rule is deleted from one group while another group
-still holds a rule by that alert name.
-
-Confirmed against `deleteGoneSeries` with a throwaway test: one series survives
-a move from `rules/old.yaml:payments` to `rules/new.yaml:payments`.
 
 ### 2. `rate(failures)/rate(evaluations)` can exceed 1
 
-`internal/scheduler/scheduler.go:434` increments `EvaluationsTotal` once per rule
-per tick, then adds `len(res.SourceErrors)` to `EvaluationFailuresTotal`. A rule
+`internal/scheduler/scheduler.go:489` increments `EvaluationsTotal` once per rule
+per tick, then `:491` adds `len(res.SourceErrors)` to `EvaluationFailuresTotal`. A rule
 matching four sources that all fail records 4 failures against 1 evaluation.
 
 `docs/operations.md:51` ships exactly that ratio with `> 0.1`, read as "10% of
@@ -95,19 +73,17 @@ need for the first in the meantime.
 
 ## Operator unclear
 
-### The Alertmanager URL is never verified
-
-No startup check, not a readiness term, and `alerts_send_failures_total` only
-moves once something fires. A typo'd `--alertmanager` is a ready, green, silent
-ruler until the first incident. This is the worst failure mode in the thing and
-it has no signal at all.
-
 ### Single Alertmanager
 
-`--alertmanager` takes one URL (`internal/notify/client.go:27`). Prometheus fans
+`--alertmanager` takes one URL (`internal/notify/client.go:34`). Prometheus fans
 out to a set. An HA pair needs a load balancer the operator supplies, and
 `docs/running.md` does not say so. The `alertmanager` metric label implies a
 plurality that does not exist.
+
+Spec 6.5 now carries the argument and the ordering: Alertmanager's own docs say
+not to load balance in front of it, so a list is the right shape here even
+though a source keeps one address, and the list waits on the item below because
+fan-out multiplies that worst case.
 
 ### An Alertmanager outage shows up as missed iterations
 
@@ -118,12 +94,13 @@ missing iterations, which spec 8.2 calls the single most important operational
 signal, for a cause that is not evaluation.
 
 Either bound the send by the group interval, or say this next to the missed
-iterations expression in `docs/operations.md`.
+iterations expression in `docs/operations.md`. Spec 6.5 makes this a blocker for
+a list of Alertmanagers rather than a standalone annoyance.
 
 ### The re-check pass reads production rows by default
 
 `--recheck-interval` defaults to `1h` (`cmd/ruler/run.go:54`,
-`spec/operations.md:1832`), but `internal/scheduler/scheduler.go:35` says "zero
+`spec/operations.md:1992`), but `internal/scheduler/scheduler.go:35` says "zero
 when an operator did not ask for it. The pass reads real data, so nothing runs on
 a ruler that never configured it."
 
@@ -140,16 +117,6 @@ it.
 
 ## Metrics and logs
 
-### The re-check pass has no observability
-
-`internal/scheduler/scheduler.go:544` calls `runGroup(ctx, s.clock, spec, nil, nil)`
-and does not wrap `spec.Eval` the way the real group loop does. So the pass has no
-last-run timestamp, no iteration count, no missed count and no failure count.
-
-If it stalls or overruns its hour, `rule/attribute-key` simply never raises,
-which is the exact failure spec 8.6 names: an empty panel looks identical to a
-healthy system. Cheapest fix on this list and the biggest hole.
-
 ### Two spec'd metrics are still absent
 
 `clickhouse_ruler_rule_group_interval_seconds` and
@@ -161,14 +128,6 @@ Without the interval gauge every cadence expression hardcodes a number the rule
 file is free to change. Without tick delay, a ruler running consistently late
 without ever overrunning an interval reads healthy.
 
-### One log line is in neither table
-
-`rule loaded with a finding that should have blocked the merge`
-(`internal/scheduler/load.go:63`) is missing from spec 8.4 and from the log table
-in `docs/operations.md`. Spec 8.7 promises "every log line, with what it means",
-and this is the line for the newest and least obvious behaviour: a rule that got
-past CI is running anyway.
-
 ### No `--log-format=json`
 
 Spec 8.4 declines it until somebody asks. Asking: structured `slog` output in
@@ -177,7 +136,7 @@ text form means every Kubernetes log pipeline re-parses it. One handler swap.
 ### The notification latency histogram includes failed sends
 
 `internal/scheduler/sender.go:24` observes before the error check, so a 42s retry
-storm lands in the p99 that the `> 5s` alert at `docs/operations.md:148` reads.
+storm lands in the p99 that the `> 5s` alert at `docs/operations.md:191` reads.
 A reachability problem then fires the latency alert as well. Either skip the
 observation on error, or label it by outcome.
 
@@ -195,7 +154,7 @@ The README says "A rule names no cluster. It selects sources by label, and runs
 against every." But `expr` hardcodes `FROM otel.otel_traces`, and only
 `{{ .From }}` and `{{ .To }}` are templated (`internal/query/query.go:28`). The
 source file already declares `database`, `table` and `timestamp_column`, and
-`table:` is "never read by the querier" (`spec/design.md:1232`).
+`table:` is "never read by the querier" (`spec/design.md:1284`).
 
 So a rule selecting four sources only works if all four spell the database and
 table identically. Otherwise it is one rule per cluster, which is what the label
@@ -216,9 +175,86 @@ helps in CI, not at a desk. Accepting a file path would be a few lines.
 Three flags each carry their own rule about which stream they land on depending
 on `--format`. Workable and documented, but a lot of rules for one command.
 
+## Closed
+
+Original numbering and original text kept, so a reference written before the
+fix still points at the right item.
+
+### 1. `clickhouse_ruler_problem` leaks a stuck series when a rule file is renamed
+
+**Closed by `4da0286`.** `deleteGoneSeries` clears by rule and file together
+(`internal/scheduler/scheduler.go:424`), so a rule that moved leaves no series
+behind.
+
+The evaluation and re-check feeds clear by `{rule, file, check, source}`
+(`internal/scheduler/scheduler.go:476`, `internal/scheduler/recheck.go:75`).
+Nothing in the reload path clears by `file`:
+
+- `deleteGroup` does not touch `Problem` (`internal/scheduler/metrics.go:385`)
+- `deleteRule` does not touch `Problem` (`internal/scheduler/metrics.go:401`)
+- `deleteRuleName` does, but only when no group holds that alert name any more
+  (`internal/scheduler/scheduler.go`, `deleteGoneSeries`). A rename keeps the
+  name, so it never fires.
+- `ReportLoadFindings` clears by `check`, and only for load-owned checks
+  (`internal/scheduler/load.go:31`)
+
+Move a rule from `payments/checkout.yaml` to `payments/checkout_latency.yaml`
+and the old series sits at 1 until the process restarts. `clickhouse_ruler_problem > 0`
+is the shipped alert (`docs/operations.md:327`), so it pages forever with no fix
+available to the person it is addressed to. Spec 8.2 says a finding that went
+away has to stop being a series; this breaks that contract.
+
+The same leak happens when a rule is deleted from one group while another group
+still holds a rule by that alert name.
+
+Confirmed against `deleteGoneSeries` with a throwaway test: one series survives
+a move from `rules/old.yaml:payments` to `rules/new.yaml:payments`.
+
+### The Alertmanager URL is never verified
+
+**Closed by `3c6dfec`, merged in #64.** A malformed URL refuses to start, and
+`clickhouse_ruler_alertmanager_last_probe_successful` reports whether the
+configured Alertmanager answered its last probe. Deliberately not a readiness
+term: one Alertmanager serves every replica.
+
+No startup check, not a readiness term, and `alerts_send_failures_total` only
+moves once something fires. A typo'd `--alertmanager` is a ready, green, silent
+ruler until the first incident. This is the worst failure mode in the thing and
+it has no signal at all.
+
+### The re-check pass has no observability
+
+**Closed by `5f3718d` and `7070009`.** The pass reports its last completion,
+its last duration, and the clusters it could not sample.
+
+`internal/scheduler/scheduler.go:544` calls `runGroup(ctx, s.clock, spec, nil, nil)`
+and does not wrap `spec.Eval` the way the real group loop does. So the pass has no
+last-run timestamp, no iteration count, no missed count and no failure count.
+
+If it stalls or overruns its hour, `rule/attribute-key` simply never raises,
+which is the exact failure spec 8.6 names: an empty panel looks identical to a
+healthy system. Cheapest fix on this list and the biggest hole.
+
+### One log line is in neither table
+
+**Closed by `7070009`.** The line is in spec 8.4's table and in the log table
+in `docs/operations.md`.
+
+`rule loaded with a finding that should have blocked the merge`
+(`internal/scheduler/load.go:63`) is missing from spec 8.4 and from the log table
+in `docs/operations.md`. Spec 8.7 promises "every log line, with what it means",
+and this is the line for the newest and least obvious behaviour: a rule that got
+past CI is running anyway.
+
 ## Order to fix
 
-1. Re-check pass observability. A silent pass is a check nobody has.
-2. The `Problem` file-rename leak. An unclearable page addressed to somebody who
-   cannot clear it.
-3. Alertmanager URL verification. The only failure here with no signal.
+1. Bugs 3 and 4 together. They are one interaction, the readiness probe against
+   a reload, and fixing either alone leaves kubelet still giving up before the
+   body arrives. Every `SIGHUP` behind a slow cluster currently flips a pod
+   NotReady, and spec 10.2's HA topology is built on readiness meaning
+   something.
+2. Bug 2 and the notification latency histogram. Both small, both make an
+   expression this repository ships in `docs/operations.md` read wrong, which is
+   worse than a missing metric: an operator trusts the number.
+3. Bug 5. Decide whether TLS to ClickHouse is a feature or the three comments
+   are wrong, and correct the comments either way in the meantime.
