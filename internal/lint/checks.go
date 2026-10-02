@@ -63,6 +63,8 @@ const (
 	CheckSourceDatabase        = "source/database"
 	CheckSourceUsername        = "source/username"
 	CheckSourcePassword        = "source/password"
+	CheckSourceTLS             = "source/tls"
+	CheckSourceTLSInsecure     = "source/tls-insecure"
 	CheckSourceTable           = "source/table"
 	CheckSourceTimestampColumn = "source/timestamp-column"
 	CheckSourceEvaluationDelay = "source/evaluation-delay"
@@ -526,6 +528,18 @@ var checks = []Check{
 	{
 		Name: CheckSourcePassword, Spec: "6.6", Fixed: true, Always: SeverityError,
 		Summary: "a secret that could not be read, or both secret sources set at once",
+	},
+	{
+		Name: CheckSourceTLS, Spec: "6.2", Fixed: true, Always: SeverityError,
+		Summary: "TLS key material that could not be read, or a tls_config that contradicts itself",
+	},
+	// Configurable so that an exemption can clear it, which is the whole
+	// design: a downgrade an operator chose, with a reason and a date, rather
+	// than a warning nobody reads or a cluster this ruler cannot reach
+	// (spec 6.2, 7.7). Error by default, because no policy can raise it.
+	{
+		Name: CheckSourceTLSInsecure, Spec: "6.2", Default: SeverityError,
+		Summary: "a source that skips certificate verification without an exemption",
 	},
 	{
 		Name: CheckSourceTable, Spec: "6.6", Fixed: true, Always: SeverityError,

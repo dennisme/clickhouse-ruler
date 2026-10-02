@@ -237,7 +237,13 @@ func loadSources(path string) (*source.File, []lint.Problem, error) {
 	// Expiry is state rather than shape, so it is read here with a clock
 	// rather than at parse time. Both commands load sources through this, so
 	// an exemption that has run out fails CI and refuses to start.
-	problems = append(problems, f.ExpiredExemptions(time.Now())...)
+	now := time.Now()
+	problems = append(problems, f.ExpiredExemptions(now)...)
+
+	// Read with the same clock and for the same reason: whether a verification
+	// downgrade is still agreed to is state, and the exemption that clears it
+	// has a date (spec 6.2, 7.7).
+	problems = append(problems, f.InsecureTLS(now)...)
 
 	return f, problems, nil
 }

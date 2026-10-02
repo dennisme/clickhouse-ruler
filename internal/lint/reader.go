@@ -131,6 +131,21 @@ func (r *Reader) Int(n *yaml.Node, where string) (int, bool) {
 	return v, true
 }
 
+func (r *Reader) Bool(n *yaml.Node, where string) (bool, bool) {
+	raw, ok := r.Scalar(n, where)
+	if !ok {
+		return false, false
+	}
+	switch raw {
+	case "true":
+		return true, true
+	case "false":
+		return false, true
+	}
+	r.Add(n.Line, CheckYAMLType, SeverityError, "%s must be true or false, got %q", where, raw)
+	return false, false
+}
+
 // StringMap reads a mapping of scalars, recording each key's line under
 // prefix so a finding can point at the offending entry.
 func (r *Reader) StringMap(n *yaml.Node, prefix, where string, lines map[string]int) map[string]string {

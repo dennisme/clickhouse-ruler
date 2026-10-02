@@ -1,6 +1,7 @@
 package source
 
 import (
+	"crypto/tls"
 	"errors"
 	"os"
 	"strings"
@@ -54,6 +55,15 @@ type Source struct {
 	// Password is the resolved secret. It is never written in the file and
 	// never included in String.
 	Password string
+
+	// TLS is the resolved transport security, nil for a plaintext connection.
+	//
+	// Resolved when the file is parsed, for the reason the password is: key
+	// material comes from files an operator owns, and a path that is wrong is
+	// a finding with a line number rather than a handshake failure hours
+	// later. The one place that opens a connection hands it to the driver, so
+	// every path that reaches a cluster reaches it the same way (spec 6.2).
+	TLS *tls.Config
 
 	Table           string
 	TimestampColumn string
@@ -188,6 +198,8 @@ func parseSource(r *lint.Reader, n *yaml.Node, env func(string) (string, bool), 
 	s := Source{lines: lint.NewLines(n.Line)}
 	firstProblem := r.Count()
 	var secret secretRef
+	var secure bool
+	var transport tlsRef
 
 	for _, e := range lint.Entries(n) {
 		s.lines.Set(e.Key.Value, e.Key.Line)
@@ -204,6 +216,10 @@ func parseSource(r *lint.Reader, n *yaml.Node, env func(string) (string, bool), 
 			secret.file, _ = r.Scalar(e.Value, "password_file")
 		case "password_env":
 			secret.env, _ = r.Scalar(e.Value, "password_env")
+		case "secure":
+			secure, _ = r.Bool(e.Value, "secure")
+		case "tls_config":
+			transport = parseTLSConfig(r, e.Value, s.lines)
 		case "table":
 			s.Table, _ = r.Scalar(e.Value, "table")
 		case "timestamp_column":
@@ -247,6 +263,7 @@ func parseSource(r *lint.Reader, n *yaml.Node, env func(string) (string, bool), 
 	s.checkName(r, namedAt)
 	s.checkConnection(r)
 	s.Password = s.resolvePassword(r, secret, env)
+	s.TLS = s.resolveTLS(r, secure, transport)
 	s.checkQueryTarget(r)
 
 	r.AttributeFrom(firstProblem, s.Name)
@@ -333,7 +350,8 @@ func (s Source) resolvePassword(r *lint.Reader, secret secretRef, env func(strin
 	}
 
 	// No password at all is legal: local development against the compose
-	// stack, and mTLS where ClickHouse authenticates the client certificate.
+	// stack, and mTLS, where the client certificate in tls_config is what
+	// ClickHouse authenticates.
 	return ""
 }
 

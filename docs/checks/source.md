@@ -31,6 +31,8 @@ alone. See spec 6.6 and 7.7.
 | [`source/privileges`](#source-privileges) | `warning` by default | required: `clusters-readable`, `constraints`, `readonly`, `sources-revoked`, `table-readable` | [6.7.2](https://github.com/dennisme/clickhouse-ruler/blob/main/spec.md) |
 | [`source/table`](#source-table) | fixed, always `error` | none | [6.6](https://github.com/dennisme/clickhouse-ruler/blob/main/spec.md) |
 | [`source/timestamp-column`](#source-timestamp-column) | fixed, always `error` | none | [6.8](https://github.com/dennisme/clickhouse-ruler/blob/main/spec.md) |
+| [`source/tls`](#source-tls) | fixed, always `error` | none | [6.2](https://github.com/dennisme/clickhouse-ruler/blob/main/spec.md) |
+| [`source/tls-insecure`](#source-tls-insecure) | `error` by default | none | [6.2](https://github.com/dennisme/clickhouse-ruler/blob/main/spec.md) |
 | [`source/username`](#source-username) | fixed, always `error` | none | [6.6](https://github.com/dennisme/clickhouse-ruler/blob/main/spec.md) |
 
 <!-- end generated -->
@@ -157,7 +159,84 @@ password_env: RULER_PASSWORD_PAYMENTS
 password_file: /run/secrets/ruler/payments
 ```
 
-No password at all is fine for local development and for mTLS.
+No password at all is fine for local development, and for mTLS, where the
+client certificate in `tls_config` is what ClickHouse authenticates
+(`source/tls`).
+
+<a id="source-tls"></a>
+
+### source/tls
+
+TLS key material that could not be read, or a `tls_config` that contradicts
+itself.
+
+`secure: true` connects over TLS and verifies the server against the host's
+trust store, which is all a managed service needs. `tls_config` is for a
+cluster whose trust is not the default one, and it turns TLS on by itself, so
+`secure: false` beside one is reported rather than resolved: one of the two is
+stale, and silently picking either connects in a way nobody asked for.
+
+Key material comes from files, never inline, the posture `password_file`
+already sets. The files are read when the sources file is parsed, so a path
+that is wrong fails `ruler check` instead of a daemon at its first evaluation.
+A `cert_file` without its `key_file` is reported too: a certificate with no key
+cannot be presented, and a key with no certificate is never sent, which looks
+like a cluster refusing a credential it was never offered.
+
+```yaml
+# before: the CA that verifies the cluster is a path nothing read
+- name: payments_prod
+  address: ch-prod:9440
+  tls_config:
+    ca_file: /run/secrets/ruler/ca.pem   # not there under this name
+
+# after
+- name: payments_prod
+  address: ch-prod:9440
+  tls_config:
+    ca_file: /run/secrets/ruler/internal-ca.pem
+```
+
+`server_name` defaults to the host in `address`, so it is only written when the
+host is not the name on the certificate: an IP address, or a tunnel. A client
+certificate with no password at all is a legal source, which is what mTLS is.
+
+<a id="source-tls-insecure"></a>
+
+### source/tls-insecure
+
+A source that skips certificate verification without an exemption.
+
+`insecure_skip_verify` encrypts the connection and then verifies nothing about
+who is on the other end of it, so the cluster the rules name and the cluster
+they reach are no longer the same claim. It is a downgrade an operator chooses,
+and an exemption is what it costs: a reason and a date, in the operator's own
+file, under the CODEOWNERS that already guard the credentials.
+
+The date is the point. On the day it expires the sources file fails until
+somebody states the reason again, which is the difference between a downgrade
+taken for a quarter and one nobody remembers taking.
+
+```yaml
+# before: verification off, and nothing in the repository says why
+- name: payments_staging
+  address: ch-staging:9440
+  tls_config:
+    insecure_skip_verify: true
+
+# after
+- name: payments_staging
+  address: ch-staging:9440
+  tls_config:
+    insecure_skip_verify: true
+  exempt:
+    - check: source/tls-insecure
+      reason: staging's certificate is self-signed until the internal CA lands
+      until: 2026-12-01
+```
+
+The better fix is `ca_file`: a self-signed certificate that the ruler is given
+as a CA is verified like any other, and nothing has to be exempted.
 
 <a id="source-table"></a>
 

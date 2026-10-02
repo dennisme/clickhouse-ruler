@@ -43,18 +43,30 @@ type Attribution struct {
 // A nil Recorder means nothing is recorded, which is what the check paths
 // want: they run from a command line with no registry to report into.
 func Open(src source.Source, rec Recorder) (*Querier, error) {
-	conn, err := clickhouse.Open(&clickhouse.Options{
+	conn, err := clickhouse.Open(options(src))
+	if err != nil {
+		return nil, fmt.Errorf("source %q: connecting: %s", src.Name, redact(err.Error(), src.Password))
+	}
+	return &Querier{src: src, conn: conn, recorder: rec}, nil
+}
+
+// options is how a source reaches a cluster, in one place: ruler check
+// --online, the privileges check and the re-check pass all open a connection
+// through Open, so transport security cannot be wired for evaluation alone
+// (spec 6.2).
+func options(src source.Source) *clickhouse.Options {
+	return &clickhouse.Options{
 		Addr: []string{src.Address},
 		Auth: clickhouse.Auth{
 			Database: src.Database,
 			Username: src.Username,
 			Password: src.Password,
 		},
-	})
-	if err != nil {
-		return nil, fmt.Errorf("source %q: connecting: %s", src.Name, redact(err.Error(), src.Password))
+		// Nil for a plaintext connection, which is what the driver reads it
+		// as. A handshake failure comes back through the same redaction as
+		// every other error out of this package (spec 8.4).
+		TLS: src.TLS,
 	}
-	return &Querier{src: src, conn: conn, recorder: rec}, nil
 }
 
 func (q *Querier) Close() error { return q.conn.Close() }
