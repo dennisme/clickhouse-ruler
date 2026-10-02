@@ -142,6 +142,49 @@ not reaching anybody, and the ruler cannot tell you that any other way.
 Check Alertmanager first: the ruler's state machine is unaffected by a
 delivery failure.
 
+### The Alertmanager not answering
+
+```promql
+clickhouse_ruler_alertmanager_last_probe_successful == 0
+```
+
+**Trouble after a few minutes, and the only signal that works before anything
+has fired.** The ruler probes the address in `--alertmanager` every 30 seconds,
+asking Alertmanager's own `/-/ready`, and this is 1 when it answered and 0 when
+it did not. Give it two or three probes before paging on it, so a single
+restarting Alertmanager is not a page:
+
+```promql
+min_over_time(clickhouse_ruler_alertmanager_last_probe_successful[5m]) == 0
+```
+
+**Zero on a ruler that has never delivered anything is a wrong address.** That
+is the case the send failures above cannot cover: they are labelled
+`alertmanager` and have no series until a send has been attempted, so
+`rate(clickhouse_ruler_alerts_send_failures_total[5m]) > 0` reads as nothing at
+all on a ruler that was never asked to deliver. A host that does not resolve, a
+port nothing listens on, or a path prefix that is not Alertmanager's all look
+identical from the outside until the first page, which is the worst moment to
+find out. The log line beside this carries the request error, which says which
+of the three it is.
+
+**Zero on a ruler that was delivering is Alertmanager.** Nothing about the ruler
+is degraded: rules evaluate, alert state advances, firing alerts are re-posted
+on `--resend-interval`, and a resolve is retried for its retention window. What
+you are watching is the clock on `--resend-tolerance` periods, after which
+Alertmanager expires alerts that are still firing. Send failures and this gauge
+go to zero and non-zero together in that case, which is how you tell it from the
+wrong address above.
+
+**It is not in `/-/ready` and it will not refuse to start**, which is
+deliberate. One Alertmanager serves every replica of the ruler, so a readiness
+term would take a whole deployment unready at once and stop any rollout in
+progress, and a startup refusal would mean an Alertmanager down for ten minutes
+is a ruler that cannot be restarted for ten minutes. A malformed URL is the
+opposite case and does refuse to start, because no network is needed to know
+that and no send against it could ever succeed. On a dashboard this is
+*Alertmanager answering* on *clickhouse-ruler / operations*.
+
 ### Notification latency
 
 ```promql
@@ -644,6 +687,8 @@ about what they typed.
 | info | `shutting down` | Nothing. Carries the `timeout` an in-flight evaluation is being given. |
 | error | `rule evaluation failed against a source` | Read `source` and `error`: this is the database's own reply, with credentials removed. A timeout or memory cap means the rule is too expensive, and the `system.query_log` queries below say by how much. The rule's alert state is untouched, so its `for` timer survives and the next evaluation continues from where the last successful one left off. |
 | error | `sending alerts to alertmanager failed` | Check Alertmanager. The alerts were evaluated and their state has advanced; only delivery failed, and they are re-posted on the resend interval. Repeated failures past `--resend-tolerance` periods let Alertmanager expire an alert that is still firing. |
+| warn | `the alertmanager did not answer its probe` | Read `error`: it says whether the host does not resolve, the port refuses, or Alertmanager answered and is not ready. Written once when it stops answering and not on every probe, so the line dates the outage; `clickhouse_ruler_alertmanager_last_probe_successful` is whether it is answering now. Nothing about the ruler is failing, and nothing is dropped until `--resend-tolerance` periods pass. |
+| info | `the alertmanager answered its probe again` | Nothing. The pair to the line above, so a probe outage has a start and an end in the log. |
 | error | `metrics listener stopped` | The HTTP surface is gone, so metrics and probes are unanswered while the evaluation loop carries on. Usually the `listen` address is already taken. Restart it. |
 | warn | `shutdown timeout expired with evaluations still running` | A query or a send was cut off part way through. This is the only signal that says so. If it happens on every restart, raise `--shutdown-timeout` above your slowest evaluation. |
 | warn | `a rule broke while running` | Not an operator's problem to fix. `team` and `file` say whose rule it is and where, `source` says which cluster it was found against, `check` names the page explaining it, `feed` says which clock found it, and `problem` says what changed. On [`annotations/template`](checks/rule.md#annotations-template) it also carries `error`, the template error itself, which is on the alert as well and nowhere else: the alert was delivered with `<ruler: annotation "NAME" failed...>` where that annotation should be, so somebody is reading a marker on their page. One line per broken template, however many rows the rule returned. The rule is still evaluating and still paging. Warned rather than errored however severe the finding is, because nothing about the ruler is failing. |
@@ -659,7 +704,11 @@ one line, not ten thousand.
 
 Credentials never reach a log. A ClickHouse driver error may echo connection
 detail, so every error is redacted before it is returned: the address and the
-database survive, because you need them, and the password does not.
+database survive, because you need them, and the password does not. The same
+removal runs on the Alertmanager URL, which an error out of `net/http` prints in
+full, so a send failure or a failed probe against
+`http://user:pass@alertmanager:9093` names the host and not the password. The
+`alertmanager` label on the metrics is the same redacted spelling.
 
 ## What refuses to start
 
@@ -685,7 +734,8 @@ eleven healthy ones. The finding names which assertion failed: revoked table
 functions, `readonly = 2`, the constraints behind each limit, or the grant on
 the source's own table.
 
-Everything else that refuses is a flag: an unparseable `--log-level`, a
+Everything else that refuses is a flag: an `--alertmanager` that is not an
+`http://` or `https://` URL with a host, an unparseable `--log-level`, a
 non-positive `--resend-interval`, a `--resend-tolerance` below two. All of
 them exit 2 and say so on stderr, rather than starting with a value that
 would quietly misbehave. A source the ruler cannot connect to at all exits 3,

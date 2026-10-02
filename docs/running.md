@@ -123,7 +123,7 @@ cluster and post nothing.
 | Flag | Default | What it does |
 | --- | --- | --- |
 | `--rules` | required | rules directory |
-| `--alertmanager` | required | Alertmanager base URL |
+| `--alertmanager` | required | Alertmanager base URL. Refused at startup unless it is an `http://` or `https://` URL with a host, because `localhost:9093` with no scheme fails inside `net/http` at the first send instead |
 | `--sources` | `sources.yaml` | sources file |
 | `--config` | `ruler.yaml` beside `--rules` | policy file |
 | `--listen` | `:9090` | address for `/metrics`, `/-/healthy`, `/-/ready`, and `/-/reload` when it is enabled |
@@ -156,6 +156,7 @@ series per rule.
 | `clickhouse_ruler_alerts_sent_total` | counter | `alertmanager` |
 | `clickhouse_ruler_alerts_send_failures_total` | counter | `alertmanager` |
 | `clickhouse_ruler_notification_latency_seconds` | histogram | none |
+| `clickhouse_ruler_alertmanager_last_probe_successful` | gauge | `alertmanager` |
 | `clickhouse_ruler_rules_unmatched` | gauge | `rule_group` |
 | `clickhouse_ruler_problem` | gauge | `rule`, `check`, `severity`, `team`, `file`, `source` |
 | `clickhouse_ruler_source_problem` | gauge | `source`, `check`, `severity`, `file` |
@@ -193,6 +194,18 @@ which build each replica is running, which matters during a rollout that only
 half landed. `version` is the release tag and reads `dev` for a binary built
 outside a release. `ruler version` prints the same facts, plus whether the
 tree was dirty, for anyone who can reach the binary.
+
+`clickhouse_ruler_alertmanager_last_probe_successful` is the one delivery
+series that exists before anything fires. The two send counters are labelled
+`alertmanager`, so neither has a series until a send has been attempted, which
+means a ruler pointed at a host that does not resolve has nothing to alert on
+until the first page it fails to deliver. This gauge is filled by a probe of
+Alertmanager's own `/-/ready` every 30 seconds, 1 when it answered and 0 when it
+did not, so a wrong address is visible from startup. The probe sends no alert
+and touches no alert state, and it is deliberately not part of `/-/ready` here:
+one Alertmanager serves every replica, so a readiness term would take a whole
+deployment unready during a rolling restart of it.
+[Operations](operations.md#the-alertmanager-not-answering) has what to watch.
 
 The two reload gauges are about the files rather than the rules.
 `clickhouse_ruler_config_last_reload_successful` is the last attempt, so a

@@ -68,7 +68,7 @@
     "alertmanagerURL": {
       "type": "string",
       "pattern": "^https?://.+",
-      "description": "Alertmanager base URL. Required, and the ruler refuses to start without it."
+      "description": "Alertmanager base URL. Required, and the ruler refuses to start without it or with one that is not an http:// or https:// URL with a host."
     },
     "ruler": {
       "type": "object",

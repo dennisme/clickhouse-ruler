@@ -89,6 +89,15 @@ func runRun(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return exitUsage
 	}
 
+	// Parsing needs no network and the answer cannot change while the ruler
+	// runs, so a URL no send could ever succeed against is refused here rather
+	// than failing inside net/http at the first page (spec 8.1).
+	alertmanager, err := parseAlertmanagerURL(*alertmanagerURL)
+	if err != nil {
+		printf(stderr, "%s\n", err)
+		return exitUsage
+	}
+
 	level, err := parseLogLevel(*logLevel)
 	if err != nil {
 		printf(stderr, "%s\n", err)
@@ -111,7 +120,11 @@ func runRun(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		// from these two, so they travel as the pair they are (spec 6.5).
 		resend: scheduler.Resend{Interval: *resendInterval, Tolerance: *resendTolerance},
 	}
-	rn.cadence = scheduler.NewCadence(notify.NewClient(*alertmanagerURL), *alertmanagerURL,
+	// The redacted spelling is what labels a series and names an Alertmanager
+	// in a log line, because a URL may carry userinfo and a label is scraped,
+	// stored and put on a dashboard (spec 8.4).
+	alertmanagerClient := notify.NewClient(*alertmanagerURL)
+	rn.cadence = scheduler.NewCadence(alertmanagerClient, alertmanager.Redacted(),
 		rn.resend, rn.metrics, rn.clock)
 
 	// SIGHUP is the whole trigger. Nothing watches the filesystem: an operator
@@ -172,6 +185,19 @@ func runRun(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 			log.Error("metrics listener stopped", "listen", *listen, "error", err.Error())
 		}
 	}()
+
+	// Where alerts go is neither a readiness term nor a startup refusal, so
+	// this is the only thing that says the address in --alertmanager answers
+	// at all before something fires (spec 8.1).
+	probe := &alertmanagerProbe{
+		client:   alertmanagerClient,
+		url:      alertmanager.Redacted(),
+		metrics:  rn.metrics,
+		log:      log,
+		interval: probeInterval,
+		timeout:  probeTimeout,
+	}
+	go probe.run(ctx)
 
 	rn.sched.Start(ctx)
 	log.Info("ruler running", "rules", len(cfg.set.Rules), "listen", *listen)
