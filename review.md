@@ -21,25 +21,6 @@ evaluations failing". For a four-source rule, one bad cluster reads 1.0 rather
 than 0.25. Either count the denominator per source-evaluation, or drop the ratio
 for a plain failure rate.
 
-### 3. The readiness probe blocks for the whole reload
-
-`connect` holds `r.mu` across every `query.Open` and across `sched.Reload`, which
-waits for every in-flight evaluation to return (`cmd/ruler/reload.go:161`).
-`ready` takes the same mutex (`cmd/ruler/reload.go:292`).
-
-The chart probe is `timeoutSeconds: 3, failureThreshold: 3, periodSeconds: 10`
-(`deploy/chart/clickhouse-ruler/values.yaml:201`). A reload behind one slow
-ClickHouse query makes the pod NotReady on every `SIGHUP`.
-
-Fix: snapshot the queriers under the lock and ping outside it, or hold what
-readiness reads in an `atomic.Pointer` that a reload swaps.
-
-### 4. `readyTimeout` is 5s, the chart probe timeout is 3s
-
-`internal/scheduler/http.go:15` against
-`deploy/chart/clickhouse-ruler/values.yaml:204`. kubelet gives up first, so the
-reason-carrying body the handler exists to produce never reaches anybody.
-
 ### 5. mTLS to ClickHouse is documented and does not exist
 
 Three places say a source with no credentials covers mTLS:
@@ -180,6 +161,37 @@ on `--format`. Workable and documented, but a lot of rules for one command.
 Original numbering and original text kept, so a reference written before the
 fix still points at the right item.
 
+### 3. The readiness probe blocks for the whole reload
+
+**Closed.** `ready` reads an `atomic.Pointer` the reload publishes and takes no
+lock. The snapshot option in the fix note below was what the code already did,
+so it was never the contention: the probe always read under the lock and pinged
+outside it, and what blocked was acquiring a lock a reload holds end to end.
+
+`connect` holds `r.mu` across every `query.Open` and across `sched.Reload`, which
+waits for every in-flight evaluation to return (`cmd/ruler/reload.go:161`).
+`ready` takes the same mutex (`cmd/ruler/reload.go:292`).
+
+The chart probe is `timeoutSeconds: 3, failureThreshold: 3, periodSeconds: 10`
+(`deploy/chart/clickhouse-ruler/values.yaml:201`). A reload behind one slow
+ClickHouse query makes the pod NotReady on every `SIGHUP`.
+
+Fix: snapshot the queriers under the lock and ping outside it, or hold what
+readiness reads in an `atomic.Pointer` that a reload swaps.
+
+### 4. `readyTimeout` is 5s, the chart probe timeout is 3s
+
+**Closed.** `scheduler.ReadyTimeout` is 2s, exported so a test reads it against
+the chart's own `readinessProbe.timeoutSeconds` and the two cannot drift apart
+again. Readiness also pings every source at once rather than in sequence, which
+the tighter budget needed: asked one at a time, a single cluster that hangs
+spends the whole budget before the next is tried, so the shorter deadline would
+have reported a healthy multi-source ruler as not ready.
+
+`internal/scheduler/http.go:15` against
+`deploy/chart/clickhouse-ruler/values.yaml:204`. kubelet gives up first, so the
+reason-carrying body the handler exists to produce never reaches anybody.
+
 ### 1. `clickhouse_ruler_problem` leaks a stuck series when a rule file is renamed
 
 **Closed by `4da0286`.** `deleteGoneSeries` clears by rule and file together
@@ -248,13 +260,13 @@ past CI is running anyway.
 
 ## Order to fix
 
-1. Bugs 3 and 4 together. They are one interaction, the readiness probe against
-   a reload, and fixing either alone leaves kubelet still giving up before the
-   body arrives. Every `SIGHUP` behind a slow cluster currently flips a pod
-   NotReady, and spec 10.2's HA topology is built on readiness meaning
-   something.
-2. Bug 2 and the notification latency histogram. Both small, both make an
+1. Bug 2 and the notification latency histogram. Both small, both make an
    expression this repository ships in `docs/operations.md` read wrong, which is
    worse than a missing metric: an operator trusts the number.
+2. The re-check pass default. One of the flag default and the comment beside it
+   is wrong, and the consent posture everywhere else says the default should be
+   off.
 3. Bug 5. Decide whether TLS to ClickHouse is a feature or the three comments
    are wrong, and correct the comments either way in the meantime.
+4. The two spec'd cadence metrics. Without the interval gauge every cadence
+   expression hardcodes a number the rule file is free to change.

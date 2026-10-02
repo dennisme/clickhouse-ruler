@@ -9,10 +9,18 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
-// readyTimeout bounds what a readiness probe may do. A probe holds a
+// ReadyTimeout bounds what a readiness probe may do. A probe holds a
 // supervisor's request open, so a cluster that has stopped answering must
 // make the check fail rather than make it hang.
-const readyTimeout = 5 * time.Second
+//
+// It has to fit inside the budget the supervisor gives the probe, or the
+// supervisor hangs up before the body carrying the reason arrives and the
+// handler may as well have answered a bare 503. Two seconds sits under the
+// three the chart allows, and a cluster that cannot answer a ping in two
+// seconds is not answering in any sense readiness cares about. Exported so a
+// test can read it against the chart's own value rather than against a number
+// written twice (spec 8.1).
+const ReadyTimeout = 2 * time.Second
 
 // Ready answers whether sending traffic to this ruler is useful: rules
 // loaded, and at least one source answering. A nil error means ready, and
@@ -99,7 +107,7 @@ func healthy(w http.ResponseWriter, _ *http.Request) {
 // whoever is rolling out to the logs for something the ruler already knows.
 func readiness(ready Ready) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		ctx, cancel := context.WithTimeout(r.Context(), readyTimeout)
+		ctx, cancel := context.WithTimeout(r.Context(), ReadyTimeout)
 		defer cancel()
 
 		if err := ready(ctx); err != nil {

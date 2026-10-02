@@ -281,17 +281,39 @@ type pinger interface {
 // finding for source/privileges and the evaluation failure counters, not a
 // reason to declare the whole ruler unfit, and a probe that flaps with any
 // cluster's availability is one whoever is on call disables.
+// Every source is asked at once and the first answer settles it. Asked in
+// sequence, one cluster that hangs spends the whole of the probe's budget
+// before the second is tried, so a ruler with one dead cluster and eleven
+// healthy ones can report not ready and map iteration order decides it
+// (spec 8.1).
 func readiness(rules int, sources map[string]pinger) scheduler.Ready {
+	const nothingAnswering = "no source answering, so every rule this ruler holds fails to evaluate"
+
 	return func(ctx context.Context) error {
 		if rules == 0 {
 			return errors.New("no rules loaded, so there is nothing to evaluate")
 		}
+		if len(sources) == 0 {
+			return errors.New(nothingAnswering)
+		}
+
+		// Cancelled on the way out, which stops the pings nobody is waiting
+		// for any more. Each answer has a slot, so a ping that lands after the
+		// first success never blocks on a reader that has gone.
+		ctx, cancel := context.WithCancel(ctx)
+		defer cancel()
+
+		answers := make(chan error, len(sources))
 		for _, src := range sources {
-			if err := src.Ping(ctx); err == nil {
+			go func(src pinger) { answers <- src.Ping(ctx) }(src)
+		}
+
+		for range sources {
+			if err := <-answers; err == nil {
 				return nil
 			}
 		}
-		return errors.New("no source answering, so every rule this ruler holds fails to evaluate")
+		return errors.New(nothingAnswering)
 	}
 }
 

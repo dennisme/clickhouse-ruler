@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"reflect"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/dennisme/clickhouse-ruler/internal/lint"
@@ -78,10 +79,11 @@ type runner struct {
 	// connections for both startup and a reload.
 	sched *scheduler.Scheduler
 
-	// mu guards what a reload replaces. The readiness probe reads it from an
-	// HTTP handler while a reload is writing it, which is the only concurrent
-	// reader: reloads themselves arrive one signal at a time on the same
-	// goroutine.
+	// mu guards what a reload replaces. Reloads arrive one signal at a time on
+	// the run loop's goroutine and shutdown closes from that same one, so this
+	// keeps that true rather than being what makes it true. The readiness probe
+	// was the one genuinely concurrent reader and now reads the published state
+	// below instead (spec 8.1).
 	mu       sync.Mutex
 	queriers map[string]*query.Querier
 
@@ -90,8 +92,31 @@ type runner struct {
 	sources map[string]source.Source
 
 	// rules is how many rules the running configuration holds, which is what
-	// readiness answers "nothing to evaluate" from (spec 8.1).
+	// the reload reports and what the published state below carries (spec 8.1).
 	rules int
+
+	// readyState is what the readiness probe reads, published as one value
+	// each time a reload makes a configuration the running one.
+	//
+	// Read without the mutex, deliberately. The probe always read its values
+	// under it and pinged outside it, so the ping was never the contention:
+	// acquiring a lock that connect holds from its first connection until every
+	// in-flight evaluation has finished is, and a probe that waits for that
+	// reports on the reload rather than on the ruler (spec 8.1).
+	readyState atomic.Pointer[readyState]
+}
+
+// readyState is the configuration readiness answers from: how many rules are
+// running, and what to ask whether it answers.
+//
+// Immutable once published, so a probe holding it needs no lock and cannot see
+// half of a reload. A probe may still hold the previous one while the reload
+// closes the connections it replaced, which costs one probe: the driver answers
+// "connection is closed", readiness needs only one source answering, and the
+// probe repeats on its period (spec 8.1).
+type readyState struct {
+	rules   int
+	sources map[string]pinger
 }
 
 // load reads the three files and validates them, which is exactly what
@@ -199,6 +224,11 @@ func (r *runner) connect(ctx context.Context, cfg *config) error {
 
 	r.queriers, r.sources, r.rules = next, definitions, len(cfg.set.Rules)
 
+	// Published here rather than when the files were read, because this is the
+	// line that makes them the running configuration: the scheduler has
+	// swapped above and these are the connections it was handed (spec 8.1).
+	r.readyState.Store(&readyState{rules: r.rules, sources: toPingers(next)})
+
 	// This reading is now the running configuration, so anything in it that
 	// should have blocked the merge is running too. Both a start and a reload
 	// arrive here, which is why it is raised here and not in either caller
@@ -285,15 +315,18 @@ func (r *runner) refuse(reason string, err error) error {
 	return errors.New(reason)
 }
 
-// ready is the readiness probe over whatever configuration is loaded now. Read
-// under the lock because a reload replaces both numbers it reads and the probe
-// arrives on an HTTP handler's goroutine (spec 8.1).
+// ready is the readiness probe over the configuration that is running now.
+//
+// It takes no lock. A reload holds the mutex from its first connection until
+// every in-flight evaluation of the previous configuration has finished, so a
+// probe that waited for it would report on the reload rather than on the ruler,
+// and a supervisor hangs up long before that (spec 8.1).
 func (r *runner) ready(ctx context.Context) error {
-	r.mu.Lock()
-	rules, sources := r.rules, toPingers(r.queriers)
-	r.mu.Unlock()
-
-	return readiness(rules, sources)(ctx)
+	state := r.readyState.Load()
+	if state == nil {
+		return errors.New("no configuration loaded yet, so there is nothing to evaluate")
+	}
+	return readiness(state.rules, state.sources)(ctx)
 }
 
 // close releases every connection the runner holds, for shutdown.
