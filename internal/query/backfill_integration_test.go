@@ -195,7 +195,7 @@ func TestColumnsAddedIsSilentWithoutTheGrant(t *testing.T) {
 	q := openQuerier(t, testSource(t))
 	seed(t, q, slowSpans("checkout", 1))
 
-	sql, err := renderForCheck(slowSpansExpr, time.Minute)
+	sql, err := renderForCheck(slowSpansExpr, q.src, time.Minute)
 	if err != nil {
 		t.Fatalf("renderForCheck: %v", err)
 	}

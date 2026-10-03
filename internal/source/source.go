@@ -3,6 +3,7 @@ package source
 import (
 	"errors"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 
@@ -10,6 +11,22 @@ import (
 	"github.com/dennisme/clickhouse-ruler/internal/policy"
 	"gopkg.in/yaml.v3"
 )
+
+// bareIdentifier is the shape required of table and timestamp_column.
+//
+// A rule may read both through {{ .Table }} and {{ .TimestampColumn }}, which
+// substitute into the SQL text rather than binding as parameters, because
+// ClickHouse named parameters bind values and a name is not a value. This file
+// is the only place a Source is built from text, so it is where the shape is
+// required: a value carrying a quote, a dot, a space or a semicolon is refused
+// here with a line number instead of reaching a query (spec 6.4.2).
+var bareIdentifier = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+// notBareIdentifier is the finding for a value that is not one. The reason is
+// spelled out because the field has been legal to write this way until a rule
+// templated it.
+const notBareIdentifier = "%s %q is not a bare identifier, " +
+	"so a rule templating it would write that text into its SQL"
 
 // DefaultEvaluationDelay keeps an evaluation off the newest, still-filling
 // window. See spec 6.8.
@@ -366,12 +383,20 @@ func errReason(err error) string {
 }
 
 func (s Source) checkQueryTarget(r *lint.Reader) {
-	if s.Table == "" {
+	switch {
+	case s.Table == "":
 		r.Add(s.lines.Of("table"), lint.CheckSourceTable, lint.SeverityError, "table is empty")
+	case !bareIdentifier.MatchString(s.Table):
+		r.Add(s.lines.Of("table"), lint.CheckSourceTable, lint.SeverityError,
+			notBareIdentifier, "table", s.Table)
 	}
-	if s.TimestampColumn == "" {
+	switch {
+	case s.TimestampColumn == "":
 		r.Add(s.lines.Of("timestamp_column"), lint.CheckSourceTimestampColumn,
 			lint.SeverityError, "timestamp_column is empty")
+	case !bareIdentifier.MatchString(s.TimestampColumn):
+		r.Add(s.lines.Of("timestamp_column"), lint.CheckSourceTimestampColumn,
+			lint.SeverityError, notBareIdentifier, "timestamp_column", s.TimestampColumn)
 	}
 	if s.EvaluationDelay < 0 {
 		r.Add(s.lines.Of("evaluation_delay"), lint.CheckSourceEvaluationDelay,

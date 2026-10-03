@@ -32,3 +32,23 @@ groups:
         annotations:
           summary: query has no upper time bound
           runbook_url: https://runbooks.internal/missing-to
+      - alert: TemplatedIdentifiers
+        sources:
+          team: payments
+        expr: "SELECT 1 AS value FROM {{ .Table }} WHERE {{ .TimestampColumn }} >= {{ .From }} AND {{ .TimestampColumn }} < {{ .To }}"
+        labels:
+          team: payments
+          severity: warning
+        annotations:
+          summary: one rule across sources that name their table differently
+          runbook_url: https://runbooks.internal/templated-identifiers
+      - alert: MisspelledTable
+        sources:
+          team: payments
+        expr: "SELECT 1 AS value FROM {{ .Tabel }} WHERE ts >= {{ .From }} AND ts < {{ .To }}"
+        labels:
+          team: payments
+          severity: warning
+        annotations:
+          summary: a typo in a template variable
+          runbook_url: https://runbooks.internal/misspelled-table

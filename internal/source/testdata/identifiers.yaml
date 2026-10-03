@@ -1,0 +1,25 @@
+sources:
+  - name: qualified_table
+    address: clickhouse:9000
+    database: otel
+    username: ruler
+    table: otel.otel_traces
+    timestamp_column: Timestamp
+  - name: quoted_table
+    address: clickhouse:9000
+    database: otel
+    username: ruler
+    table: "otel_traces`; DROP"
+    timestamp_column: Timestamp
+  - name: spaced_column
+    address: clickhouse:9000
+    database: otel
+    username: ruler
+    table: otel_traces
+    timestamp_column: Timestamp, 1
+  - name: bare_identifiers
+    address: clickhouse:9000
+    database: otel
+    username: ruler
+    table: otel_traces
+    timestamp_column: Timestamp

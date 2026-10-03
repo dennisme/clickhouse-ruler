@@ -138,6 +138,14 @@ groups:
 selector narrows it, so `{team: payments, env: prod}` would run on the prod
 cluster alone.
 
+The query above names its table and its timestamp column literally, which is
+the shorter thing to read and works while every matched source spells them the
+same way. A selector spanning clusters that do not can write `{{ .Table }}` and
+`{{ .TimestampColumn }}` instead, and each source supplies its own. The
+database is never templated: it is set on the connection, so `FROM otel_traces`
+already resolves per source. Those four are the only variables an `expr` may
+read, and any other is a `rule/expr` finding.
+
 An empty or missing selector matches nothing, deliberately: choosing a source
 chooses the ClickHouse user the query runs as, so a rule should never reach a
 cluster by leaving a field out. A rule that really should run everywhere

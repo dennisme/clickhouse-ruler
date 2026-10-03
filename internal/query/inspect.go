@@ -5,13 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"text/template"
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2"
 
 	"github.com/dennisme/clickhouse-ruler/internal/lint"
 	"github.com/dennisme/clickhouse-ruler/internal/rule"
+	"github.com/dennisme/clickhouse-ruler/internal/source"
 )
 
 // codeSyntaxError is ClickHouse's error for a query it could not parse,
@@ -129,7 +129,7 @@ func (q *Querier) Inspect(ctx context.Context, r rule.Rule, who Attribution, c C
 	// than expected at evaluation time (spec 8.5).
 	ctx = clickhouse.Context(ctx, clickhouse.WithSettings(withLogComment(nil, who.Group, r.Alert)))
 
-	sql, err := renderForCheck(r.Expr, r.Window)
+	sql, err := renderForCheck(r.Expr, q.src, r.Window)
 	if err != nil {
 		return Inspection{}, err
 	}
@@ -340,35 +340,26 @@ const checkWindow = 5 * time.Minute
 // Timestamps computed here rather than rendered as `now()`. The rendered SQL
 // is parsed back as though the author wrote it, so a `now()` of ours would be
 // read as theirs and reported as nondeterministic (spec 6.7.1).
-func renderForCheck(expr string, window time.Duration) (string, error) {
+func renderForCheck(expr string, src source.Source, window time.Duration) (string, error) {
 	if window <= 0 {
 		window = checkWindow
 	}
 	to := time.Now()
 
-	return renderBounds(expr, to.Add(-window), to)
+	return renderBounds(expr, src, to.Add(-window), to)
 }
 
 // renderBounds is the same substitution over a window the caller chose, for the
 // one check that asks about a window other than the latest: a replay predicts
 // what it will read over a window it is going to read, which is in the past
 // (spec 7.4).
-func renderBounds(expr string, from, to time.Time) (string, error) {
-	t, err := template.New("expr").Option("missingkey=error").Parse(expr)
-	if err != nil {
-		return "", fmt.Errorf("parsing expr template: %w", err)
-	}
-
-	bounds := struct{ From, To string }{
-		From: timestampLiteral(from),
-		To:   timestampLiteral(to),
-	}
-
-	var out strings.Builder
-	if err := t.Execute(&out, bounds); err != nil {
-		return "", fmt.Errorf("rendering expr: %w", err)
-	}
-	return out.String(), nil
+func renderBounds(expr string, src source.Source, from, to time.Time) (string, error) {
+	return renderVars(expr, exprVars{
+		From:            timestampLiteral(from),
+		To:              timestampLiteral(to),
+		Table:           src.Table,
+		TimestampColumn: src.TimestampColumn,
+	})
 }
 
 // timestampLiteral writes an instant the way a rule's own bound is written:

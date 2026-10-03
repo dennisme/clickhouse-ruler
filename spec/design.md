@@ -520,7 +520,7 @@ strength of a schema change nobody reviewed. The failure mode of reporting is a
 raised gauge somebody has to read. The failure mode of refusing is an outage
 nobody is paged for.
 
-### 6.4 Time window injection
+### 6.4 What a rule's expr may template
 
 Decided: the author writes complete SQL including `FROM`, and must use the
 `{{ .From }}` and `{{ .To }}` template variables, which bind to the source's
@@ -536,6 +536,66 @@ unbounded scans become impossible, but the resulting fragment is not valid SQL
 and cannot be tested by hand.
 
 The server side settings profile cap is the real guarantee either way. See 6.7.
+
+#### 6.4.1 The four variables
+
+| Variable | Renders to |
+|---|---|
+| `{{ .From }}` | the window's lower bound, bound as a query parameter |
+| `{{ .To }}` | the window's upper bound, bound as a query parameter |
+| `{{ .Table }}` | the matched source's `table` |
+| `{{ .TimestampColumn }}` | the matched source's `timestamp_column` |
+
+Any other variable is refused, by `rule/expr` with a line number when the file
+is checked and by a failed render when a rule is evaluated. Both answers are
+needed: the author's typo should be a CI finding, and a rule that reached a
+running ruler by another road must not send `{{ .Tabel }}` to ClickHouse as
+empty text.
+
+The two bounds are required. The two identifiers are not, and an author whose
+clusters agree on their names keeps writing them literally.
+
+**Why the identifiers are there.** A rule names no cluster: it selects sources
+by label and runs against every one that matches (6.10). Without these two,
+that holds only where every matched source spells its table and its timestamp
+column identically, because the rest of the `FROM` and the `WHERE` is text the
+author typed. One renamed table turns one rule into one rule per cluster,
+which is the thing the selector exists to avoid, and the author finds out the
+day the second cluster arrives rather than the day they wrote the rule.
+
+**There is no `{{ .Database }}`.** The database is already the source's: it is
+set on the connection, so every evaluation runs scoped to it and `FROM
+otel_traces` resolves per source with nothing templated. Offering the variable
+would invite `FROM {{ .Database }}.{{ .Table }}`, which writes a
+cross-database reference in the SQL text while the ClickHouse grant is
+per-database (6.6). The failure that produces is a permissions error naming a
+missing grant instead of an unknown table, which is a worse thing to read and a
+worse thing to write a check against.
+
+#### 6.4.2 Identifiers substitute, bounds bind
+
+The bounds are query parameters. The identifiers are substituted into the SQL
+text, because ClickHouse named parameters bind values and a table or a column
+name is not a value.
+
+So the sources file is the gate. `source/table` and `source/timestamp-column`
+require a bare identifier, `[A-Za-z_][A-Za-z0-9_]*`, as well as a non-empty
+one. A value carrying a quote, a dot, a space or a semicolon is a finding with
+a line number in the sources file, which is the only place a `Source` is
+built from text.
+
+Considered and rejected: quote the value at substitution with backticks
+instead. For a value the shape check already accepts, quoting changes nothing,
+and the rendered SQL stops being what the author would have typed. That
+matters beyond taste, because the rendered statement is read back as though
+the author wrote it: the tree checks in 6.7.1 parse it, and 7.3 relies on the
+checked statement having the evaluated one's shape. The known limit of not
+quoting is a table named for a SQL keyword, which the literal form cannot write
+either.
+
+On a sharded cluster `table` is the Distributed table, which is decided in
+6.7.1 and argued in `decisions.md`; `{{ .Table }}` inherits that answer rather
+than reopening it.
 
 ### 6.5 Alertmanager integration
 

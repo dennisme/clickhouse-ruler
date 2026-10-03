@@ -411,3 +411,42 @@ func TestExemptsExpiresAtMidnightUTC(t *testing.T) {
 		t.Error("the expiry moved with the reader's timezone")
 	}
 }
+
+// `{{ .Table }}` and `{{ .TimestampColumn }}` substitute into the SQL text,
+// because ClickHouse named parameters bind values and not names. The file is
+// the only place a Source is built from text, so the shape is required here
+// (spec 6.4.2).
+func TestParseRequiresBareIdentifiers(t *testing.T) {
+	_, got := parseFixture(t, "identifiers.yaml")
+
+	want := []lint.Problem{
+		{
+			Line: 6, Subject: "qualified_table", Check: "source/table",
+			Text: `table "otel.otel_traces" is not a bare identifier, ` +
+				"so a rule templating it would write that text into its SQL",
+		},
+		{
+			Line: 12, Subject: "quoted_table", Check: "source/table",
+			Text: "table \"otel_traces`; DROP\" is not a bare identifier, " +
+				"so a rule templating it would write that text into its SQL",
+		},
+		{
+			Line: 19, Subject: "spaced_column", Check: "source/timestamp-column",
+			Text: `timestamp_column "Timestamp, 1" is not a bare identifier, ` +
+				"so a rule templating it would write that text into its SQL",
+		},
+	}
+	for i := range want {
+		want[i].File = "testdata/identifiers.yaml"
+		want[i].Severity = lint.SeverityError
+	}
+
+	if len(got) != len(want) {
+		t.Fatalf("got %d problems, want %d\ngot:  %v\nwant: %v", len(got), len(want), got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("problem %d:\n got: %+v\nwant: %+v", i, got[i], want[i])
+		}
+	}
+}

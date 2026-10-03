@@ -247,7 +247,7 @@ as a CA is verified like any other, and nothing has to be exempted.
 
 ### source/table
 
-A source naming no table.
+A source naming no table, or naming one that is not a bare identifier.
 
 The table is what the source's user is granted on, so it is the other half of
 the tenancy boundary the username sets: `table-readable` in the contract check
@@ -269,17 +269,42 @@ reports.
   table: otel_traces
 ```
 
+The value must also be a bare identifier, matching
+`[A-Za-z_][A-Za-z0-9_]*`. A rule may read it as `{{ .Table }}`, which
+substitutes into the query's SQL text rather than binding as a parameter,
+because ClickHouse named parameters bind values and a table name is not a
+value. This file is the only place a source is built from text, so it is where
+the shape is required.
+
+```yaml
+# before: the database belongs on its own key, and this text would be
+# written into the SQL of every rule templating it
+- name: otel_dc1
+  database: otel
+  username: ruler_payments
+  table: otel.otel_traces
+
+# after
+- name: otel_dc1
+  database: otel
+  username: ruler_payments
+  table: otel_traces
+```
+
 ## Windows and caps
 
 <a id="source-timestamp-column"></a>
 
 ### source/timestamp-column
 
-A source naming no timestamp column.
+A source naming no timestamp column, or naming one that is not a bare
+identifier.
 
 It is the column the evaluation window is bound against, so without it there
 is nothing for `{{ .From }}` and `{{ .To }}` to compare to and no rule on this
-source can be given a time bound at all.
+source can be given a time bound at all. Like `table`, it must be a bare
+identifier, because a rule may read it as `{{ .TimestampColumn }}` and that
+substitutes into the SQL text.
 
 ```yaml
 # before: no column to bind the window against, so no rule on this

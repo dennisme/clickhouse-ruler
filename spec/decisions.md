@@ -10,8 +10,13 @@ and are what the code comments cite.
 
 ## 11. Decisions made
 
-- **Time window injection.** Full SQL, author must use `{{ .From }}` and
-  `{{ .To }}`. See 6.4.
+- **What a rule's expr may template.** Full SQL, author must use `{{ .From }}`
+  and `{{ .To }}`, and may use `{{ .Table }}` and `{{ .TimestampColumn }}` so
+  that one rule spans sources that name them differently. No
+  `{{ .Database }}`: it is already on the connection, and templating it writes
+  a cross-database reference against a per-database grant. The two identifiers
+  substitute into the SQL text, since named parameters bind values and not
+  names, so the sources file requires a bare identifier for both. See 6.4.
 - **Ownership.** Open source project for now. Production ownership at scale is
   deferred, not answered. Revisit before anyone pages off it.
 - **Test fixtures.** Own compose stack with real collector, real Alertmanager,

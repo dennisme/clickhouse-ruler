@@ -25,6 +25,26 @@ var timeBoundVars = []struct {
 	{"{{ .To }}", regexp.MustCompile(`\{\{-?\s*\.To\s*-?\}\}`), "upper time bound"},
 }
 
+// exprVars are every variable the ruler renders an expr against: the two
+// window bounds, which bind as query parameters, and the matched source's
+// table and timestamp column, which substitute into the SQL text so that one
+// rule can span sources that name them differently (spec 6.4.1).
+//
+// Listed here as well as in the renderer because an evaluation is the wrong
+// place to find out: the author's typo should be a finding with a line number,
+// and the renderer's refusal is what keeps it from reaching ClickHouse as
+// empty text if it got past this.
+var exprVars = map[string]bool{
+	"From":            true,
+	"To":              true,
+	"Table":           true,
+	"TimestampColumn": true,
+}
+
+// exprVarList is exprVars in the order a finding names them, which is the
+// order they appear in a query rather than alphabetical.
+const exprVarList = "From, To, Table and TimestampColumn"
+
 // ReservedAnnotationPrefix is the annotation namespace the ruler writes into,
 // and ErrorAnnotation is the field in it that carries the error from an
 // annotation whose template failed (spec 6.5). A rule setting either is refused
@@ -162,6 +182,19 @@ func (v *validator) ruleExpr(r Rule) {
 		if !tv.pattern.MatchString(r.Expr) {
 			v.add(r, line, lint.CheckRuleExpr,
 				"expr does not reference %s, so the query has no %s", tv.name, tv.reason)
+		}
+	}
+
+	t, err := template.New("expr").Option("missingkey=error").Parse(r.Expr)
+	if err != nil {
+		v.add(r, line, lint.CheckRuleExpr, "expr is not a valid template: %s", err)
+		return
+	}
+	for _, field := range TemplateFields(t) {
+		if !exprVars[field] {
+			v.add(r, line, lint.CheckRuleExpr,
+				"expr reads {{ .%s }}, which the ruler does not supply; it supplies %s",
+				field, exprVarList)
 		}
 	}
 }
