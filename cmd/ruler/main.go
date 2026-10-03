@@ -120,10 +120,19 @@ func check(args []string, stdout, stderr io.Writer) int {
 	// stdout in every format but text belongs to a machine: the workflow runner
 	// parses each line as a command and json is one document, so a table there
 	// is a stray annotation per row or a document that will not parse.
-	if *markdown == "-" && *format != lint.FormatText {
-		printf(stderr, "--markdown - needs --format=%s: stdout already carries the %s output\n",
-			lint.FormatText, *format)
-		return exitUsage
+	//
+	// One answer for both tables, and asked before anything else either flag
+	// demands: a run that would corrupt stdout is refused whether or not the
+	// cluster the cost table needs could have been reached.
+	for _, dest := range []struct{ flag, path string }{
+		{"--markdown", *markdown},
+		{"--summary", *summary},
+	} {
+		if dest.path == "-" && *format != lint.FormatText {
+			printf(stderr, "%s - needs --format=%s: stdout already carries the %s output\n",
+				dest.flag, lint.FormatText, *format)
+			return exitUsage
+		}
 	}
 
 	// The table's numbers come from EXPLAIN ESTIMATE, which needs a cluster

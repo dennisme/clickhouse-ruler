@@ -476,6 +476,31 @@ func TestCheckWritesTheMarkdownReportToStdout(t *testing.T) {
 	}
 }
 
+// The cost table is refused on stdout for the same reason the findings table
+// is, and before --summary's own demand for a cluster, so the answer does not
+// depend on whether one could be reached.
+func TestCheckRefusesTheCostSummaryOnStdoutInGitHubMode(t *testing.T) {
+	dir := fixture(t, brokenRule, "")
+
+	code, stdout, stderr := runCheck(t, "check",
+		"--sources", filepath.Join(dir, "sources.yaml"),
+		"--format", "github",
+		"--summary", "-",
+		filepath.Join(dir, "rules"))
+
+	if code != exitUsage {
+		t.Errorf("exit = %d, want exitUsage", code)
+	}
+	// The refusal is about the stream rather than about the missing cluster,
+	// which is the guard that used to answer first.
+	if !strings.Contains(stderr, "--summary") || !strings.Contains(stderr, "--format=text") {
+		t.Errorf("the refusal should name the flag and the format it needs, got: %s", stderr)
+	}
+	if stdout != "" {
+		t.Errorf("stdout carries the github output alone, got:\n%s", stdout)
+	}
+}
+
 // A table on stdout in github mode would be read as annotations, one stray
 // command per row.
 func TestCheckRefusesTheReportOnStdoutInGitHubMode(t *testing.T) {

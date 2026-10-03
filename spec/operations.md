@@ -2033,6 +2033,20 @@ The summary is a table of what the estate costs, which is read whole and is
 answered by the cluster rather than by the diff, so it is deliberately not
 narrowed by either filter.
 
+**Both tables take a path, and `-` is stdout for a person running the command
+by hand.** Stdout belongs to a machine in every format but text: the workflow
+runner reads each line as a command and `--format=json` is one document, so a
+table written into either is a stray annotation per row or a parse that fails.
+So `-` requires `--format=text` and is refused otherwise, for both flags, by
+one rule rather than one per flag. It is asked before anything else either flag
+demands, including the cluster `--summary` needs, because whether a run would
+corrupt stdout does not depend on whether a cluster could be reached.
+
+`--explain` answers the same question differently, and the difference is the
+flag rather than an inconsistency: it names no destination, so there is nothing
+to refuse. It prints to stdout in text and to stderr in every other format,
+where the explanation would otherwise be read as output nobody asked for.
+
 #### The action is composite, and owns nothing but the wiring
 
 7.1 chose a composite action in `action/`, consumed as
