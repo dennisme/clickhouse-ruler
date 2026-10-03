@@ -135,10 +135,11 @@ ruler check --online --sources rules/sources.yaml --summary cost.md rules/
 ```
 
 It needs `--online`, because the numbers come from `EXPLAIN ESTIMATE` and only
-the cluster can answer. Nothing is executed and no rows are read. Write it to
-a path rather than to stdout when `--format=github` is in use: there stdout
-carries the workflow commands GitHub reads, and a table in the middle of them
-is parsed as annotations.
+the cluster can answer. Nothing is executed and no rows are read. `-` needs
+`--format=text` and is refused otherwise, which is the same answer `--markdown
+-` gets: in every other format stdout belongs to a machine, so a table in the
+middle of it is read as annotations or breaks the JSON document. Name a path
+instead and the format does not matter.
 
 A rule that matches two sources is two rows, never one averaged: the same SQL
 is cheap on staging and ruinous on production, and that gap is the row worth

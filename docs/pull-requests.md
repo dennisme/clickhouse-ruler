@@ -226,7 +226,8 @@ workflow that downloads nothing:
 
 `--markdown` writes to a path rather than to stdout on purpose. With
 `--format=github` stdout carries the workflow commands, and a table in the
-middle of them is read as annotations. `--link-prefix` is the one thing the
+middle of them is read as annotations, so `--markdown -` is refused in that
+format rather than quietly producing one. `--link-prefix` is the one thing the
 binary cannot work out for itself: where the files are served from is a fact
 about the host, and a path the repository cannot spell is printed without a
 link rather than with a broken one.
