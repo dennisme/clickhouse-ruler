@@ -36,11 +36,6 @@ hole.
 
 ## Consumer toil
 
-### `ruler check` takes a directory only
-
-An author fixing one rule in an 800-rule tree checks the tree. `-changed-since`
-helps in CI, not at a desk. Accepting a file path would be a few lines.
-
 ### `--summary` and `--explain` need stdout gymnastics
 
 Three flags each carry their own rule about which stream they land on depending
@@ -50,6 +45,16 @@ on `--format`. Workable and documented, but a lot of rules for one command.
 
 Original numbering and original text kept, so a reference written before the
 fix still points at the right item.
+
+### `ruler check` takes a directory only
+
+**Closed by `a82b8f7`, merged in #75.** `ruler check` accepts a file as well as
+a directory, and the policy file it reads is still the one the tree's root
+resolves to, so checking one file at a desk applies the same policy CI applies
+to the tree.
+
+An author fixing one rule in an 800-rule tree checks the tree. `-changed-since`
+helps in CI, not at a desk. Accepting a file path would be a few lines.
 
 ### A rule names its cluster after all
 
@@ -383,11 +388,9 @@ past CI is running anyway.
 Items are named rather than numbered, because closing one used to renumber the
 rest and a reference written before that pointed at the wrong item afterwards.
 
-1. **`ruler check` takes a directory only.** The remaining consumer toil, and
-   the one an author meets at a desk rather than in CI.
-2. **Flags need a restart and the docs do not say it.** A doc change, and the
+1. **Flags need a restart and the docs do not say it.** A doc change, and the
    cheapest thing on this list.
-3. **No `--log-format=json`.** One handler swap, asked for.
+2. **No `--log-format=json`.** One handler swap, asked for.
 
 `--summary` and `--explain` need stdout gymnastics is deliberately not here: it
 names no change, so nothing can close it. It needs a shape to aim at first. No
