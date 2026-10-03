@@ -12,3 +12,19 @@ sources:
     table: otel_traces
     timestamp_column: Timestamp
     evaluation_delay: 0s
+
+  # The metrics source. A source is a cluster, a user and a table, so the
+  # metrics tables are a source of their own rather than a second table on the
+  # one above: its user holds SELECT on them and on nothing else.
+  #
+  # The sum table is what `table:` names, because a counter is what a rule over
+  # metrics gets wrong. A rule reading the gauge table names it in the SQL, the
+  # way a rule reading any other granted table does.
+  - name: otel_metrics
+    labels: {team: payments, signal: metrics}
+    address: clickhouse:9000
+    database: otel
+    username: ruler_metrics
+    table: otel_metrics_sum
+    timestamp_column: TimeUnix
+    evaluation_delay: 0s
