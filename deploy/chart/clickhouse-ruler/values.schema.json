@@ -80,6 +80,7 @@
       "required": [
         "port",
         "logLevel",
+        "logFormat",
         "shutdownTimeoutSeconds"
       ],
       "properties": {
@@ -94,6 +95,12 @@
             "info",
             "warn",
             "error"
+          ]
+        },
+        "logFormat": {
+          "enum": [
+            "text",
+            "json"
           ]
         },
         "shutdownTimeoutSeconds": {

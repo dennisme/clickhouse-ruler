@@ -92,6 +92,7 @@ spec:
             {{- end }}
             - --listen=:{{ .Values.ruler.port }}
             - --log-level={{ .Values.ruler.logLevel }}
+            - --log-format={{ .Values.ruler.logFormat }}
             # Paired with terminationGracePeriodSeconds, which is this plus the
             # time the HTTP surface takes after it. Setting it in extraArgs
             # instead changes the drain and leaves the grace period behind it.

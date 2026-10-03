@@ -41,6 +41,10 @@ ruler:
   port: 9090
   # debug, info, warn or error.
   logLevel: info
+  # text or json. The same lines with the same field names either way; json is
+  # for a log pipeline that would otherwise parse structured output back out of
+  # text.
+  logFormat: text
   # How long an in-flight evaluation gets to finish once shutdown starts. The
   # pod's terminationGracePeriodSeconds is this plus ten, so raising it for a
   # slow evaluation raises both. Seconds rather than a duration, because Helm

@@ -177,6 +177,7 @@ is picked up by a reload: changing one needs the process restarted, which
 | `--notification-queue-capacity` | `10000` | how many alerts may wait to be sent to Alertmanager before the oldest are dropped. The send runs off the evaluation goroutine, so this is what an Alertmanager outage fills instead of a group's interval. Prometheus' notifier bounds itself at the same number in the same unit |
 | `--shutdown-timeout` | `30s` | how long shutdown spends finishing what is in progress: first the evaluations in flight, then whatever they left in the send queue |
 | `--log-level` | `info` | `debug`, `info`, `warn` or `error` |
+| `--log-format` | `text` | `text` or `json`. The same lines with the same field names either way, so JSON is for a log pipeline that would otherwise parse structured output back out of text |
 | `--enable-reload-endpoint` | off | serve `POST /-/reload`, which re-reads the same files `SIGHUP` does. For deployments where a signal cannot reach the process, such as a sidecar syncing rules into a shared volume |
 
 ## What it exposes
@@ -393,7 +394,8 @@ late. `clickhouse_ruler_rules_unmatched` staying above zero means this ruler loa
 that match none of its sources and will never evaluate them, which is expected
 during a rollout and a problem if it persists.
 
-Logs are `log/slog` text on stdout, `--log-level` deep. A failed query, a
+Logs are `log/slog` on stdout, `--log-level` deep, and `--log-format` picks
+whether they are text for a terminal or JSON for a pipeline. A failed query, a
 failed send and a shutdown that gave up each write one line naming the rule
 group, the rule and the source involved. One line per rule and per source,
 never per alert instance. Passwords never reach a log; a ClickHouse driver
