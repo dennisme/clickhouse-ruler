@@ -973,6 +973,16 @@ A reload is all or nothing. Every way it can fail leaves the ruler evaluating
 exactly what it was evaluating before the signal, and raises the refused-reload
 gauge above.
 
+**A flag is not one of the three files.** Every flag on `ruler run` is read once
+at startup and a reload re-reads none of them, so editing `--alertmanager`,
+`--listen`, `--query-concurrency`, `--recheck-interval`, `--resend-interval`,
+`--resend-tolerance`, `--notification-queue-capacity`, `--shutdown-timeout`,
+`--log-level` or `--enable-reload-endpoint` and sending `SIGHUP` gives you a
+reload that succeeded and changed nothing. Restart the process. The same is true
+of `--rules`, `--sources` and `--config`: a reload re-reads the paths it was
+started with, so a new path needs a restart while new contents at the same path
+need only the signal.
+
 ### Rotating a credential or a certificate
 
 A reload is also how a replaced secret reaches the cluster, with one exception

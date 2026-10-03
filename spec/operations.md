@@ -1591,6 +1591,20 @@ is still the same rule, and refuses a reading only where there is nothing to
 read (7.6). What it does not do is notice a rule that became broken while nothing
 changed on disk, which is 10.4's job rather than the signal's.
 
+What a reload reaches is those three files and nothing else. Every flag on
+`ruler run` is read once, at startup, and a reload re-reads no part of the
+command line: the paths in `--rules`, `--sources` and `--config` included, so a
+reload reads the same three paths it was started with, with whatever they now
+contain. That is deliberate rather than pending. A flag is the deployment's own
+text, held wherever the process is declared, and whoever can edit it can already
+replace the process, so a reload of the command line would be a second way to do
+what a restart does. A file is the opposite: it is rolled out by people who do
+not own the deployment, on their own cadence, which is the whole reason the three
+of them reload at all (6.6). An operator who edits a flag and sends `SIGHUP`
+gets a successful reload that changed nothing, which is the one sharp edge here,
+so the flag table says it and 10.4's operator documentation says it beside the
+signal.
+
 Tier 3 backfill is in, behind `ruler check --backfill` (7.4).
 
 ### 10.1 Validation as something other people can use

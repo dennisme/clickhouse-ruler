@@ -159,6 +159,10 @@ gh pr comment "$PR" --body-file cost.md
 action that runs it, and what a fork can and cannot do, which is reach no
 cluster and post nothing.
 
+Every flag `ruler run` takes is read once at startup, so nothing in this table
+is picked up by a reload: changing one needs the process restarted, which
+[what a reload refuses](operations.md#what-a-reload-refuses) has the whole of.
+
 | Flag | Default | What it does |
 | --- | --- | --- |
 | `--rules` | required | rules directory |
