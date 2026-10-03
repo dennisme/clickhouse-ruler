@@ -54,6 +54,7 @@ type Metrics struct {
 
 	BuildInfo *prometheus.GaugeVec
 
+	ConfigReloads              *prometheus.CounterVec
 	ConfigLastReloadSuccessful prometheus.Gauge
 	ConfigLastReloadTimestamp  prometheus.Gauge
 	ConfigInfo                 *prometheus.GaugeVec
@@ -395,7 +396,21 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 			Help: "Total number of times the re-check pass could not sample a cluster, so it learned nothing about the rules reading it.",
 		}, []string{"source"}),
 
-		// What the two reload gauges say, and deliberately not the same thing.
+		// What the three reload metrics say, and deliberately not the same
+		// thing: attempts over time, the last attempt, and the age of what is
+		// running.
+		//
+		// ConfigReloads is the only one that outlives a scrape interval. Both
+		// gauges below describe a moment, so a reload that was refused and
+		// retried between two scrapes leaves the gauge back at 1 and nothing
+		// else behind: a ruler whose every other rollout is rejected reads as a
+		// ruler nobody has touched. The label is the outcome and nothing else,
+		// because the file at fault is in the log and a series per file is a
+		// series per mistake. A startup load is not an attempt: counting it
+		// would make every restart a reload on
+		// `rate(clickhouse_ruler_config_reloads_total[5m])`, which is the query
+		// the counter exists for, so the increment sits on the reload paths
+		// rather than beside the gauge in connect.
 		//
 		// ConfigLastReloadSuccessful is about the last attempt: a reload the
 		// ruler refused sets it to 0 and it stays there until one succeeds.
@@ -411,6 +426,11 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 		// refusal would answer that question with the moment the ruler declined
 		// to change anything, which claims the running rules are current when
 		// they are precisely not (spec 7.6).
+		ConfigReloads: f.NewCounterVec(prometheus.CounterOpts{
+			Name: "clickhouse_ruler_config_reloads_total",
+			Help: "Total number of reload attempts, by whether the ruler accepted or refused the reading.",
+		}, []string{"outcome"}),
+
 		ConfigLastReloadSuccessful: f.NewGauge(prometheus.GaugeOpts{
 			Name: "clickhouse_ruler_config_last_reload_successful",
 			Help: "Whether the last attempt to load the rules, sources and policy files succeeded.",

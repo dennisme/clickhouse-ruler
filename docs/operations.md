@@ -748,6 +748,18 @@ without a restart.
 clickhouse_ruler_config_last_reload_successful == 0
 ```
 
+```promql
+rate(clickhouse_ruler_config_reloads_total{outcome="refused"}[1h]) > 0
+```
+
+The gauge is the alert. The second expression is the one the gauge cannot
+answer: a reload refused and then retried before the next scrape leaves the
+gauge back at 1, so a ruler where every other rollout is rejected and pushed
+again looks like a ruler nobody has touched. Read it over a window long enough
+to cover a rollout, and read it beside
+`rate(clickhouse_ruler_config_reloads_total{outcome="succeeded"}[1h])` to tell
+a repository somebody is fighting from a reload nobody retried.
+
 **Trouble immediately.** The ruler re-read its files, found something it will
 not run, and kept the version it was already running. Everything looks healthy
 from the outside: the rules that are loaded evaluate, they fire, they deliver.

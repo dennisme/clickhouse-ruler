@@ -18,11 +18,7 @@ None open. The ones that were are under Closed, with their original text.
 
 ## Metrics and logs
 
-### No reload attempt counter
-
-`config_last_reload_successful` is a gauge, so a reload that failed and then
-succeeded between two scrapes is invisible. Low priority; Prometheus has the same
-hole.
+None open. The ones that were are under Closed, with their original text.
 
 ## Consumer toil
 
@@ -35,6 +31,23 @@ on `--format`. Workable and documented, but a lot of rules for one command.
 
 Original numbering and original text kept, so a reference written before the
 fix still points at the right item.
+
+### No reload attempt counter
+
+**Closed by `145c5d5`.** `clickhouse_ruler_config_reloads_total` counts every
+reload attempt, labelled `outcome` with `succeeded` or `refused`, which is two
+series per process and no label naming the file at fault, since that is in the
+log and a series per file is a series per mistake. The startup load is a load
+and not a reload, so it is not counted: counting it would make every restart a
+reload on `rate(clickhouse_ruler_config_reloads_total[5m])`, which is the query
+the counter exists for, so the increment sits on the reload paths rather than
+beside the gauge in `connect`. Both gauges keep their meanings, the operations
+dashboard draws the rate beside them, and `docs/operations.md` has the refused
+rate beside the `== 0` expression the gauge already had.
+
+`config_last_reload_successful` is a gauge, so a reload that failed and then
+succeeded between two scrapes is invisible. Low priority; Prometheus has the same
+hole.
 
 ### No `--log-format=json`
 
@@ -409,7 +422,6 @@ past CI is running anyway.
 Items are named rather than numbered, because closing one used to renumber the
 rest and a reference written before that pointed at the wrong item afterwards.
 
-Nothing is queued. The two items still open are not an order of work:
-`--summary` and `--explain` need stdout gymnastics names no change, so nothing
-can close it, and it needs a shape to aim at first. No reload attempt counter is
-worth doing beside the next thing that touches reloading, not on its own.
+Nothing is queued, and one item is open. `--summary` and `--explain` need
+stdout gymnastics names no change, so nothing can close it: it needs a shape to
+aim at before it is work. Everything else this review found is under Closed.

@@ -211,6 +211,7 @@ series per rule.
 | `clickhouse_ruler_rules_unmatched` | gauge | `rule_group` |
 | `clickhouse_ruler_problem` | gauge | `rule`, `check`, `severity`, `team`, `file`, `source` |
 | `clickhouse_ruler_source_problem` | gauge | `source`, `check`, `severity`, `file` |
+| `clickhouse_ruler_config_reloads_total` | counter | `outcome` |
 | `clickhouse_ruler_config_last_reload_successful` | gauge | none |
 | `clickhouse_ruler_config_last_reload_timestamp_seconds` | gauge | none |
 | `clickhouse_ruler_config_info` | gauge | `revision`, `rules_root` |
@@ -302,9 +303,12 @@ one Alertmanager serves every replica, so a readiness term would take a whole
 deployment unready during a rolling restart of it.
 [Operations](operations.md#the-alertmanager-not-answering) has what to watch.
 
-The two reload gauges are about the files rather than the rules.
-`clickhouse_ruler_config_last_reload_successful` is the last attempt, so a
-reload the ruler refused holds it at 0 until one succeeds;
+The three reload metrics are about the files rather than the rules.
+`clickhouse_ruler_config_reloads_total` counts attempts, `succeeded` or
+`refused`, and is the only one that still shows a refusal somebody retried
+before the next scrape; a startup load is not counted, so a restart does not
+read as a reload. `clickhouse_ruler_config_last_reload_successful` is the last
+attempt, so a reload the ruler refused holds it at 0 until one succeeds;
 `clickhouse_ruler_config_last_reload_timestamp_seconds` is only stamped by a
 load that succeeded, so it dates the configuration actually being evaluated.
 [Operating the ruler](operations.md) has what a reload refuses and what survives

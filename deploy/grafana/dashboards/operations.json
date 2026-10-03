@@ -629,7 +629,7 @@
     },
     {
       "title": "Configuration reload",
-      "description": "Whether the running configuration is the configuration on disk. A refused reload is silent otherwise: the rules that are running are valid, nothing about them looks wrong, and the ruler is evaluating last week's files. Zero on the first series means the last SIGHUP was refused and the previous version is still running, which stays zero until a reload succeeds, so read the log for the reason and the findings printed with it. The second series is how long ago the running configuration was read, which answers the other question: a reload that never arrived looks the same as a reload that was never needed (spec 8.2).",
+      "description": "Whether the running configuration is the configuration on disk. A refused reload is silent otherwise: the rules that are running are valid, nothing about them looks wrong, and the ruler is evaluating last week's files. Zero on the first series means the last SIGHUP was refused and the previous version is still running, which stays zero until a reload succeeds, so read the log for the reason and the findings printed with it. The second series is how long ago the running configuration was read, which answers the other question: a reload that never arrived looks the same as a reload that was never needed. The third is the rate of attempts by outcome, which is what the first series cannot keep: a reload refused and then retried before the next scrape leaves the gauge back at one, so refusals somebody is working around are only visible here. A startup load is not an attempt, so a restart draws nothing on it (spec 8.2).",
       "type": "timeseries",
       "datasource": {
         "type": "prometheus",
@@ -665,6 +665,15 @@
           },
           "expr": "time() - clickhouse_ruler_config_last_reload_timestamp_seconds",
           "legendFormat": "age of the running configuration (s)"
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum by (outcome) (rate(clickhouse_ruler_config_reloads_total[$__rate_interval]))",
+          "legendFormat": "{{outcome}} reloads/s"
         }
       ]
     },
