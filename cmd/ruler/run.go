@@ -61,8 +61,8 @@ func runRun(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 
 	rulesDir := fs.String("rules", "", "path to the rules directory (required)")
-	sourcesPath := fs.String("sources", "sources.yaml", "path to the sources file")
-	configPath := fs.String("config", "", "path to a policy file, defaults to ruler.yaml beside the rules directory if present")
+	configPath := fs.String("config", "ruler.yaml", "path to the operator's file, which names the sources")
+	policyPath := fs.String("policy", "", "path to a policy file, defaults to policy.yaml beside the rules directory if present")
 	var alertmanagerURLs alertmanagerFlag
 	fs.Var(&alertmanagerURLs, "alertmanager",
 		"Alertmanager URL, e.g. http://localhost:9093 (required). Repeat it once per member of the cluster: "+
@@ -144,8 +144,8 @@ func runRun(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	reg := prometheus.NewRegistry()
 	rn := &runner{
 		rulesDir:    *rulesDir,
-		sourcesPath: *sourcesPath,
 		configPath:  *configPath,
+		policyPath:  *policyPath,
 		log:         log,
 		stderr:      stderr,
 		metrics:     scheduler.NewMetrics(reg),

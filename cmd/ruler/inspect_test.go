@@ -15,9 +15,9 @@ import (
 
 func TestInspectionProblemsCarrySeverityFromPolicy(t *testing.T) {
 	merged := policy.Merge(&policy.Policy{
-		File: "ruler.yaml",
+		File: "policy.yaml",
 		Checks: map[string]policy.Setting{
-			lint.CheckRuleSelectStar: {Severity: lint.SeverityError, File: "ruler.yaml", Line: 3},
+			lint.CheckRuleSelectStar: {Severity: lint.SeverityError, File: "policy.yaml", Line: 3},
 		},
 	})
 

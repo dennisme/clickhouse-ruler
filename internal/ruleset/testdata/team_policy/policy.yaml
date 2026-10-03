@@ -1,0 +1,5 @@
+# The instance baseline. A runbook link that is not a URL blocks here,
+# because the on-call engineer who follows it at 03:00 cannot.
+checks:
+  annotations/runbook:
+    severity: error

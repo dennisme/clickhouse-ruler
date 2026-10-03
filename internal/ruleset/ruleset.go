@@ -190,7 +190,7 @@ func (l *loader) revision(path string, data []byte) {
 	l.files.Write(sum[:])
 }
 
-// readTeamPolicies parses the ruler.yaml files found under the rules root.
+// readTeamPolicies parses the policy.yaml files found under the rules root.
 //
 // Their problems are returned rather than swallowed. A team file that will
 // not parse is a file whose author believes a check is raised and it is not,
@@ -230,7 +230,7 @@ func (l *loader) scopesFor(file string) *policy.Policy {
 		if p, ok := l.teams[d]; ok {
 			scopes = append(scopes, p)
 		}
-		// Stopping at the rules root also stops before a ruler.yaml outside
+		// Stopping at the rules root also stops before a policy.yaml outside
 		// the tree, which is nobody's team file, and the walk never offered
 		// one anyway. The second condition is the guard for a path that is
 		// somehow not under the root, so this cannot spin at the filesystem
@@ -247,13 +247,13 @@ func (l *loader) scopesFor(file string) *policy.Policy {
 // filesystem enumerates.
 //
 // Which of the two a file is, or whether it is neither, is decided by its
-// name. Two names are reserved in the rules tree: ruler.yaml is policy and
-// sources.yaml is the sources file the quick start keeps beside the rules.
+// name. Two names are reserved in the rules tree: policy.yaml is policy and
+// ruler.yaml is the operator's file the quick start keeps beside the rules.
 // Reading either as a rule file reports a pile of unknown fields against a
 // file that is exactly right, and the alternative to a name is sniffing the
 // contents, which guesses about a file an author can see the name of.
 //
-// The ruler.yaml at the root is the instance scope and is not a team file.
+// The policy.yaml at the root is the instance scope and is not a team file.
 // It is already read by whoever calls Load, and reading it twice changes no
 // severity under a maximum, but the origin on a finding would name the team
 // scope for a setting the platform made and send --explain at the wrong file.
@@ -280,11 +280,11 @@ func ruleFiles(dir string) (rules, policies []string, err error) {
 		}
 
 		switch filepath.Base(path) {
-		case "ruler.yaml":
+		case "policy.yaml":
 			if filepath.Dir(path) != root {
 				policies = append(policies, path)
 			}
-		case "sources.yaml":
+		case "ruler.yaml":
 		default:
 			rules = append(rules, path)
 		}

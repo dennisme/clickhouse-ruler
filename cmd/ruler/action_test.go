@@ -16,7 +16,7 @@ func TestActionFixturesFail(t *testing.T) {
 	dir := filepath.Join("..", "..", "action", "testdata")
 
 	code, stdout, _ := runCheck(t, "check",
-		"--sources", filepath.Join(dir, "sources.yaml"),
+		"--config", filepath.Join(dir, "ruler.yaml"),
 		filepath.Join(dir, "rules"))
 
 	if code != exitFinding {

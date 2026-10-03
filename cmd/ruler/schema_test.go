@@ -155,9 +155,9 @@ func TestSchemaProblemReportsOncePerRule(t *testing.T) {
 // raises it, and then the same disagreement blocks.
 func TestSchemaProblemTakesItsSeverityFromPolicy(t *testing.T) {
 	merged := policy.Merge(&policy.Policy{
-		File: "ruler.yaml",
+		File: "policy.yaml",
 		Checks: map[string]policy.Setting{
-			lint.CheckRuleSourceSchema: {Severity: lint.SeverityError, File: "ruler.yaml", Line: 4},
+			lint.CheckRuleSourceSchema: {Severity: lint.SeverityError, File: "policy.yaml", Line: 4},
 		},
 	})
 	answers := []sourceColumns{
@@ -172,7 +172,7 @@ func TestSchemaProblemTakesItsSeverityFromPolicy(t *testing.T) {
 	if got[0].Severity != lint.SeverityError {
 		t.Errorf("severity = %v, want the configured error", got[0].Severity)
 	}
-	if got[0].PolicyFile != "ruler.yaml" || got[0].PolicyLine != 4 {
+	if got[0].PolicyFile != "policy.yaml" || got[0].PolicyLine != 4 {
 		t.Errorf("origin = %s:%d, want the file that raised it", got[0].PolicyFile, got[0].PolicyLine)
 	}
 }

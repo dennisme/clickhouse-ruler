@@ -68,7 +68,7 @@ func TestCheckChangedSinceNarrowsToChangedFiles(t *testing.T) {
 	}
 
 	code, stdout, stderr := runCheck(t, "check",
-		"--sources", filepath.Join(dir, "sources.yaml"),
+		"--config", filepath.Join(dir, "ruler.yaml"),
 		"--format", "json",
 		"--changed-since", "HEAD",
 		filepath.Join(dir, "rules"))
@@ -103,7 +103,7 @@ func TestCheckChangedSinceUnresolvableBaseChecksEverything(t *testing.T) {
 	gitRepo(t, dir)
 
 	code, stdout, stderr := runCheck(t, "check",
-		"--sources", filepath.Join(dir, "sources.yaml"),
+		"--config", filepath.Join(dir, "ruler.yaml"),
 		"--changed-since", "origin/nope",
 		filepath.Join(dir, "rules"))
 
@@ -118,7 +118,7 @@ func TestCheckChangedSinceUnresolvableBaseChecksEverything(t *testing.T) {
 	}
 }
 
-// A policy file named by --config widens the run, whatever it is called: it
+// A policy file named by --policy widens the run, whatever it is called: it
 // can raise a check for rules the diff does not name (spec 7.7, 10.3).
 func TestCheckChangedSinceWidensOnThePolicyFile(t *testing.T) {
 	dir := fixture(t, brokenRule, "")
@@ -133,8 +133,8 @@ func TestCheckChangedSinceWidensOnThePolicyFile(t *testing.T) {
 	}
 
 	code, stdout, stderr := runCheck(t, "check",
-		"--sources", filepath.Join(dir, "sources.yaml"),
-		"--config", policyPath,
+		"--config", filepath.Join(dir, "ruler.yaml"),
+		"--policy", policyPath,
 		"--changed-since", "HEAD",
 		filepath.Join(dir, "rules"))
 

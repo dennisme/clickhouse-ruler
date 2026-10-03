@@ -25,7 +25,7 @@ jobs:
       - uses: dennisme/clickhouse-ruler/action@v1
         with:
           rules: ./rules
-          sources: ./rules/sources.yaml
+          sources: ./rules/ruler.yaml
           changed-since: origin/${{ github.base_ref }}
           comment: true
 ```
@@ -38,7 +38,7 @@ same thing without this action. `action.yml` is the wiring itself.
 Every check runs in the `ruler` binary, so nothing here is out of reach by hand:
 
 ```bash
-ruler check --sources sources.yaml --changed-since origin/main ./rules/
+ruler check --config ruler.yaml --changed-since origin/main ./rules/
 ```
 
 ## What this repository tests

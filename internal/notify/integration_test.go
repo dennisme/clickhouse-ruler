@@ -260,7 +260,7 @@ func TestEndToEndFiringAlertReachesAlertmanager(t *testing.T) {
 func loadSet(t *testing.T, chAddr string) *ruleset.Set {
 	t.Helper()
 
-	path := filepath.Join("testdata", "sources.yaml")
+	path := filepath.Join("testdata", "ruler.yaml")
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("reading sources: %v", err)

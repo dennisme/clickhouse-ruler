@@ -29,7 +29,7 @@ func TestCheckPathNarrowsToOneFile(t *testing.T) {
 	dir := twoTeams(t, brokenRule)
 
 	code, stdout, stderr := runCheck(t, "check",
-		"--sources", filepath.Join(dir, "sources.yaml"),
+		"--config", filepath.Join(dir, "ruler.yaml"),
 		"--format", "json",
 		filepath.Join(dir, "rules"),
 		filepath.Join(dir, "rules", "search", "latency.yaml"))
@@ -61,7 +61,7 @@ func TestCheckPathNarrowsToASubtree(t *testing.T) {
 	dir := twoTeams(t, brokenRule)
 
 	code, stdout, _ := runCheck(t, "check",
-		"--sources", filepath.Join(dir, "sources.yaml"),
+		"--config", filepath.Join(dir, "ruler.yaml"),
 		"--format", "json",
 		filepath.Join(dir, "rules"),
 		filepath.Join(dir, "rules", "search"))
@@ -98,13 +98,13 @@ func TestCheckPathKeepsTheTreesPolicy(t *testing.T) {
 	rules := filepath.Join(dir, "rules")
 
 	// Beside the rules root, which is where the instance policy is read from
-	// when nobody passes --config.
-	if err := os.WriteFile(filepath.Join(rules, "ruler.yaml"), []byte(raised), 0o600); err != nil {
+	// when nobody passes --policy.
+	if err := os.WriteFile(filepath.Join(rules, "policy.yaml"), []byte(raised), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
 	code, stdout, _ := runCheck(t, "check",
-		"--sources", filepath.Join(dir, "sources.yaml"),
+		"--config", filepath.Join(dir, "ruler.yaml"),
 		rules, filepath.Join(rules, "search", "latency.yaml"))
 	if code != exitFinding {
 		t.Errorf("exit = %d, want exitFinding: the tree's policy raises labels/required\n%s", code, stdout)
@@ -114,7 +114,7 @@ func TestCheckPathKeepsTheTreesPolicy(t *testing.T) {
 	// instance policy is no longer beside the root, so the same rule is only a
 	// warning and the author is told nothing blocks.
 	code, stdout, _ = runCheck(t, "check",
-		"--sources", filepath.Join(dir, "sources.yaml"), filepath.Join(rules, "search"))
+		"--config", filepath.Join(dir, "ruler.yaml"), filepath.Join(rules, "search"))
 	if code != 0 {
 		t.Errorf("exit = %d, want 0: rooting at the subtree loses the tree's policy\n%s", code, stdout)
 	}
@@ -137,7 +137,7 @@ func TestCheckPathAndChangedSinceIntersect(t *testing.T) {
 	// search/latency.yaml is the changed file; payments/latency.yaml is the
 	// named path. Nothing is both, so nothing is reported.
 	code, stdout, _ := runCheck(t, "check",
-		"--sources", filepath.Join(dir, "sources.yaml"),
+		"--config", filepath.Join(dir, "ruler.yaml"),
 		"--format", "json",
 		"--changed-since", "HEAD",
 		filepath.Join(dir, "rules"),
@@ -158,7 +158,7 @@ func TestCheckPathHoldsWhenChangedSinceWidens(t *testing.T) {
 	gitRepo(t, dir)
 
 	code, stdout, stderr := runCheck(t, "check",
-		"--sources", filepath.Join(dir, "sources.yaml"),
+		"--config", filepath.Join(dir, "ruler.yaml"),
 		"--format", "json",
 		"--changed-since", "origin/nope",
 		filepath.Join(dir, "rules"),
@@ -193,14 +193,14 @@ func TestCheckPathUsageErrors(t *testing.T) {
 	}{
 		{"no such file", filepath.Join(rules, "payments", "typo.yaml"), "typo.yaml"},
 		{"no rule file under it", filepath.Join(rules, "payments", "latency.yaml", "deeper"), "deeper"},
-		{"outside the rules directory", filepath.Join(dir, "sources.yaml"), "sources.yaml"},
-		{"the policy file", filepath.Join(dir, "ruler.yaml"), "ruler.yaml"},
+		{"outside the rules directory", filepath.Join(dir, "ruler.yaml"), "ruler.yaml"},
+		{"the policy file", filepath.Join(dir, "policy.yaml"), "policy.yaml"},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			code, stdout, stderr := runCheck(t, "check",
-				"--sources", filepath.Join(dir, "sources.yaml"), rules, tc.path)
+				"--config", filepath.Join(dir, "ruler.yaml"), rules, tc.path)
 
 			if code != exitUsage {
 				t.Errorf("exit = %d, want exitUsage\n%s\n%s", code, stdout, stderr)
@@ -218,7 +218,7 @@ func TestCheckNoPathsReportsTheWholeTree(t *testing.T) {
 	dir := twoTeams(t, brokenRule)
 
 	code, stdout, _ := runCheck(t, "check",
-		"--sources", filepath.Join(dir, "sources.yaml"),
+		"--config", filepath.Join(dir, "ruler.yaml"),
 		"--format", "json",
 		filepath.Join(dir, "rules"))
 

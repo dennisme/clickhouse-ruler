@@ -51,7 +51,7 @@ jobs:
         with:
           binary: ${{ runner.temp }}/ruler
           rules: action/testdata/rules
-          sources: action/testdata/sources.yaml
+          config: action/testdata/ruler.yaml
 
       - name: The fixtures must have failed
         env:
@@ -73,7 +73,7 @@ jobs:
         with:
           binary: ${{ runner.temp }}/ruler
           rules: action/testdata/rules
-          sources: action/testdata/sources.yaml
+          config: action/testdata/ruler.yaml
           format: json
 
       - name: The JSON must parse and name the checks
@@ -99,7 +99,7 @@ jobs:
         with:
           binary: ${{ runner.temp }}/ruler
           rules: action/testdata/rules
-          sources: action/testdata/sources.yaml
+          config: action/testdata/ruler.yaml
           comment: "false"
 
       - name: The report must be a table with links
@@ -144,7 +144,7 @@ jobs:
         with:
           binary: ${{ runner.temp }}/ruler
           rules: action/testdata/rules
-          sources: action/testdata/sources.yaml
+          config: action/testdata/ruler.yaml
           comment: "true"
 
       - name: One comment, updated rather than appended
@@ -182,7 +182,7 @@ jobs:
         with:
           version: v0.1.0
           rules: action/testdata/rules
-          sources: action/testdata/sources.yaml
+          config: action/testdata/ruler.yaml
 
       - name: The download must have run the checks
         env:

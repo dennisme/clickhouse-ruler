@@ -48,7 +48,7 @@ func checkRule(t *testing.T, expr string, args ...string) (int, string) {
 	sources := writeSources(t, dir, "ruler_payments")
 
 	var stdout, stderr bytes.Buffer
-	argv := append([]string{"check", "--sources", sources, "--online"}, args...)
+	argv := append([]string{"check", "--config", sources, "--online"}, args...)
 	argv = append(argv, rules)
 
 	code := run(argv, &stdout, &stderr)
@@ -95,7 +95,7 @@ func TestCheckOnlineBlocksATableFunction(t *testing.T) {
 // rule passes.
 func TestCheckOnlineHonoursTheAllowlist(t *testing.T) {
 	dir := t.TempDir()
-	config := filepath.Join(dir, "ruler.yaml")
+	config := filepath.Join(dir, "policy.yaml")
 	body := "checks:\n  rule/table-function:\n    keys: [numbers]\n"
 	if err := os.WriteFile(config, []byte(body), 0o600); err != nil {
 		t.Fatalf("writing policy: %v", err)
@@ -103,7 +103,7 @@ func TestCheckOnlineHonoursTheAllowlist(t *testing.T) {
 
 	code, out := checkRule(t,
 		`SELECT number AS value FROM numbers(10) WHERE {{ .From }} <= {{ .To }}`,
-		"--config", config)
+		"--policy", config)
 
 	if code != exitOK {
 		t.Errorf("exit = %d, want %d: %s", code, exitOK, out)
@@ -149,7 +149,7 @@ func TestCheckStaysOfflineForQueryChecks(t *testing.T) {
 	sources := writeSources(t, dir, "ruler_payments")
 
 	var stdout, stderr bytes.Buffer
-	code := run([]string{"check", "--sources", sources, rules}, &stdout, &stderr)
+	code := run([]string{"check", "--config", sources, rules}, &stdout, &stderr)
 
 	out := stdout.String() + stderr.String()
 	if code != exitOK {
@@ -185,7 +185,7 @@ WHERE Timestamp >= {{ .From }} AND Timestamp < {{ .To }}`)
 	}
 
 	var stdout, stderr bytes.Buffer
-	code := run([]string{"check", "--sources", sources, "--online", rules}, &stdout, &stderr)
+	code := run([]string{"check", "--config", sources, "--online", rules}, &stdout, &stderr)
 	out := stdout.String() + stderr.String()
 
 	if code != exitOK {
@@ -220,7 +220,7 @@ WHERE Timestamp >= {{ .From }} AND Timestamp < {{ .To }}`)
 	}
 
 	var stdout, stderr bytes.Buffer
-	code := run([]string{"check", "--sources", sources, "--online", rules}, &stdout, &stderr)
+	code := run([]string{"check", "--config", sources, "--online", rules}, &stdout, &stderr)
 	out := stdout.String() + stderr.String()
 
 	if code != exitFinding {
@@ -243,7 +243,7 @@ func TestCheckWritesTheCostSummary(t *testing.T) {
 	out := filepath.Join(dir, "summary.md")
 
 	var stdout, stderr bytes.Buffer
-	code := run([]string{"check", "--sources", sources, "--online", "--summary", out, rules},
+	code := run([]string{"check", "--config", sources, "--online", "--summary", out, rules},
 		&stdout, &stderr)
 	if code != exitOK {
 		t.Fatalf("exit = %d, want %d: %s%s", code, exitOK, stdout.String(), stderr.String())
@@ -283,14 +283,14 @@ func TestCostSummaryReportsARuleWithNoCostCeiling(t *testing.T) {
 	rules := writeRule(t, dir, workingExpr)
 	sources := writeSources(t, dir, "ruler_payments")
 	seed(t, os.Getenv("RULER_CLICKHOUSE_ADDR"), "cost-summary-no-ceiling")
-	config := filepath.Join(dir, "ruler.yaml")
+	config := filepath.Join(dir, "policy.yaml")
 	if err := os.WriteFile(config, []byte("checks:\n  rule/cost:\n    severity: \"off\"\n"), 0o600); err != nil {
 		t.Fatalf("writing policy: %v", err)
 	}
 	out := filepath.Join(dir, "summary.md")
 
 	var stdout, stderr bytes.Buffer
-	code := run([]string{"check", "--sources", sources, "--config", config,
+	code := run([]string{"check", "--config", sources, "--policy", config,
 		"--online", "--summary", out, rules}, &stdout, &stderr)
 	if code != exitOK {
 		t.Fatalf("exit = %d, want %d: %s%s", code, exitOK, stdout.String(), stderr.String())

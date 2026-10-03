@@ -57,9 +57,9 @@ func (c *config) refused() bool {
 // re-post every firing alert at once and give each a fresh resend interval
 // (spec 6.5).
 type runner struct {
-	rulesDir    string
-	sourcesPath string
-	configPath  string
+	rulesDir   string
+	configPath string
+	policyPath string
 
 	log     *slog.Logger
 	stderr  io.Writer
@@ -122,16 +122,16 @@ type readyState struct {
 // `ruler check` does to the same tree. One path, so a rule that would fail CI
 // cannot be loaded by a reload either (spec 7.1).
 func (r *runner) load() (*config, error) {
-	sources, problems, err := loadSources(r.sourcesPath)
+	sources, problems, err := loadSources(r.configPath)
 	if err != nil {
 		return nil, err
 	}
 
-	root, configProblems, err := loadPolicy(r.configPath, r.rulesDir)
+	root, policyProblems, err := loadPolicy(r.policyPath, r.rulesDir)
 	if err != nil {
 		return nil, err
 	}
-	problems = append(problems, configProblems...)
+	problems = append(problems, policyProblems...)
 
 	set, ruleProblems := ruleset.Load(r.rulesDir, sources, root)
 	problems = append(problems, ruleProblems...)
@@ -177,7 +177,7 @@ func (r *runner) report(problems []lint.Problem) {
 // and never one per evaluation.
 func (r *runner) connect(ctx context.Context, cfg *config) error {
 	if refused := refusedSources(
-		ctx, r.sourcesPath, cfg.set, cfg.root, r.metrics, r.stderr, r.log,
+		ctx, r.configPath, cfg.set, cfg.root, r.metrics, r.stderr, r.log,
 	); len(refused) > 0 {
 		refuseSources(cfg.set, refused)
 	}
@@ -267,7 +267,7 @@ func (r *runner) build(cfg *config) {
 // expected to have, with the counter for the refusals a retry would otherwise
 // hide (spec 8.2).
 func (r *runner) reload(ctx context.Context) error {
-	r.log.Info("reloading", "rules", r.rulesDir, "sources", r.sourcesPath)
+	r.log.Info("reloading", "rules", r.rulesDir, "sources", r.configPath)
 
 	cfg, err := r.load()
 	if err != nil {

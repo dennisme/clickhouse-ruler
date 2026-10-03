@@ -41,11 +41,11 @@ read: the root also holds git's own state.
 {{- end -}}
 
 {{- define "clickhouse-ruler.sourcesPath" -}}
-{{ include "clickhouse-ruler.configDir" . }}/sources/sources.yaml
+{{ include "clickhouse-ruler.configDir" . }}/sources/ruler.yaml
 {{- end -}}
 
 {{- define "clickhouse-ruler.policyPath" -}}
-{{ include "clickhouse-ruler.configDir" . }}/policy/ruler.yaml
+{{ include "clickhouse-ruler.configDir" . }}/policy/policy.yaml
 {{- end -}}
 
 {{/*
@@ -130,14 +130,14 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{/*
 The one refusal the JSON schema cannot state, because both fields have defaults
 and neither is wrong on its own. A password in a value is caught by the schema,
-which allows no source key the sources file does not have.
+which allows no source key the operator's file does not have.
 */}}
 {{- define "clickhouse-ruler.validate" -}}
 {{- if and .Values.sources .Values.sourcesSecret.name -}}
-{{- fail "set either sources or sourcesSecret.name, not both: one templates the sources file and the other supplies it whole" -}}
+{{- fail "set either sources or sourcesSecret.name, not both: one templates the operator's file and the other supplies it whole" -}}
 {{- end -}}
 {{- if and (not .Values.sources) (not .Values.sourcesSecret.name) -}}
-{{- fail "no sources: set sources, or sourcesSecret.name to a Secret holding the whole sources file" -}}
+{{- fail "no sources: set sources, or sourcesSecret.name to a Secret holding the whole operator's file" -}}
 {{- end -}}
 {{- end -}}
 

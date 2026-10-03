@@ -204,7 +204,7 @@ func loadCounterRules(t *testing.T, addr string, rules ...string) map[string]rul
 		t.Fatal(err)
 	}
 
-	sourcesPath := filepath.Join(dir, "sources.yaml")
+	configPath := filepath.Join(dir, "ruler.yaml")
 	sources := "sources:\n" +
 		"  - name: otel_metrics\n" +
 		"    labels: {team: payments, signal: metrics}\n" +
@@ -216,11 +216,11 @@ func loadCounterRules(t *testing.T, addr string, rules ...string) map[string]rul
 		// The rows were waited for, so there is no ingestion lag left to
 		// absorb and the window a test names is the window it gets.
 		"    evaluation_delay: 0s\n"
-	if err := os.WriteFile(sourcesPath, []byte(sources), 0o600); err != nil {
+	if err := os.WriteFile(configPath, []byte(sources), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
-	parsed, problems := source.Parse(sourcesPath, []byte(sources), nil)
+	parsed, problems := source.Parse(configPath, []byte(sources), nil)
 	for _, p := range problems {
 		t.Fatalf("the metrics source did not load: %s: %s", p.Check, p.Text)
 	}

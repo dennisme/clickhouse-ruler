@@ -89,7 +89,7 @@ func TestRunRejectsAMalformedAlertmanagerURL(t *testing.T) {
 	for _, in := range []string{"localhost:9093", "ftp://localhost:9093", "http://"} {
 		code, stderr := runRunCmd(t, "run",
 			"--rules", filepath.Join(dir, "rules"),
-			"--sources", filepath.Join(dir, "sources.yaml"),
+			"--config", filepath.Join(dir, "ruler.yaml"),
 			"--alertmanager", in)
 
 		if code != exitUsage {
@@ -315,7 +315,7 @@ func TestRunRejectsADuplicateAlertmanagerURL(t *testing.T) {
 
 	code, stderr := runRunCmd(t, "run",
 		"--rules", filepath.Join(dir, "rules"),
-		"--sources", filepath.Join(dir, "sources.yaml"),
+		"--config", filepath.Join(dir, "ruler.yaml"),
 		"--alertmanager", "http://localhost:9093",
 		"--alertmanager", "http://localhost:9093")
 

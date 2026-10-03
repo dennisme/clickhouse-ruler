@@ -71,7 +71,7 @@ groups:
           summary: "still evaluating, still matching nothing"
 `, table))
 
-	writeFile(t, filepath.Join(dir, "sources.yaml"), fmt.Sprintf(`
+	writeFile(t, filepath.Join(dir, "ruler.yaml"), fmt.Sprintf(`
 sources:
   - name: recheck_source
     labels: {team: recheck}
@@ -92,7 +92,7 @@ sources:
 	go func() {
 		runDone <- runRun(ctx, []string{
 			"--rules", rulesDir,
-			"--sources", filepath.Join(dir, "sources.yaml"),
+			"--config", filepath.Join(dir, "ruler.yaml"),
 			"--alertmanager", amURL,
 			"--recheck-interval", "1s",
 			"--listen", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)),

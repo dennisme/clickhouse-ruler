@@ -11,7 +11,7 @@ repository to your cluster's topology, which is a change you then make in two
 places.
 
 ```yaml
-# rules/sources.yaml
+# rules/ruler.yaml
 sources:
   - name: payments_prod
     labels: {team: payments, cluster: prod, env: prod}
@@ -88,7 +88,7 @@ name. `cert_file` and `key_file` are the pair ClickHouse authenticates for
 mTLS, and a source with them and no password is legal. `server_name` defaults to the host in `address`, so it is
 only written when that host is not the name on the certificate. All four are
 paths, never inline material, for the reason `password_file` is: a key pasted
-into the sources file is a key in a git history. A path that is wrong fails
+into the operator's file is a key in a git history. A path that is wrong fails
 `ruler check` rather than the first evaluation.
 
 `insecure_skip_verify: true` turns verification off, and costs an `exempt`
@@ -158,7 +158,7 @@ so in its own labels.
 `CODEOWNERS` then does the rest:
 
 ```text
-/rules/sources.yaml    @platform-team
+/rules/ruler.yaml    @platform-team
 /rules/payments/       @payments
 ```
 

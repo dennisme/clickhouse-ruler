@@ -4,7 +4,7 @@ import "testing"
 
 func sources() *File {
 	return &File{
-		File: "sources.yaml",
+		File: "ruler.yaml",
 		Sources: []Source{
 			{Name: "payments_main", Labels: map[string]string{"team": "payments", "cluster": "main"}},
 			{Name: "payments_prod", Labels: map[string]string{"team": "payments", "cluster": "prod", "env": "prod"}},

@@ -16,7 +16,7 @@ helm install ruler oci://ghcr.io/dennisme/charts/clickhouse-ruler \
 
 A Deployment with the ruler and a git-sync sidecar that clones your rules
 repository and posts to the ruler's reload endpoint after each sync, a Service
-on the metrics port, a ConfigMap holding the sources file, and a ServiceAccount.
+on the metrics port, a ConfigMap holding the operator's file, and a ServiceAccount.
 A ServiceMonitor and a PodDisruptionBudget are templated too, both off until
 asked for.
 

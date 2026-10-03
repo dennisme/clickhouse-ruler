@@ -8,8 +8,8 @@ rule failing one cannot do its job: it will not parse, has no identity, has
 nothing to query, or breaks routing. Softening those produces rules that look
 fine in review and never fire, which is the failure this tool exists to
 prevent. **Convention checks** take their severity from policy, default to
-`warning`, and can be raised to `error` or turned `off` in `ruler.yaml`, in a
-team directory's own `ruler.yaml`, or on a source (see [where policy
+`warning`, and can be raised to `error` or turned `off` in `policy.yaml`, in a
+team directory's own `policy.yaml`, or on a source (see [where policy
 lives](policy.md#where-policy-lives)). Severity decides who has to be involved to unblock a contributor: a
 warning is theirs to act on, an error needs whoever owns policy.
 
@@ -911,7 +911,7 @@ deliberately granted almost nothing, it is noise:
 ```
 
 **Severity only tightens across scopes.** A source can raise a check and can
-never lower one, so leaving this at its shipped default in `ruler.yaml` is
+never lower one, so leaving this at its shipped default in `policy.yaml` is
 what lets a single source turn it off. Setting it to `error` instance-wide
 takes that ability away from every source.
 
@@ -1047,7 +1047,7 @@ WHERE Timestamp >= {{ .From }} AND Timestamp < {{ .To }}
 Everything above answers from metadata: what the query is, what it resolves to,
 what it would read. This one reads rows, so it runs only when sampling was
 asked for, with `ruler check --sample` or `check.sample.enabled` in
-`ruler.yaml`. A connection alone does not turn it on.
+`policy.yaml`. A connection alone does not turn it on.
 
 <a id="rule-attribute-key"></a>
 
@@ -1174,9 +1174,9 @@ production uses. It needs `--backfill`, which reads rows once per window and is
 consented to on its own, not by `--sample`:
 
 ```bash
-ruler check --backfill --sources rules/sources.yaml rules/
+ruler check --backfill --config rules/ruler.yaml rules/
 ruler check --backfill --backfill-range 168h --backfill-step 5m \
-  --sources rules/sources.yaml rules/
+  --config rules/ruler.yaml rules/
 ```
 
 `--backfill-range` defaults to 24h, a full diurnal cycle, because a rule that

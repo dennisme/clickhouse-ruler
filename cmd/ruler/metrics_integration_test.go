@@ -129,7 +129,7 @@ func TestAMetricsRuleReadsWhatTheCollectorWrote(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	sources := filepath.Join(dir, "sources.yaml")
+	sources := filepath.Join(dir, "ruler.yaml")
 	body := "sources:\n" +
 		"  - name: otel_metrics\n" +
 		"    labels: {signal: metrics}\n" +
@@ -146,7 +146,7 @@ func TestAMetricsRuleReadsWhatTheCollectorWrote(t *testing.T) {
 	// here is the restricted user reading the table rather than the query
 	// merely parsing. --sample reads the rows, which is the half that would
 	// stay quiet if the collector had written nothing.
-	code, stdout, stderr := runCheck(t, "check", "--sources", sources, "--online", "--sample", rules)
+	code, stdout, stderr := runCheck(t, "check", "--config", sources, "--online", "--sample", rules)
 	out := stdout + stderr
 	if code != exitOK {
 		t.Errorf("exit = %d, want %d: a metrics rule is readable by its own user\n%s", code, exitOK, out)

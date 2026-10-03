@@ -144,8 +144,8 @@ func TestRunEndToEndFiringAlertReachesAlertmanager(t *testing.T) {
 	serviceName := "checkout-" + strconv.FormatInt(time.Now().UnixNano(), 36)
 	seed(t, chAddr, serviceName)
 
-	sourcesPath := filepath.Join("testdata", "sources.yaml")
-	rewritten := rewriteAddress(t, sourcesPath, chAddr)
+	configPath := filepath.Join("testdata", "ruler.yaml")
+	rewritten := rewriteAddress(t, configPath, chAddr)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -155,7 +155,7 @@ func TestRunEndToEndFiringAlertReachesAlertmanager(t *testing.T) {
 	go func() {
 		runDone <- runRun(ctx, []string{
 			"--rules", filepath.Join("testdata", "rules"),
-			"--sources", rewritten,
+			"--config", rewritten,
 			"--alertmanager", amURL,
 			"--listen", ":0",
 		}, &stdout, &stderr)
@@ -228,7 +228,7 @@ func rewriteAddress(t *testing.T, path, addr string) string {
 		t.Fatalf("reading %s: %v", path, err)
 	}
 
-	out := filepath.Join(t.TempDir(), "sources.yaml")
+	out := filepath.Join(t.TempDir(), "ruler.yaml")
 	rewritten := bytes.ReplaceAll(data, []byte("address: 127.0.0.1:9000"), []byte("address: "+addr))
 	if err := os.WriteFile(out, rewritten, 0o600); err != nil {
 		t.Fatalf("writing %s: %v", out, err)
@@ -268,7 +268,7 @@ func TestRunReloadsOnSighup(t *testing.T) {
 	// A copy of the rules tree, because this test adds a file to it and the
 	// checked-in fixture is shared with every other test in this package.
 	rulesDir := copyTree(t, filepath.Join("testdata", "rules"))
-	rewritten := rewriteAddress(t, filepath.Join("testdata", "sources.yaml"), chAddr)
+	rewritten := rewriteAddress(t, filepath.Join("testdata", "ruler.yaml"), chAddr)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -278,7 +278,7 @@ func TestRunReloadsOnSighup(t *testing.T) {
 	go func() {
 		runDone <- runRun(ctx, []string{
 			"--rules", rulesDir,
-			"--sources", rewritten,
+			"--config", rewritten,
 			"--alertmanager", amURL,
 			"--listen", ":0",
 		}, &stdout, &stderr)

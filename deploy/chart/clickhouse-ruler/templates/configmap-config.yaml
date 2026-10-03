@@ -1,7 +1,7 @@
 {{- include "clickhouse-ruler.validate" . -}}
 {{- if .Values.sources }}
 {{/*
-The templated sources file. A ConfigMap rather than a Secret because nothing
+The templated operator's file. A ConfigMap rather than a Secret because nothing
 secret reaches it: every field here is reviewable configuration and a password
 is a path into a mounted Secret (spec 6.2).
 
@@ -11,11 +11,11 @@ file, and the only rewrite is passwordSecret becoming password_file.
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: {{ include "clickhouse-ruler.fullname" . }}-sources
+  name: {{ include "clickhouse-ruler.fullname" . }}-config
   labels:
     {{- include "clickhouse-ruler.labels" . | nindent 4 }}
 data:
-  sources.yaml: |
+  ruler.yaml: |
     sources:
     {{- range $s := .Values.sources }}
       - name: {{ $s.name | quote }}

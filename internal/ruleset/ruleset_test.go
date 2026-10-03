@@ -13,7 +13,7 @@ import (
 	"github.com/dennisme/clickhouse-ruler/internal/source"
 )
 
-func loadSources(t *testing.T) *source.File { return loadSourcesFrom(t, "sources.yaml") }
+func loadSources(t *testing.T) *source.File { return loadSourcesFrom(t, "ruler.yaml") }
 
 func loadSourcesFrom(t *testing.T, name string) *source.File {
 	t.Helper()
@@ -212,7 +212,7 @@ func TestLoadReportsRulesThatProduceTheSameAlert(t *testing.T) {
 }
 
 // loadPolicy reads a fixture's instance policy the way the CLI reads the
-// ruler.yaml beside the rules it was pointed at.
+// policy.yaml beside the rules it was pointed at.
 func loadPolicy(t *testing.T, path string) *policy.Policy {
 	t.Helper()
 
@@ -241,20 +241,20 @@ func severityOf(t *testing.T, problems []lint.Problem, file, check string) lint.
 	return lint.Problem{}
 }
 
-// A team owns the directory its rules live in, so a ruler.yaml there is
+// A team owns the directory its rules live in, so a policy.yaml there is
 // policy for those rules and no others. The merge is a maximum, so the only
 // thing a team can do with it is make its own life stricter (spec 7.7).
 func TestLoadReadsTeamPolicy(t *testing.T) {
 	dir := filepath.Join("testdata", "team_policy")
-	instance := filepath.Join(dir, "ruler.yaml")
-	team := filepath.Join(dir, "payments", "ruler.yaml")
-	nested := filepath.Join(dir, "payments", "critical", "ruler.yaml")
+	instance := filepath.Join(dir, "policy.yaml")
+	team := filepath.Join(dir, "payments", "policy.yaml")
+	nested := filepath.Join(dir, "payments", "critical", "policy.yaml")
 
 	payments := filepath.Join(dir, "payments", "latency.yaml")
 	pager := filepath.Join(dir, "payments", "critical", "pager.yaml")
 	search := filepath.Join(dir, "search", "errors.yaml")
 
-	sources := loadSourcesFrom(t, filepath.Join("team_policy", "sources.yaml"))
+	sources := loadSourcesFrom(t, filepath.Join("team_policy", "ruler.yaml"))
 	_, problems := Load(dir, sources, loadPolicy(t, instance))
 
 	// The team raised labels/required for its own directory, and --explain
@@ -299,35 +299,35 @@ func TestLoadReadsTeamPolicy(t *testing.T) {
 	}
 }
 
-// The ruler.yaml at the rules root is the instance scope, passed in already.
+// The policy.yaml at the rules root is the instance scope, passed in already.
 // Reading it again as a team file changes no severity under a maximum, but a
 // finding whose origin named the wrong scope would send --explain at the
 // wrong file, so it is left alone here.
 func TestLoadDoesNotReadTheInstanceFileAsTeamPolicy(t *testing.T) {
 	dir := filepath.Join("testdata", "team_policy")
-	sources := loadSourcesFrom(t, filepath.Join("team_policy", "sources.yaml"))
+	sources := loadSourcesFrom(t, filepath.Join("team_policy", "ruler.yaml"))
 
 	_, problems := Load(dir, sources, nil)
 
 	got := severityOf(t, problems, filepath.Join(dir, "search", "errors.yaml"), "labels/required")
 	if got.Severity != lint.SeverityWarning {
-		t.Errorf("labels/required = %v, want the shipped warning: the root ruler.yaml is "+
+		t.Errorf("labels/required = %v, want the shipped warning: the root policy.yaml is "+
 			"the instance scope and this load was given none", got.Severity)
 	}
 }
 
 // Both reserved names live in the rules tree and neither is a rule file. The
-// quick start puts sources.yaml there, and a team's ruler.yaml is the point
+// quick start puts ruler.yaml there, and a team's policy.yaml is the point
 // of this scope, so parsing either as a rule reports a pile of unknown
 // fields against a file that is exactly right.
 func TestLoadDoesNotParseReservedNamesAsRules(t *testing.T) {
 	dir := filepath.Join("testdata", "team_policy")
-	sources := loadSourcesFrom(t, filepath.Join("team_policy", "sources.yaml"))
+	sources := loadSourcesFrom(t, filepath.Join("team_policy", "ruler.yaml"))
 
 	set, problems := Load(dir, sources, nil)
 
 	for _, p := range problems {
-		if filepath.Base(p.File) == "sources.yaml" || filepath.Base(p.File) == "ruler.yaml" {
+		if filepath.Base(p.File) == "ruler.yaml" || filepath.Base(p.File) == "policy.yaml" {
 			if p.Check == "yaml/unknown-field" {
 				t.Errorf("a reserved file was parsed as a rule file: %s", p)
 			}

@@ -27,7 +27,7 @@ func writeTwoSources(t *testing.T, dir, secondDatabase, secondUser string) strin
 		t.Fatal("RULER_CLICKHOUSE_ADDR is not set, run these through `just integration`")
 	}
 
-	path := filepath.Join(dir, "sources.yaml")
+	path := filepath.Join(dir, "ruler.yaml")
 	body := "sources:\n" +
 		"  - name: payments_dc1\n" +
 		"    labels: {team: payments, cluster: dc1}\n" +
@@ -65,7 +65,7 @@ func checkEstate(t *testing.T, secondDatabase, secondUser string, args ...string
 	sources := writeTwoSources(t, dir, secondDatabase, secondUser)
 
 	var stdout, stderr bytes.Buffer
-	argv := append([]string{"check", "--sources", sources, "--online"}, args...)
+	argv := append([]string{"check", "--config", sources, "--online"}, args...)
 	argv = append(argv, rules)
 
 	code := run(argv, &stdout, &stderr)
@@ -143,13 +143,13 @@ func TestCheckOnlineSaysNothingAboutASourceItCouldNotRead(t *testing.T) {
 // working raises it, and then the same disagreement blocks (spec 7.6).
 func TestCheckOnlineBlocksOnASchemaDisagreementWhenPolicyRaisesIt(t *testing.T) {
 	dir := t.TempDir()
-	config := filepath.Join(dir, "ruler.yaml")
+	config := filepath.Join(dir, "policy.yaml")
 	body := "checks:\n  rule/source-schema:\n    severity: error\n"
 	if err := os.WriteFile(config, []byte(body), 0o600); err != nil {
 		t.Fatalf("writing policy: %v", err)
 	}
 
-	code, out := checkEstate(t, "otel_dc2", "ruler_dc2", "--config", config)
+	code, out := checkEstate(t, "otel_dc2", "ruler_dc2", "--policy", config)
 	if code != exitFinding {
 		t.Errorf("exit = %d, want %d: %s", code, exitFinding, out)
 	}

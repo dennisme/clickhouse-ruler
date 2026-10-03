@@ -29,14 +29,14 @@ func TestRunRequiresRulesAndAlertmanagerFlags(t *testing.T) {
 	dir := fixture(t, bareRule, "")
 
 	code, stderr := runRunCmd(t, "run",
-		"--sources", filepath.Join(dir, "sources.yaml"))
+		"--config", filepath.Join(dir, "ruler.yaml"))
 	if code != exitUsage {
 		t.Errorf("exit = %d, want exitUsage when --rules and --alertmanager are missing\n%s", code, stderr)
 	}
 
 	code, stderr = runRunCmd(t, "run",
 		"--rules", filepath.Join(dir, "rules"),
-		"--sources", filepath.Join(dir, "sources.yaml"))
+		"--config", filepath.Join(dir, "ruler.yaml"))
 	if code != exitUsage {
 		t.Errorf("exit = %d, want exitUsage when --alertmanager is missing\n%s", code, stderr)
 	}
@@ -49,7 +49,7 @@ func TestRunRefusesToStartOnAnUnreadableFile(t *testing.T) {
 
 	code, stderr := runRunCmd(t, "run",
 		"--rules", filepath.Join(dir, "rules"),
-		"--sources", filepath.Join(dir, "sources.yaml"),
+		"--config", filepath.Join(dir, "ruler.yaml"),
 		"--alertmanager", "http://127.0.0.1:9093")
 
 	if code != exitFinding {
@@ -72,7 +72,7 @@ func TestRunRejectsANonPositiveResendInterval(t *testing.T) {
 	for _, interval := range []string{"0", "-1m"} {
 		code, stderr := runRunCmd(t, "run",
 			"--rules", filepath.Join(dir, "rules"),
-			"--sources", filepath.Join(dir, "sources.yaml"),
+			"--config", filepath.Join(dir, "ruler.yaml"),
 			"--alertmanager", "http://127.0.0.1:9093",
 			"--resend-interval", interval)
 
@@ -93,7 +93,7 @@ func TestRunRejectsAnUnknownLogLevel(t *testing.T) {
 
 	code, stderr := runRunCmd(t, "run",
 		"--rules", filepath.Join(dir, "rules"),
-		"--sources", filepath.Join(dir, "sources.yaml"),
+		"--config", filepath.Join(dir, "ruler.yaml"),
 		"--alertmanager", "http://127.0.0.1:9093",
 		"--log-level", "chatty")
 
@@ -146,7 +146,7 @@ func TestRunRejectsAnUnknownLogFormat(t *testing.T) {
 
 	code, stderr := runRunCmd(t, "run",
 		"--rules", filepath.Join(dir, "rules"),
-		"--sources", filepath.Join(dir, "sources.yaml"),
+		"--config", filepath.Join(dir, "ruler.yaml"),
 		"--alertmanager", "http://127.0.0.1:9093",
 		"--log-format", "logfmt")
 
@@ -231,7 +231,7 @@ func TestRunRejectsAToleranceWithNoHeadroom(t *testing.T) {
 	for _, tolerance := range []string{"1", "0", "-1"} {
 		code, stderr := runRunCmd(t, "run",
 			"--rules", filepath.Join(dir, "rules"),
-			"--sources", filepath.Join(dir, "sources.yaml"),
+			"--config", filepath.Join(dir, "ruler.yaml"),
 			"--alertmanager", "http://127.0.0.1:9093",
 			"--resend-tolerance", tolerance)
 

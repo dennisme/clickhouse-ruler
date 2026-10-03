@@ -85,7 +85,7 @@ func parseSourceYAML(t *testing.T, body string) (*File, []lint.Problem) {
 	yaml := "sources:\n  - name: s\n    address: clickhouse:9440\n" +
 		"    database: otel\n    username: ruler\n" +
 		"    table: otel_traces\n    timestamp_column: Timestamp\n" + body
-	return Parse("sources.yaml", []byte(yaml), testEnv(nil))
+	return Parse("ruler.yaml", []byte(yaml), testEnv(nil))
 }
 
 // The whole of the managed case: one flag, and the server is verified against
