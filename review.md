@@ -14,19 +14,9 @@ None open. The ones that were are under Closed, with their original numbers.
 
 ## Operator unclear
 
-### Flags need a restart and the docs do not say it
-
-`SIGHUP` re-reads three files. `--alertmanager`, `--query-concurrency`,
-`--recheck-interval`, `--resend-interval`, `--resend-tolerance` and `--log-level`
-all need a process restart. The flag table in `docs/running.md` never mentions
-it.
+None open. The ones that were are under Closed, with their original text.
 
 ## Metrics and logs
-
-### No `--log-format=json`
-
-Spec 8.4 declines it until somebody asks. Asking: structured `slog` output in
-text form means every Kubernetes log pipeline re-parses it. One handler swap.
 
 ### No reload attempt counter
 
@@ -45,6 +35,37 @@ on `--format`. Workable and documented, but a lot of rules for one command.
 
 Original numbering and original text kept, so a reference written before the
 fix still points at the right item.
+
+### No `--log-format=json`
+
+**Closed by `456e666`.** `--log-format` takes `text` or `json` and defaults to
+`text`, swapping one `slog` handler for the other on the same stream with the
+same options. The default stays text because the commonest reader is a person
+at a terminal, while a pipeline that wants JSON is configured once. Every line
+carries the same message and the same field names in both formats, so the table
+in spec 8.4 and the one in `docs/operations.md` are the JSON object's keys, and
+an unparseable format is refused at startup the way an unparseable `--log-level`
+is. The Helm chart exposes it as `ruler.logFormat` beside `ruler.logLevel`. The
+lint formatter and `ruler check` are untouched: those are CLI output on stderr
+for the person who typed the command, and this is a daemon logging flag.
+
+Spec 8.4 declines it until somebody asks. Asking: structured `slog` output in
+text form means every Kubernetes log pipeline re-parses it. One handler swap.
+
+### Flags need a restart and the docs do not say it
+
+**Closed by `5f4d8b9`, merged in #76.** The flag table in `docs/running.md` says
+above it that every flag `ruler run` takes is read once at startup, so nothing in
+the table is picked up by a reload, and `docs/operations.md` has what a reload
+refuses in full. One claim in the original text below is short and is left as
+written: the six flags it names are not the set that needs a restart, because
+every flag does, which is why the fix is a sentence over the whole table rather
+than a note per row.
+
+`SIGHUP` re-reads three files. `--alertmanager`, `--query-concurrency`,
+`--recheck-interval`, `--resend-interval`, `--resend-tolerance` and `--log-level`
+all need a process restart. The flag table in `docs/running.md` never mentions
+it.
 
 ### `ruler check` takes a directory only
 
@@ -388,10 +409,7 @@ past CI is running anyway.
 Items are named rather than numbered, because closing one used to renumber the
 rest and a reference written before that pointed at the wrong item afterwards.
 
-1. **Flags need a restart and the docs do not say it.** A doc change, and the
-   cheapest thing on this list.
-2. **No `--log-format=json`.** One handler swap, asked for.
-
-`--summary` and `--explain` need stdout gymnastics is deliberately not here: it
-names no change, so nothing can close it. It needs a shape to aim at first. No
-reload attempt counter is open but is not worth a slice on its own.
+Nothing is queued. The two items still open are not an order of work:
+`--summary` and `--explain` need stdout gymnastics names no change, so nothing
+can close it, and it needs a shape to aim at first. No reload attempt counter is
+worth doing beside the next thing that touches reloading, not on its own.
