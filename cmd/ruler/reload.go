@@ -259,11 +259,13 @@ func (r *runner) build(cfg *config) {
 // reload re-reads the files and replaces what is running with them.
 //
 // Every way this can fail leaves the ruler evaluating what it was already
-// evaluating, and says so on clickhouse_ruler_config_last_reload_successful.
-// That is the only signal a refused reload produces: the rules that are running
-// are valid, they evaluate, they deliver, and nothing about them looks wrong.
-// The file on disk saying something else is invisible from the outside, which is
-// why the gauge is the alert an operator is expected to have (spec 8.2).
+// evaluating, and says so on clickhouse_ruler_config_last_reload_successful and
+// on the refused outcome of clickhouse_ruler_config_reloads_total. Nothing else
+// says it: the rules that are running are valid, they evaluate, they deliver,
+// and nothing about them looks wrong. The file on disk saying something else is
+// invisible from the outside, which is why the gauge is the alert an operator is
+// expected to have, with the counter for the refusals a retry would otherwise
+// hide (spec 8.2).
 func (r *runner) reload(ctx context.Context) error {
 	r.log.Info("reloading", "rules", r.rulesDir, "sources", r.sourcesPath)
 
@@ -286,6 +288,8 @@ func (r *runner) reload(ctx context.Context) error {
 		return r.refuse("a source could not be opened", err)
 	}
 
+	r.metrics.ConfigReloads.WithLabelValues("succeeded").Inc()
+
 	r.mu.Lock()
 	rules, sources := r.rules, len(r.queriers)
 	r.mu.Unlock()
@@ -300,6 +304,7 @@ func (r *runner) reload(ctx context.Context) error {
 // The timestamp gauge is left where it is on purpose: it dates the configuration
 // being evaluated, and a refused reload did not change that (see NewMetrics).
 func (r *runner) refuse(reason string, err error) error {
+	r.metrics.ConfigReloads.WithLabelValues("refused").Inc()
 	r.metrics.ConfigLastReloadSuccessful.Set(0)
 
 	args := []any{"reason", reason}

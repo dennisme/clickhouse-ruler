@@ -227,9 +227,50 @@ func TestReloadRefusedByAnUnreadableFileKeepsTheRunningRules(t *testing.T) {
 	if got := testutil.ToFloat64(r.metrics.ConfigLastReloadSuccessful); got != 0 {
 		t.Errorf("clickhouse_ruler_config_last_reload_successful = %v, want 0 after a refusal", got)
 	}
+	if got := testutil.ToFloat64(r.metrics.ConfigReloads.WithLabelValues("refused")); got != 1 {
+		t.Errorf("clickhouse_ruler_config_reloads_total{outcome=\"refused\"} = %v, want 1", got)
+	}
 	if got := testutil.ToFloat64(r.metrics.ConfigLastReloadTimestamp); got != stamped {
 		t.Errorf("clickhouse_ruler_config_last_reload_timestamp_seconds moved to %v on a refused reload, want %v: "+
 			"the timestamp is the age of what is running", got, stamped)
+	}
+}
+
+// The gauge answers the last attempt, so a reload refused and then retried
+// between two scrapes reads 1 and leaves no trace of the refusal. The counter
+// is what carries that: attempts over time, by outcome.
+func TestReloadCountsEveryAttemptByOutcome(t *testing.T) {
+	dir := fixture(t, bareRule, reloadPolicy)
+	r := startRunner(t, dir)
+
+	// A startup load is a load, not a reload, so the counter starts at nothing
+	// however the ruler came up.
+	for _, outcome := range []string{"succeeded", "refused"} {
+		if got := testutil.ToFloat64(r.metrics.ConfigReloads.WithLabelValues(outcome)); got != 0 {
+			t.Errorf("clickhouse_ruler_config_reloads_total{outcome=%q} = %v at startup, want 0", outcome, got)
+		}
+	}
+
+	writeRuleFile(t, dir, "latency.yaml", unreadableRule)
+	if err := r.reload(context.Background()); err == nil {
+		t.Fatal("reload returned no error, want the refusal")
+	}
+
+	writeRuleFile(t, dir, "latency.yaml", bareRule)
+	if err := r.reload(context.Background()); err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+
+	// The pair the metric exists for: the gauge is back to 1 and says nothing
+	// about the refusal, and the counter still holds it.
+	if got := testutil.ToFloat64(r.metrics.ConfigLastReloadSuccessful); got != 1 {
+		t.Errorf("clickhouse_ruler_config_last_reload_successful = %v, want 1 after the retry", got)
+	}
+	if got := testutil.ToFloat64(r.metrics.ConfigReloads.WithLabelValues("refused")); got != 1 {
+		t.Errorf("clickhouse_ruler_config_reloads_total{outcome=\"refused\"} = %v, want 1", got)
+	}
+	if got := testutil.ToFloat64(r.metrics.ConfigReloads.WithLabelValues("succeeded")); got != 1 {
+		t.Errorf("clickhouse_ruler_config_reloads_total{outcome=\"succeeded\"} = %v, want 1", got)
 	}
 }
 
@@ -252,6 +293,9 @@ func TestReloadLoadsARuleWhoseFindingOnlyBlocksAMerge(t *testing.T) {
 	}
 	if got := testutil.ToFloat64(r.metrics.ConfigLastReloadSuccessful); got != 1 {
 		t.Errorf("clickhouse_ruler_config_last_reload_successful = %v, want 1", got)
+	}
+	if got := testutil.ToFloat64(r.metrics.ConfigReloads.WithLabelValues("succeeded")); got != 1 {
+		t.Errorf("clickhouse_ruler_config_reloads_total{outcome=\"succeeded\"} = %v, want 1", got)
 	}
 }
 
