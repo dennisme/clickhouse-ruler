@@ -43,7 +43,9 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # Packaged outside dist/, which `release --clean` empties, so this does
+      # Packaged outside the checkout, because goreleaser refuses to release
+      # from a dirty tree and a chart written beside the source is an untracked
+      # file. Outside dist/ too, which `release --clean` empties, so this does
       # not depend on running after goreleaser.
       #
       # The tag is both version and appVersion, so a chart pulled at a version
@@ -53,11 +55,11 @@ jobs:
         run: |
           set -euo pipefail
           version="${GITHUB_REF_NAME#v}"
-          mkdir -p .chart-release
+          mkdir -p "$RUNNER_TEMP/chart-release"
           helm package deploy/chart/clickhouse-ruler \
             --version "$version" \
             --app-version "$version" \
-            --destination .chart-release
+            --destination "$RUNNER_TEMP/chart-release"
 
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v6
@@ -73,7 +75,7 @@ jobs:
         run: |
           set -euo pipefail
           version="${GITHUB_REF_NAME#v}"
-          chart=".chart-release/clickhouse-ruler-${version}.tgz"
+          chart="$RUNNER_TEMP/chart-release/clickhouse-ruler-${version}.tgz"
           test -f "$chart"
           echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io \
             --username "${{ github.actor }}" --password-stdin
