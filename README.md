@@ -215,15 +215,16 @@ job. The rest of the non-goals are in [spec 5](spec.md#5-non-goals).
 
 Limits to know about, accepted rather than waiting on work:
 
-- **Rules have been written and proven against traces.** Every rule in the
-  tree, every example in the docs and every assertion in the tests reads a
-  traces table. The dev stack now carries the OTel exporter's metrics `sum` and
-  `gauge` tables, and a test proves the chain over them: data points posted as
-  OTLP, written by the collector, read back by a rule as a user whose grant is
-  those two tables. What is not here yet is how to write such a rule correctly.
-  A cumulative counter read as a plain value gives an alert that fires forever
-  once the counter passes the threshold and goes quiet at every restart, and
-  nothing in the docs says so.
+- **Rules over metrics tables are documented and proven, and nothing checks
+  them.** The dev stack carries the OTel exporter's metrics `sum` and `gauge`
+  tables, and the tests read what the collector wrote into them: a cumulative
+  counter compared against a threshold keeps firing long after the condition
+  passed and goes quiet at a restart, and the per-series delta beside it fires
+  and then stops. [Rules over metrics
+  tables](https://dennisme.github.io/clickhouse-ruler/metrics/) has both correct
+  shapes, the wrong one, the two columns that decide which is which, and the
+  window a delta needs. What no check does is notice the wrong one in a pull
+  request, which is spec 12.1.
 
 - A restart loses pending alert state, and that is the answer rather than a
   gap. `ActiveAt` is held in memory, so every alert part way through its `for`

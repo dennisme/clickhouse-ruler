@@ -44,6 +44,7 @@ markdown_extensions:
 nav:
   - Home: index.md
   - How it works: how-it-works.md
+  - Rules over metrics tables: metrics.md
   - Install: install.md
   - Checking a pull request: pull-requests.md
   - Running it:
