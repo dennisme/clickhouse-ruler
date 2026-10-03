@@ -187,6 +187,14 @@ overlap. Setting it shorter than the interval is a warning: the query still
 runs, but the gap between one window and the next is never examined by any
 evaluation.
 
+**Metrics tables are in scope, and they read differently.** Every example on
+this page queries a traces table, where a row is an event. The collector's
+ClickHouse exporter writes metrics into tables of their own, where a row is a
+reading on a series and a counter's `Value` is usually a running total rather
+than something to compare against a threshold. A rule that reads one the way it
+would read a traces table fires forever and goes quiet at a restart, so the
+idioms have a page of their own: [rules over metrics tables](metrics.md).
+
 **The query is checked, not just the file.** A rule is SQL, and SQL is where
 the interesting failures live: a missing time bound that scans without limit,
 a renamed OTel attribute that makes an alert silently stop firing, a table

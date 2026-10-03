@@ -186,8 +186,41 @@ That is the property we are copying. Everything else follows from it.
 
 ## 12. Open questions
 
-1. **Metrics tables.** The `pint` `promql/rate` and `promql/counter` checks have
-   a loose analog for counter columns in OTel metrics tables. Worth it, or skip?
+1. **Metrics tables.** Answered on both halves, and still open on the one that
+   decides it.
+
+   `pint`'s `promql/rate` and `promql/counter` need to know whether a metric is a
+   counter, and nothing in a PromQL expression says so, so `pint` asks a
+   Prometheus server through its metadata API and the answer is as good as what
+   that server currently holds: a metric nothing is scraping right now has no
+   type, and two exporters disagreeing about one leave the check guessing. Here
+   the same fact is a column. `AggregationTemporality` says whether `Value` is a
+   total or an increment and `IsMonotonic` says whether the series only climbs,
+   both on every row of `otel_metrics_sum`, so a check could read the type out of
+   the table a rule already names, at tier 1, with no second service to ask. That
+   makes the analog cheaper and more exact than the thing it is an analog of,
+   which is the opposite of what this entry assumed when it called it loose.
+
+   What was missing was never the check. It was a table to prove one against: no
+   rule in the tree, no example in the docs and no assertion in the tests read a
+   metrics table, so the mistake the check would catch had never been made
+   anywhere it could be observed. That is fixed. Two integration tests read what
+   the collector wrote into `otel_metrics_sum` and show a threshold on a
+   cumulative counter firing long after the condition passed and going quiet at a
+   restart, with the per-series delta beside it firing and then stopping, and the
+   site has the idioms as SQL somebody can paste (14).
+
+   **It stays open, pending evidence that the mistake is common.** Being able to
+   reproduce a bug is not the same as knowing anybody writes it, and this project
+   has one estate of rules to look at: its own. A check costs a name in the table,
+   a page, a severity and a policy key forever (7.8), so the question now is a
+   count rather than a design.
+
+   When it is built it is a warning rather than an error, because the heuristic
+   has legitimate exceptions. A rule asking whether a counter was ever nonzero,
+   or whether a process has restarted by reading the total dropping, reads
+   `Value` raw and means to. `error` on a check with real exceptions is how a
+   contributor learns to reach for an exemption, and 7.6 rations that.
 2. **Ownership at scale.** Deferred, not solved. Operating a ruler that
    thousands of engineers page off means high availability, missed evaluation
    handling, clock skew, ClickHouse restarts mid window, and backfill after an
