@@ -40,6 +40,29 @@ query is costs a parse, while sampling runs statements against the source's
 data. The sample is bounded by `max-sample-rows` and reads as the source's own
 user, so row policies apply to it.
 
+## Checking one file
+
+Paths after the rules directory narrow what is reported:
+
+```bash
+ruler check --sources rules/sources.yaml rules/ rules/payments/latency.yaml
+ruler check --sources rules/sources.yaml rules/ rules/payments/
+```
+
+The rules directory is still required, and the whole tree is still read. That
+is the point: the severity a finding carries comes from the `ruler.yaml` beside
+the root and the team files above the rule, and a duplicate alert name is a
+fact about the tree. Naming a subdirectory as the root instead reads a
+different policy and misses those collisions, so a check can pass at your desk
+and block in CI.
+
+A path naming no rule file the loader read is an error, including the sources
+file and a policy file, whose findings belong to the tree rather than to a
+path. A run that quietly reported nothing would look exactly like a clean one.
+
+Paths combine with `--changed-since`: asking for both reports the changed files
+among the paths named.
+
 ## What a check exits with
 
 | Code | What it means |

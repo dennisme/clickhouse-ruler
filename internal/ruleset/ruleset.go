@@ -101,6 +101,12 @@ type Set struct {
 	// whether two replicas are evaluating the same rules (spec 8.2).
 	Revision string
 
+	// Files is every rule file the walk found, resolved the way Dir is, and
+	// including the ones that held nothing readable. It is what a path on the
+	// command line is matched against, so that naming a path the walk never
+	// read is an error rather than a run that reports nothing (spec 10.3).
+	Files []string
+
 	Rules []Rule
 }
 
@@ -137,6 +143,7 @@ func Load(dir string, sources *source.File, root *policy.Policy) (*Set, []lint.P
 	}
 
 	set.Dir = tree
+	set.Files = files
 	l := &loader{dir: tree, sources: sources, root: root, files: sha256.New()}
 	problems = append(problems, l.readTeamPolicies(policies)...)
 

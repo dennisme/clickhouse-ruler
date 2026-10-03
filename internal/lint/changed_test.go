@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -201,5 +202,103 @@ func TestChangedSinceIncludesUntrackedFiles(t *testing.T) {
 	}
 	if kept["rules/search/latency.yaml"] {
 		t.Errorf("an untouched rule is not: %v", kept)
+	}
+}
+
+func TestPathsMatchesFilesAndSubtrees(t *testing.T) {
+	dir := t.TempDir()
+	payments := writeRule(t, dir, "payments", "latency.yaml")
+	search := writeRule(t, dir, "search", "latency.yaml")
+	errors := writeRule(t, dir, "search", "errors.yaml")
+	files := []string{payments, search, errors}
+
+	problems := []Problem{
+		{File: payments, Check: "rule/expr"},
+		{File: search, Check: "rule/expr"},
+		{File: errors, Check: "rule/expr"},
+	}
+
+	tests := []struct {
+		name string
+		args []string
+		want []string
+	}{
+		{"one file", []string{search}, []string{search}},
+		{"a subtree", []string{filepath.Join(dir, "search")}, []string{search, errors}},
+		{"two paths", []string{payments, errors}, []string{payments, errors}},
+		{"the root", []string{dir}, []string{payments, search, errors}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			filter, err := Paths(files, tc.args)
+			if err != nil {
+				t.Fatalf("Paths: %v", err)
+			}
+
+			kept := map[string]bool{}
+			for _, p := range filter.Keep(problems) {
+				kept[p.File] = true
+			}
+			if len(kept) != len(tc.want) {
+				t.Fatalf("kept %v, want %v", kept, tc.want)
+			}
+			for _, path := range tc.want {
+				if !kept[path] {
+					t.Errorf("%s was dropped, kept %v", path, kept)
+				}
+			}
+		})
+	}
+}
+
+// writeRule puts a file where the loader would have walked one, so that a
+// path and a file resolve the same way: a temporary directory on macOS is
+// reached through a symlink, and a path that does not exist cannot resolve it.
+func writeRule(t *testing.T, dir, team, name string) string {
+	t.Helper()
+
+	if err := os.MkdirAll(filepath.Join(dir, team), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, team, name)
+	if err := os.WriteFile(path, []byte("groups: []\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// A path matching nothing the loader read can only report nothing, which is
+// indistinguishable from a clean run, so it is an error rather than a silent
+// narrowing (spec 10.3).
+func TestPathsRefusesWhatTheLoaderNeverRead(t *testing.T) {
+	dir := t.TempDir()
+	files := []string{writeRule(t, dir, "payments", "latency.yaml")}
+
+	for _, arg := range []string{
+		filepath.Join(dir, "payments", "typo.yaml"),
+		filepath.Join(dir, "search"),
+		filepath.Join(dir, "sources.yaml"),
+		filepath.Join(dir, "..", "elsewhere"),
+	} {
+		if _, err := Paths(files, []string{arg}); err == nil {
+			t.Errorf("Paths(%q) = nil error, want one", arg)
+		} else if !strings.Contains(err.Error(), arg) {
+			t.Errorf("error should name the path, got: %v", err)
+		}
+	}
+}
+
+// No paths is the zero filter, which keeps everything: that is what the
+// loader reads at startup (spec 10.3).
+func TestPathsWithNoArgumentsKeepsEverything(t *testing.T) {
+	problems := []Problem{{File: "rules/payments/latency.yaml", Check: "rule/expr"}}
+
+	filter, err := Paths(nil, nil)
+	if err != nil {
+		t.Fatalf("Paths: %v", err)
+	}
+	if got := filter.Keep(problems); len(got) != 1 {
+		t.Errorf("kept %d problems, want 1", len(got))
 	}
 }

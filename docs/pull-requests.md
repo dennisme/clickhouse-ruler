@@ -122,6 +122,12 @@ Two cases widen it back to everything, and both say so on stderr:
 It is not a CI-only feature. `ruler check --changed-since origin/main ./rules/`
 answers the same question before anything is pushed.
 
+A desk often asks a different question, which is one rule rather than every
+rule a branch touched. Paths after the rules directory answer that one:
+`ruler check ./rules/ rules/payments/latency.yaml`. Asking for both reports the
+changed files among the paths named. See
+[Checking one file](running.md#checking-one-file).
+
 ## The online checks, and forks
 
 `online: true` adds the checks that need a connection, which read metadata and
