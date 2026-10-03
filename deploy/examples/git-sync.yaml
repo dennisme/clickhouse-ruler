@@ -13,7 +13,8 @@
 # the period below that is under a minute. Nothing watches the filesystem: the
 # hook is what asks, and the symlink flip is what makes the tree safe to read.
 
-alertmanagerURL: http://alertmanager.monitoring:9093
+alertmanagerURLs:
+  - http://alertmanager.monitoring:9093
 
 rules:
   delivery: git-sync

@@ -19,7 +19,8 @@
 # the files in place, which is why the update is atomic and why the ruler reads
 # such a directory exactly once.
 
-alertmanagerURL: http://alertmanager.monitoring:9093
+alertmanagerURLs:
+  - http://alertmanager.monitoring:9093
 
 rules:
   delivery: configMap

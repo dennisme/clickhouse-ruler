@@ -151,6 +151,21 @@ alerts are still tracked and are re-posted on the resend interval, so a brief
 failure recovers on its own. A sustained one means alerts that have fired are
 not reaching anybody, and the ruler cannot tell you that any other way.
 
+**Read it by its label, because it is per endpoint.** Every batch is posted to
+every `--alertmanager`, so one member of the cluster refusing batches raises this
+against that member's label alone while delivery keeps working: one endpoint
+accepting is enough, and gossip carries the alert to the rest. One label above
+zero is a member to repair at warning severity. Nothing getting through anywhere
+is the page, and it reads as failures with no deliveries beside them:
+
+```promql
+sum(rate(clickhouse_ruler_alerts_send_failures_total[5m])) > 0
+  and sum(rate(clickhouse_ruler_alerts_sent_total[5m])) == 0
+```
+
+[The send queue filling](#the-send-queue-filling) is the same outage seen from
+the other side, and it moves whether or not the labels say which member.
+
 Check Alertmanager first: the ruler's state machine is unaffected by a
 delivery failure.
 
@@ -161,10 +176,11 @@ clickhouse_ruler_alertmanager_last_probe_successful == 0
 ```
 
 **Trouble after a few minutes, and the only signal that works before anything
-has fired.** The ruler probes the address in `--alertmanager` every 30 seconds,
-asking Alertmanager's own `/-/ready`, and this is 1 when it answered and 0 when
-it did not. Give it two or three probes before paging on it, so a single
-restarting Alertmanager is not a page:
+has fired.** The ruler probes every address in `--alertmanager` every 30
+seconds, each on its own timer, asking Alertmanager's own `/-/ready`, and this is
+1 when that member answered and 0 when it did not. One series per endpoint, so
+the label says which member. Give it two or three probes before paging on it, so
+a single restarting Alertmanager is not a page:
 
 ```promql
 min_over_time(clickhouse_ruler_alertmanager_last_probe_successful[5m]) == 0
@@ -188,10 +204,21 @@ Alertmanager expires alerts that are still firing. Send failures and this gauge
 go to zero and non-zero together in that case, which is how you tell it from the
 wrong address above.
 
+**One member at zero is not an outage.** Every batch goes to every member, so a
+cluster with one member down is still delivering, and the page is for every
+series being zero at once:
+
+```promql
+max(min_over_time(clickhouse_ruler_alertmanager_last_probe_successful[5m])) == 0
+```
+
+A single member at zero is worth a warning and a repair, not a page. It is also
+what a rolling restart of Alertmanager looks like, one member at a time.
+
 **It is not in `/-/ready` and it will not refuse to start**, which is
-deliberate. One Alertmanager serves every replica of the ruler, so a readiness
-term would take a whole deployment unready at once and stop any rollout in
-progress, and a startup refusal would mean an Alertmanager down for ten minutes
+deliberate. One Alertmanager cluster serves every replica of the ruler, so a
+readiness term would take a whole deployment unready at once and stop any rollout
+in progress, and a startup refusal would mean an Alertmanager down for ten minutes
 is a ruler that cannot be restarted for ten minutes. A malformed URL is the
 opposite case and does refuse to start, because no network is needed to know
 that and no send against it could ever succeed. On a dashboard this is
@@ -208,7 +235,10 @@ latency here does not become evaluation duration: it becomes depth on
 [the send queue](#the-send-queue-filling), and alerts that reach Alertmanager
 later than they were evaluated.
 
-This measures sends Alertmanager accepted, and nothing else. A send that failed
+This measures deliveries Alertmanager accepted, and nothing else. It carries no
+`alertmanager` label because it times the whole fan-out: a batch is posted to
+every endpoint at once, so this is how long the slowest of them took to answer,
+which is when the page is out. A delivery that failed
 took as long as the retry policy says it takes, four attempts plus backoff, so
 counting it here would put your own `--resend-tolerance` arithmetic into a
 latency threshold and fire this alert for a delivery outage that
@@ -248,7 +278,9 @@ histogram_quantile(0.99, sum by (le) (
 Read both against [send failures](#send-failures) and
 [notification latency](#notification-latency), which say why. Failures above
 zero is Alertmanager unreachable, and each batch spends the whole retry ladder,
-about forty seconds, before the worker moves to the next one. Failures at zero
+about forty seconds, before the worker moves to the next one. That is one ladder
+however many endpoints are configured, because a batch is posted to all of them
+at once. Failures at zero
 with latency high is Alertmanager accepting slowly. Failures and latency both
 healthy with the queue still filling is a ruler producing alerts faster than one
 worker can post them, which is a rules repository that grew rather than a
@@ -845,7 +877,7 @@ about what they typed.
 | info | `rule matched no source` | Nothing, usually. One line per rule this ruler loaded and will never evaluate, with `rule`, `file` and `team`. Normal on a ruler per datacenter reading a shared repository. This is how you get from `clickhouse_ruler_rules_unmatched` to the rule names. |
 | info | `shutting down` | Nothing. Carries the `timeout` an in-flight evaluation is being given. |
 | error | `rule evaluation failed against a source` | Read `source` and `error`: this is the database's own reply, with credentials removed. A timeout or memory cap means the rule is too expensive, and the `system.query_log` queries below say by how much. The rule's alert state is untouched, so its `for` timer survives and the next evaluation continues from where the last successful one left off. |
-| error | `sending alerts to alertmanager failed` | Check Alertmanager. The alerts were evaluated and their state has advanced; only delivery failed, and they are re-posted on the resend interval. Written by the worker that posts, not by the evaluation, which returned before the send was attempted: `rule_group` and `rule` travel with the alerts so this line still names whose page did not go out. Repeated failures past `--resend-tolerance` periods let Alertmanager expire an alert that is still firing. |
+| error | `sending alerts to alertmanager failed` | Check Alertmanager. Written only when no endpoint accepted the batch, and `error` names every endpoint that refused it with its own reason, so a cluster with one member down writes nothing here. The alerts were evaluated and their state has advanced; only delivery failed, and they are re-posted on the resend interval. Written by the worker that posts, not by the evaluation, which returned before the send was attempted: `rule_group` and `rule` travel with the alerts so this line still names whose page did not go out. Repeated failures past `--resend-tolerance` periods let Alertmanager expire an alert that is still firing. |
 | warn | `the alertmanager did not answer its probe` | Read `error`: it says whether the host does not resolve, the port refuses, or Alertmanager answered and is not ready. Written once when it stops answering and not on every probe, so the line dates the outage; `clickhouse_ruler_alertmanager_last_probe_successful` is whether it is answering now. Nothing about the ruler is failing, and nothing is dropped until `--resend-tolerance` periods pass. |
 | info | `the alertmanager answered its probe again` | Nothing. The pair to the line above, so a probe outage has a start and an end in the log. |
 | error | `metrics listener stopped` | The HTTP surface is gone, so metrics and probes are unanswered while the evaluation loop carries on. Usually the `listen` address is already taken. Restart it. |

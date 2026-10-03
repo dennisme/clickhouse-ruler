@@ -47,7 +47,11 @@ func runRun(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	rulesDir := fs.String("rules", "", "path to the rules directory (required)")
 	sourcesPath := fs.String("sources", "sources.yaml", "path to the sources file")
 	configPath := fs.String("config", "", "path to a policy file, defaults to ruler.yaml beside the rules directory if present")
-	alertmanagerURL := fs.String("alertmanager", "", "Alertmanager URL, e.g. http://localhost:9093 (required)")
+	var alertmanagerURLs alertmanagerFlag
+	fs.Var(&alertmanagerURLs, "alertmanager",
+		"Alertmanager URL, e.g. http://localhost:9093 (required). Repeat it once per member of the cluster: "+
+			"every alert is posted to every member, which is what Alertmanager's own documentation asks for, "+
+			"and a balancer in front of them is not")
 	listen := fs.String("listen", ":9090", "address for the /metrics, /-/healthy and /-/ready HTTP surface")
 	queryConcurrency := fs.Int("query-concurrency", scheduler.DefaultQueryConcurrency,
 		"how many rule queries may run against ClickHouse at once, across every group; 0 means unbounded")
@@ -72,8 +76,8 @@ func runRun(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
 	}
-	if *rulesDir == "" || *alertmanagerURL == "" {
-		printf(stderr, "%s\n", "usage: ruler run --rules <dir> --alertmanager <url> [flags]")
+	if *rulesDir == "" || len(alertmanagerURLs) == 0 {
+		printf(stderr, "%s\n", "usage: ruler run --rules <dir> --alertmanager <url> [--alertmanager <url> ...] [flags]")
 		return exitUsage
 	}
 	// A non-positive interval makes every firing alert due on every
@@ -102,7 +106,7 @@ func runRun(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	// Parsing needs no network and the answer cannot change while the ruler
 	// runs, so a URL no send could ever succeed against is refused here rather
 	// than failing inside net/http at the first page (spec 8.1).
-	alertmanager, err := parseAlertmanagerURL(*alertmanagerURL)
+	alertmanagers, err := parseAlertmanagerURLs(alertmanagerURLs)
 	if err != nil {
 		printf(stderr, "%s\n", err)
 		return exitUsage
@@ -130,12 +134,12 @@ func runRun(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		// from these two, so they travel as the pair they are (spec 6.5).
 		resend: scheduler.Resend{Interval: *resendInterval, Tolerance: *resendTolerance},
 	}
-	// The redacted spelling is what labels a series and names an Alertmanager
-	// in a log line, because a URL may carry userinfo and a label is scraped,
-	// stored and put on a dashboard (spec 8.4).
-	alertmanagerClient := notify.NewClient(*alertmanagerURL)
-	cadence := scheduler.NewCadence(alertmanagerClient, alertmanager.Redacted(),
-		rn.resend, rn.metrics, rn.clock)
+	// Every alert is posted to every endpoint, because Alertmanager members
+	// gossip and deduplicate, so a sender posting to all of them gets resilience
+	// out of deduplication the cluster already has where a balancer picks one
+	// member and hides a partition (spec 6.5).
+	endpoints := alertmanagerEndpoints(alertmanagers)
+	cadence := scheduler.NewCadence(sendEndpoints(endpoints), rn.resend, rn.metrics, rn.clock)
 	// Delivery is one goroutine behind a bounded queue, so an Alertmanager
 	// outage fills the queue instead of holding a group's evaluation past its
 	// interval (spec 6.5). The queue outlives every reload, as the cadence
@@ -202,20 +206,15 @@ func runRun(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	}()
 
 	// Where alerts go is neither a readiness term nor a startup refusal, so
-	// this is the only thing that says the address in --alertmanager answers
-	// at all before something fires (spec 8.1).
-	probe := &alertmanagerProbe{
-		client:   alertmanagerClient,
-		url:      alertmanager.Redacted(),
-		metrics:  rn.metrics,
-		log:      log,
-		interval: probeInterval,
-		timeout:  probeTimeout,
+	// these are the only thing that says the addresses in --alertmanager answer
+	// at all before something fires, one gauge series per endpoint (spec 8.1).
+	for _, probe := range newAlertmanagerProbes(endpoints, rn.metrics, log) {
+		go probe.run(ctx)
 	}
-	go probe.run(ctx)
 
 	rn.sched.Start(ctx)
-	log.Info("ruler running", "rules", len(cfg.set.Rules), "listen", *listen)
+	log.Info("ruler running", "rules", len(cfg.set.Rules), "listen", *listen,
+		"alertmanagers", len(endpoints))
 
 	for running := true; running; {
 		select {

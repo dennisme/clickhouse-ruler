@@ -175,7 +175,8 @@ re-read them.
 Three things have no default, so `my-values.yaml` is at least this:
 
 ```yaml
-alertmanagerURL: http://alertmanager.monitoring:9093
+alertmanagerURLs:
+  - http://alertmanager.monitoring:9093
 
 rules:
   gitSync:
@@ -192,6 +193,10 @@ sources:
     table: otel_traces
     timestamp_column: Timestamp
 ```
+
+`alertmanagerURLs` is a list because every alert is posted to every entry: one
+entry per member of one Alertmanager cluster, and no balancer in front of them.
+[Running it](running.md) is why.
 
 The password is the one field that is not a value: create the Secret it names
 first, and nothing in the file you are reviewing holds a credential.

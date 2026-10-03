@@ -4,7 +4,9 @@ Every flag the binary takes, and everything it exposes once it is up.
 
 ```bash
 ruler run --rules ./rules --sources ./rules/sources.yaml \
-  --alertmanager http://localhost:9093
+  --alertmanager http://alertmanager-0:9093 \
+  --alertmanager http://alertmanager-1:9093 \
+  --alertmanager http://alertmanager-2:9093
 ```
 
 A file that is not valid YAML refuses to start, and so does a rules directory
@@ -13,6 +15,20 @@ raising `clickhouse_ruler_problem` for anything that should have blocked the
 merge, because a ruler that will not start pages nobody. A source failing the
 user contract at error severity is refused on its own: its rules stop
 evaluating and every other source carries on.
+
+**`--alertmanager` is repeated once per member of one Alertmanager cluster, and
+there is no balancer in front of it.** Members gossip and deduplicate identical
+alerts, so every alert is posted to every member and the cluster's own
+deduplication is what makes that safe. A balancer collapses it: it picks one
+member, and a member partitioned from its peers accepts a page no other member
+ever learns about, with nothing on either side reporting it because the POST
+succeeded. Alertmanager's own documentation asks for the list rather than the
+balancer, and this is the list.
+
+**The list is one cluster, not two destinations.** Two unrelated Alertmanagers
+given here are not two routes for the same alert: a send is delivered as soon as
+one of them accepts it, so while the other is down its pages are silently not
+re-tried. Two clusters that must both receive everything are two rulers.
 
 `ruler check` stays offline unless it is asked not to. `--online` runs the
 checks that need a connection, connecting as each source's own user, because
@@ -123,7 +139,7 @@ cluster and post nothing.
 | Flag | Default | What it does |
 | --- | --- | --- |
 | `--rules` | required | rules directory |
-| `--alertmanager` | required | Alertmanager base URL. Refused at startup unless it is an `http://` or `https://` URL with a host, because `localhost:9093` with no scheme fails inside `net/http` at the first send instead |
+| `--alertmanager` | required | Alertmanager base URL, repeated once per member of the cluster. Every value is refused at startup unless it is an `http://` or `https://` URL with a host, because `localhost:9093` with no scheme fails inside `net/http` at the first send instead, and the same address twice is refused too: it is one series on every `alertmanager`-labelled metric, so a failure counter would report two endpoints as one |
 | `--sources` | `sources.yaml` | sources file |
 | `--config` | `ruler.yaml` beside `--rules` | policy file |
 | `--listen` | `:9090` | address for `/metrics`, `/-/healthy`, `/-/ready`, and `/-/reload` when it is enabled |
@@ -194,10 +210,19 @@ count per, and it is what makes the failure ratio in
 rule whose four clusters all failed read 4.0. A single-source ruler reads the
 same number either way.
 
-`clickhouse_ruler_notification_latency_seconds` holds sends Alertmanager
-accepted. A send that failed took as long as `--resend-tolerance` and the retry
-backoff say, which is the ruler's own configuration rather than anything
-Alertmanager did, so it is counted by
+The two send counters are per endpoint, which is what `alertmanager` labels:
+`clickhouse_ruler_alerts_sent_total` is what each member took, and
+`clickhouse_ruler_alerts_send_failures_total` is the batches it refused. A
+cluster with one member down reads as failures against that one label while the
+others keep counting deliveries, and delivery as a whole is still working,
+because one member accepting is enough and gossip carries the alert to the rest.
+
+`clickhouse_ruler_notification_latency_seconds` holds deliveries Alertmanager
+accepted, and it carries no `alertmanager` label because it times the whole
+fan-out: a batch is posted to every endpoint at once, and a page is out once the
+slowest of them has it. A delivery that failed took as long as
+`--resend-tolerance` and the retry backoff say, which is the ruler's own
+configuration rather than anything Alertmanager did, so it is counted by
 `clickhouse_ruler_alerts_send_failures_total` and left out of here. Batches
 attempted is this histogram's count plus that counter.
 
@@ -241,7 +266,9 @@ series that exists before anything fires. The two send counters are labelled
 means a ruler pointed at a host that does not resolve has nothing to alert on
 until the first page it fails to deliver. This gauge is filled by a probe of
 Alertmanager's own `/-/ready` every 30 seconds, 1 when it answered and 0 when it
-did not, so a wrong address is visible from startup. The probe sends no alert
+did not, so a wrong address is visible from startup. Each endpoint is probed on
+its own timer and reports its own series, so a cluster with one member down says
+which member, and one member that hangs delays nobody else's reading. The probe sends no alert
 and touches no alert state, and it is deliberately not part of `/-/ready` here:
 one Alertmanager serves every replica, so a readiness term would take a whole
 deployment unready during a rolling restart of it.

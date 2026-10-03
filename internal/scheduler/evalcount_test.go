@@ -111,9 +111,8 @@ func TestASourceWithNoQuerierIsAFailedEvaluationOfThatSource(t *testing.T) {
 // makes the latency alert fire for a cause its own text denies (spec 8.2).
 func TestNotificationLatencyExcludesAFailedSend(t *testing.T) {
 	metrics := NewMetrics(prometheus.NewRegistry())
-	const am = "http://127.0.0.1:9093"
-	s := &instrumentedSender{inner: &recordingSender{err: errors.New("unreachable")},
-		alertmanager: am, metrics: metrics, clock: newFakeClock(time.Unix(0, 0))}
+	s := &timedSender{inner: &recordingSender{err: errors.New("unreachable")},
+		metrics: metrics, clock: newFakeClock(time.Unix(0, 0))}
 
 	if err := s.Send(context.Background(), threeAlerts()); err == nil {
 		t.Fatal("want the sender's error back")
@@ -127,9 +126,7 @@ func TestNotificationLatencyExcludesAFailedSend(t *testing.T) {
 // A send that worked is the population the threshold is read against.
 func TestNotificationLatencyCountsASuccessfulSend(t *testing.T) {
 	metrics := NewMetrics(prometheus.NewRegistry())
-	const am = "http://127.0.0.1:9093"
-	s := &instrumentedSender{inner: &recordingSender{}, alertmanager: am,
-		metrics: metrics, clock: newFakeClock(time.Unix(0, 0))}
+	s := &timedSender{inner: &recordingSender{}, metrics: metrics, clock: newFakeClock(time.Unix(0, 0))}
 
 	if err := s.Send(context.Background(), []alert.Alert{{Fingerprint: 1}}); err != nil {
 		t.Fatalf("Send: %v", err)

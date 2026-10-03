@@ -278,3 +278,85 @@ func TestAlertmanagerProbeAsksTheConfiguredURL(t *testing.T) {
 		t.Errorf("gauge = %v, want 1", got)
 	}
 }
+
+// Every value of a repeated flag goes through the same parsing, because the
+// second address being a typo is no less silent than the first one being one.
+func TestParseAlertmanagerURLsChecksEveryValue(t *testing.T) {
+	urls, err := parseAlertmanagerURLs([]string{"http://am-1:9093", "https://am-2:9093/alerts"})
+	if err != nil {
+		t.Fatalf("parseAlertmanagerURLs: %v", err)
+	}
+	if len(urls) != 2 {
+		t.Fatalf("got %d URLs, want 2", len(urls))
+	}
+
+	if _, err := parseAlertmanagerURLs([]string{"http://am-1:9093", "am-2:9093"}); err == nil {
+		t.Error("parseAlertmanagerURLs accepted a malformed second value, want a refusal")
+	}
+}
+
+// The same address twice is one series on everything labelled `alertmanager`,
+// so a failure counter would count two endpoints as one. Deduplicating quietly
+// leaves the flag list describing something the ruler is not doing (spec 6.5).
+func TestParseAlertmanagerURLsRefusesADuplicate(t *testing.T) {
+	_, err := parseAlertmanagerURLs([]string{"http://am-1:9093", "http://am-1:9093/"})
+	if err == nil {
+		t.Fatal("parseAlertmanagerURLs accepted the same address twice, want a refusal")
+	}
+	for _, want := range []string{"--alertmanager", "am-1:9093"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not mention %q", err, want)
+		}
+	}
+}
+
+func TestRunRejectsADuplicateAlertmanagerURL(t *testing.T) {
+	dir := fixture(t, bareRule, "")
+
+	code, stderr := runRunCmd(t, "run",
+		"--rules", filepath.Join(dir, "rules"),
+		"--sources", filepath.Join(dir, "sources.yaml"),
+		"--alertmanager", "http://localhost:9093",
+		"--alertmanager", "http://localhost:9093")
+
+	if code != exitUsage {
+		t.Errorf("exit = %d, want exitUsage\n%s", code, stderr)
+	}
+	if !strings.Contains(stderr, "--alertmanager") {
+		t.Errorf("expected the reason on stderr, got:\n%s", stderr)
+	}
+}
+
+// One probe per endpoint and one series per endpoint, so a cluster with one
+// member down says which member (spec 6.5, 8.2).
+func TestEveryAlertmanagerReportsItsOwnProbeGauge(t *testing.T) {
+	answering := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer answering.Close()
+	down := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer down.Close()
+
+	urls, err := parseAlertmanagerURLs([]string{answering.URL, down.URL})
+	if err != nil {
+		t.Fatalf("parseAlertmanagerURLs: %v", err)
+	}
+
+	metrics := scheduler.NewMetrics(prometheus.NewRegistry())
+	probes := newAlertmanagerProbes(alertmanagerEndpoints(urls), metrics, slog.New(slog.DiscardHandler))
+	if len(probes) != 2 {
+		t.Fatalf("got %d probes, want one per endpoint", len(probes))
+	}
+	for _, p := range probes {
+		p.probeOnce(context.Background(), true)
+	}
+
+	if got := testutil.ToFloat64(metrics.AlertmanagerLastProbeSuccessful.WithLabelValues(answering.URL)); got != 1 {
+		t.Errorf("gauge for the endpoint that answered = %v, want 1", got)
+	}
+	if got := testutil.ToFloat64(metrics.AlertmanagerLastProbeSuccessful.WithLabelValues(down.URL)); got != 0 {
+		t.Errorf("gauge for the endpoint that did not answer = %v, want 0", got)
+	}
+}

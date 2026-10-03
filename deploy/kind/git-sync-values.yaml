@@ -9,7 +9,8 @@ image:
   tag: cluster-test
   pullPolicy: Never
 
-alertmanagerURL: http://alertmanager:9093
+alertmanagerURLs:
+  - http://alertmanager:9093
 
 # --enable-reload-endpoint is not a value: the chart always passes it, because
 # the only thing that reloads a git-sync delivery is the hook and a hook cannot

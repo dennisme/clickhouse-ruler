@@ -106,16 +106,22 @@ jobs:
             fi
           }
           one_source='sources=[{"name":"a","address":"h:9000","database":"d","username":"u","table":"t","timestamp_column":"ts"}]'
-          refuses "no alertmanagerURL" \
+          refuses "no alertmanagerURLs" \
             --set rules.gitSync.repo=https://example.com/rules --set-json "$one_source"
+          refuses "the same alertmanager twice" \
+            --values "$CHART"/ci/minimal-values.yaml \
+            --set-json 'alertmanagerURLs=["http://am:9093","http://am:9093"]'
+          refuses "an alertmanager that is not a URL" \
+            --values "$CHART"/ci/minimal-values.yaml \
+            --set-json 'alertmanagerURLs=["am:9093"]'
           refuses "git-sync with no repo" \
-            --set alertmanagerURL=http://am:9093 --set-json "$one_source"
+            --set-json 'alertmanagerURLs=["http://am:9093"]' --set-json "$one_source"
           refuses "configMap with no name" \
             --values "$CHART"/ci/minimal-values.yaml --set rules.delivery=configMap
           refuses "sources and sourcesSecret together" \
             --values "$CHART"/ci/git-sync-values.yaml --set sourcesSecret.name=whole
           refuses "no sources at all" \
-            --set alertmanagerURL=http://am:9093 --set rules.gitSync.repo=https://example.com/rules
+            --set-json 'alertmanagerURLs=["http://am:9093"]' --set rules.gitSync.repo=https://example.com/rules
           refuses "a password in a value" \
             --values "$CHART"/ci/minimal-values.yaml --set 'sources[0].password=hunter2'
           refuses "an unknown log level" \
