@@ -142,7 +142,10 @@ loses nothing at all.
 **The URL it was given is a different question, and that one is answered at
 startup.** Parsing a URL needs no network, so `--alertmanager localhost:9093`
 is refused the way an unparseable `--log-level` is: no scheme, a scheme that is
-not `http` or `https`, or no host, and the process exits 2 saying which. Left
+not `http` or `https`, or no host, and the process exits 2 saying which. The
+flag is repeated (6.5), so the same address given twice is refused there too,
+because two endpoints that are one endpoint are one series on everything
+labelled `alertmanager`. Left
 unparsed it is accepted, and the first `http.NewRequestWithContext` of the
 ruler's life fails on an unsupported scheme, which is the first page it was ever
 asked to deliver. A refusal at startup is read by the person who typed it; that
@@ -289,7 +292,12 @@ little: the failing population's shape is fixed by the retry policy, so it is a
 near-constant with two series and an extra matcher on every carried-over
 expression.
 `clickhouse_ruler_alerts_send_failures_total` counts a failed batch once however many
-alerts it held, because it delivered none of them.
+alerts it held, because it delivered none of them, and once per endpoint that
+failed, because an endpoint is what the label names.
+
+The histogram takes no `alertmanager` label of its own and times the fan-out to
+every endpoint rather than one post: it is a term in the lag budget in 8.8, and a
+page is out once the slowest endpoint it was posted to has it (6.5).
 
 **The four queue series are what a send off the evaluation goroutine made
 invisible.** A send is enqueued and drained by one worker, so an Alertmanager
@@ -297,8 +305,9 @@ outage shows up as a filling queue rather than as a group missing iterations,
 and nothing above would have said the queue was filling: depth, what it is
 depth out of, how long an alert waited in it, and what was dropped when it
 filled. They carry no `alertmanager` label although the two counters above do,
-because the queue is per ruler and there is one endpoint to be per; a list of
-endpoints is a queue per endpoint and the label arrives with it. The argument
+because the queue is per ruler and the fan-out to the endpoints happens under it:
+one queue, one worker, and one batch per evaluation however many endpoints that
+batch is posted to (6.5). The argument
 for the bound, for dropping the oldest, and for keeping queue wait out of
 `clickhouse_ruler_notification_latency_seconds` is in 6.5, and the buckets are
 the tick delay set from 8.8 for the reason given there.
@@ -329,15 +338,17 @@ a socket opens. No retry, because the next tick is the retry and a probe that
 retried would report a 25-second outage as healthy. No flag either: 30 seconds
 is a scrape interval, and nothing about a deployment makes this number theirs to
 choose. The probe never sends an alert and never touches the alert state, so a
-ruler whose Alertmanager is down has one failed request per 30 seconds and
-otherwise behaves exactly as it does today.
+ruler whose Alertmanager is down has one failed request per 30 seconds per
+endpoint and otherwise behaves exactly as it does with every endpoint
+answering.
 
 **No `prometheus_notifications_*` name carries over.** Prometheus has
 `prometheus_notifications_alertmanagers_discovered`, and discovery is not a
 probe: it counts the Alertmanagers service discovery handed it, none of which
 have been asked anything, and Prometheus learns nothing about any of them until
-it sends. This ruler is configured with exactly one URL by flag, so a count of
-them is a count of one and answers nothing. The rest of that family,
+it sends. This ruler is configured by a repeated flag, so a count of them is a count of
+what somebody typed and answers nothing about whether any of them answers, which
+is what the probe below is for, per endpoint. The rest of that family,
 `_sent_total`, `_errors_total` and `_queue_length`, are about deliveries that
 happened, which is the two counters above and the gap this fills. So the name is
 ours, and it takes the shape

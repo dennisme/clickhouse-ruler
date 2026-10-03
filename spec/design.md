@@ -1030,12 +1030,14 @@ which is 8.8's rule:
 | `clickhouse_ruler_notification_queue_wait_seconds` | histogram | none |
 
 No labels on any of them. The queue is per ruler and not per group: scheduling
-is per group (6.11) and delivery is one Alertmanager, so a depth per group is a
-number the ruler does not have. The names are
+is per group (6.11) and delivery is one worker, so a depth per group is a number
+the ruler does not have. The names are
 `prometheus_notifications_queue_length`, `_queue_capacity` and
 `prometheus_notifications_dropped_total` under our own prefix (8.2), minus the
-`alertmanager` label the Prometheus ones carry, because there is one endpoint.
-A list of endpoints is a queue per endpoint, and the label comes back with it.
+`alertmanager` label the Prometheus ones carry. A list of endpoints does not
+bring that label back, because the fan-out sits under the Cadence: there is
+still one queue holding one batch per evaluation, so a depth per endpoint is a
+number that does not exist either.
 
 The capacity ships as a series for the reason `clickhouse_ruler_query_concurrency`
 does (8.8): a depth of nine thousand says nothing without the number it is nine
@@ -1072,13 +1074,24 @@ send on that context was cut off at the cancel rather than finished by the
 wait. The worker's sends do not run on an evaluation's context, so the wait now
 means what it says.
 
-**When the list of Alertmanagers lands, this is what it lands on.** Fan-out
-multiplies the worst case by the number of endpoints, which is why the ordering
-below puts it behind this, and the shape it arrives in is a queue and a worker
-per endpoint with the `alertmanager` label back on all four series above.
+**Where the fan-out goes, which is not a queue per endpoint.** This section
+said the list arrives as a queue and a worker per endpoint with the
+`alertmanager` label back on all four series above. That cannot be built as
+written. `notify.Cadence` is one per ruler and holds what was last sent per
+fingerprint, so two workers both calling `Cadence.Send` is the first one
+recording the send and the second finding nothing due: one endpoint would get
+the alert, the other would get an empty batch, and which one depended on which
+worker got there first. Hoisting the Cadence above the workers trades that for
+something worse, a record written before either endpoint had been posted to.
 
-**One URL or a list of them.** Today `--alertmanager` takes one, and
-Alertmanager's own documentation says that is the wrong shape:
+So the fan-out goes below the Cadence, at the `Sender` interface the Cadence
+already sends through: one queue, one worker, one Cadence, and a Sender that
+posts to every endpoint. The four queue series above stay unlabelled. The two
+counters that already carry `alertmanager` are what gains series, which is what
+that label was reserved for.
+
+**A list rather than one URL,** because Alertmanager's own documentation says
+one address is the wrong shape:
 
 > It's important not to load balance traffic between Prometheus and its
 > Alertmanagers, but instead, point Prometheus to a list of all Alertmanagers.
@@ -1091,9 +1104,9 @@ member ever learns about. Nothing on either side reports it, because the POST
 succeeded.
 
 So a single URL does not merely lack high availability, it pushes an operator
-toward the one topology upstream warns against, and nothing in `docs/running.md`
-says a balancer is needed at all. Silence there reads as an endorsement of
-whatever the reader already built.
+toward the one topology upstream warns against. Saying nothing about a balancer
+in `docs/running.md` reads as an endorsement of whatever the reader already
+built, so that page says why there is none.
 
 **This does not reopen the source address decision, and the analogy that
 decision uses does not carry.** A source names one endpoint because a proxy in
@@ -1108,9 +1121,58 @@ fan-out to every member, which makes no balancing decisions at all, so the
 "balancer without health checks, weighting or draining" objection has nothing to
 attach to.
 
-**What it looks like when it lands.** A repeated `--alertmanager`, posted to
-concurrently, each endpoint keeping the retry policy above. A send is delivered
-when at least one endpoint accepted it, because gossip carries it to the rest.
+**What it looks like.** A repeated `--alertmanager`, every value parsed at
+startup, posted to concurrently, each endpoint keeping the retry policy above.
+
+**A send is delivered when at least one endpoint accepted it,** because gossip
+carries it to the rest, and `record` turns on that word: a delivered send marks
+the fingerprint as sent, so the alert is not due again until the resend interval
+has elapsed. What a partial failure costs is therefore the difference between
+the member that accepted gossiping the alert onwards and the ruler re-posting it
+one interval later, and closing that gap is what the cluster is for. Requiring
+every endpoint instead costs the thing a list is for: one member down means no
+send is ever recorded, so every firing alert is due on every evaluation of every
+group, at the traffic the resend interval exists to bound, against a cluster
+that already holds the alert. The per-endpoint failure counter is what says an
+endpoint stopped accepting; the record is about the alert, not about the
+endpoints.
+
+**Posted concurrently, because the worst case is one retry ladder and not N of
+them.** `Client.Send` holds the ladder per client, so endpoints posted to in
+sequence spend forty two seconds each against a cluster that is down, and three
+of them is two minutes of the one worker's attention while the queue behind it
+fills. Posted at once, a fan-out takes as long as its slowest endpoint, which is
+the single ladder it already took with one endpoint. The number of ways delivery
+can fail scales with the number of endpoints either way; how long it takes to
+fail does not have to.
+
+**`clickhouse_ruler_notification_latency_seconds` takes no `alertmanager` label
+and times the whole fan-out,** from the batch being handed over to the last
+endpoint answering. It is a term in the lag budget in 8.8, which sums its terms
+to say how long after a condition held a page went out, and a page is out once
+the slowest endpoint it was posted to has it. Labelled per endpoint it would
+stop being summable, and the budget would have to pick between `max`, `sum` and
+`avg` over endpoints, none of which answers the question it is asking. What an
+individual endpoint is doing is read off the two counters beside it, which carry
+the label already.
+
+**A duplicate `--alertmanager` is refused at startup.** The same address twice
+is the same page posted twice to one member, which Alertmanager deduplicates, so
+nothing breaks and nothing is gained. What it does break is the metrics: the
+`alertmanager` label is the redacted URL, so two identical values are one
+series, and a failure counter that silently counts two endpoints as one is worse
+than no label at all. Deduplicating quietly would leave an operator with a flag
+list that does not describe what the ruler is doing, where a refusal names the
+value and the fix is deleting a line.
+
+**One probe per endpoint, and still not a readiness term.** The gauge in 8.2 is
+already labelled `alertmanager`, so N endpoints is N probes on their own timers
+and N series, each answering whether that member answers. Nothing else about it
+changes, because the set comes from a flag and a flag needs a restart: the
+endpoints are fixed for the life of the process, so there is no target to be
+dropped and no gauge left at 0 that nothing can clear, unlike the discovery
+declined below. Readiness stays out of it for the reason it already does, and
+now for a second one: a member being down is what the other members are for.
 
 **The list is one Alertmanager cluster, not two destinations,** and that has to
 be written where an operator reads it rather than inferred. Read the other way,
@@ -1132,11 +1194,9 @@ lifecycle problem `deleteSource` exists for.
 enough on their own to make an Alertmanager outage read as missed iterations,
 which 8.2 calls the single most important operational signal. Fan-out
 multiplies that worst case by the number of endpoints, so the ordering was:
-take the send off the evaluation path, then add the list. The queue above is
-the first half, and the list is now unblocked. Until it exists,
-`docs/running.md` says plainly that one URL means the operator supplies a
-single reachable address, and names the upstream guidance, so the gap is a
-stated position rather than an omission.
+take the send off the evaluation path, then add the list. The queue above was
+the first half and the fan-out is the second, so the worst case the ordering was
+protecting is one ladder rather than one per endpoint.
 
 **What vmalert does, recorded so this is not researched twice.** Flags for the
 simple case and a file for discovery. Every notifier flag is an array aligned
