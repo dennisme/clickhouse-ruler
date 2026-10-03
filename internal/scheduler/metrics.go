@@ -211,22 +211,26 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 			Help: "Total number of alert batches that failed to send to Alertmanager.",
 		}, []string{"alertmanager"}),
 
-		// Only sends Alertmanager accepted. A failed send's duration is the
+		// Only deliveries Alertmanager accepted. A failed one's duration is the
 		// retry ladder giving up, so it measures the resend policy rather than
 		// Alertmanager, and folding it in fired the latency alert for the
 		// delivery outage the failure counter already reports (spec 8.2).
 		// Batches attempted is this histogram's count plus that counter.
+		//
+		// One observation per delivery however many endpoints it was posted to,
+		// and no `alertmanager` label, because this is a term in the lag budget
+		// in 8.8 and a page is out once the slowest endpoint has it (spec 6.5).
 		NotificationLatency: f.NewHistogram(prometheus.HistogramOpts{
 			Name: "clickhouse_ruler_notification_latency_seconds",
-			Help: "Time spent sending an alert batch Alertmanager accepted.",
+			Help: "Time spent delivering an alert batch to every Alertmanager that accepted it.",
 		}),
 
 		// The send runs behind a queue, so an Alertmanager outage fills the
 		// queue rather than making a group miss iterations, and these four are
 		// what that made invisible (spec 6.5). No alertmanager label although
-		// the two counters above carry one: the queue is per ruler and there is
-		// one endpoint to be per, and a list of endpoints is a queue per
-		// endpoint that brings the label with it.
+		// the two counters above carry one: the fan-out to the endpoints happens
+		// under the queue, so there is one queue holding one batch per
+		// evaluation however many endpoints that batch is posted to.
 		NotificationQueueLength: f.NewGauge(prometheus.GaugeOpts{
 			Name: "clickhouse_ruler_notification_queue_length",
 			Help: "Number of alerts waiting to be sent to Alertmanager.",

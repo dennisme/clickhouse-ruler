@@ -29,9 +29,11 @@ replicaCount: 1
 nameOverride: ""
 fullnameOverride: ""
 
-# Alertmanager to deliver to, for example http://alertmanager.monitoring:9093.
-# Required.
-alertmanagerURL: ""
+# Alertmanager cluster to deliver to, one entry per member. Every alert is
+# posted to every entry, because members gossip and deduplicate, so a balancer
+# in front of them is the one topology to avoid. See docs/running.md.
+# Required, at least one entry.
+alertmanagerURLs: []
 
 ruler:
   # Port the /metrics, /-/healthy, /-/ready and /-/reload surface listens on.

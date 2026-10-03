@@ -1,5 +1,6 @@
 # A policy file, three replicas, and two sources sharing one password Secret.
-alertmanagerURL: https://alertmanager.example.com
+alertmanagerURLs:
+  - https://alertmanager.example.com
 replicaCount: 3
 rules:
   gitSync:

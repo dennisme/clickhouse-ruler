@@ -6,12 +6,14 @@ import (
 	"fmt"
 	"log/slog"
 	"net/url"
+	"strings"
 	"time"
 
+	"github.com/dennisme/clickhouse-ruler/internal/notify"
 	"github.com/dennisme/clickhouse-ruler/internal/scheduler"
 )
 
-// How often the configured Alertmanager is asked whether it answers, and how
+// How often each configured Alertmanager is asked whether it answers, and how
 // long one of those requests gets (spec 8.2).
 //
 // Fixed rather than flags. Thirty seconds is a scrape interval, and nothing
@@ -24,7 +26,7 @@ const (
 	probeTimeout  = 5 * time.Second
 )
 
-// parseAlertmanagerURL reads the --alertmanager flag.
+// parseAlertmanagerURL reads one value of the --alertmanager flag.
 //
 // An unparseable URL is refused at startup rather than handed to the notify
 // client, which is the precedent parseLogLevel sets and for the same reason:
@@ -57,6 +59,102 @@ func parseAlertmanagerURL(s string) (*url.URL, error) {
 	return u, nil
 }
 
+// alertmanagerFlag collects a repeated --alertmanager, in the order it was
+// given, because the flag package keeps only the last value of a plain string
+// flag.
+type alertmanagerFlag []string
+
+func (f *alertmanagerFlag) String() string { return strings.Join(*f, ",") }
+
+func (f *alertmanagerFlag) Set(v string) error {
+	*f = append(*f, v)
+	return nil
+}
+
+// parseAlertmanagerURLs reads every value of the repeated --alertmanager.
+//
+// Every value goes through the same parsing, because the second address being a
+// typo is no less silent than the first one being one.
+//
+// The same address twice is refused. It is the same page posted twice to one
+// member, which Alertmanager deduplicates, so nothing breaks and nothing is
+// gained; what it does break is the metrics, because the `alertmanager` label is
+// the redacted URL and two identical values are one series, so a failure counter
+// would report two endpoints as one. Deduplicating quietly would leave an
+// operator with a flag list that does not describe what the ruler is doing
+// (spec 6.5).
+func parseAlertmanagerURLs(values []string) ([]*url.URL, error) {
+	urls := make([]*url.URL, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+
+	for _, v := range values {
+		u, err := parseAlertmanagerURL(v)
+		if err != nil {
+			return nil, err
+		}
+
+		// A trailing slash is the same endpoint: notify.Client trims one
+		// before it builds a request path.
+		key := strings.TrimSuffix(u.String(), "/")
+		if _, dup := seen[key]; dup {
+			return nil, fmt.Errorf("--alertmanager %q: given twice, list each member of the cluster once",
+				u.Redacted())
+		}
+		seen[key] = struct{}{}
+
+		urls = append(urls, u)
+	}
+	return urls, nil
+}
+
+// alertmanagerEndpoint is one member of the cluster alerts go to: the client
+// that posts and probes, and the redacted spelling that labels its series and
+// names it in a log line (spec 8.4).
+type alertmanagerEndpoint struct {
+	url    string
+	client *notify.Client
+}
+
+func alertmanagerEndpoints(urls []*url.URL) []alertmanagerEndpoint {
+	endpoints := make([]alertmanagerEndpoint, 0, len(urls))
+	for _, u := range urls {
+		endpoints = append(endpoints, alertmanagerEndpoint{
+			url:    u.Redacted(),
+			client: notify.NewClient(u.String()),
+		})
+	}
+	return endpoints
+}
+
+// sendEndpoints is what a send is fanned out across: every endpoint, each
+// counting its own deliveries and failures (spec 6.5).
+func sendEndpoints(endpoints []alertmanagerEndpoint) []scheduler.Endpoint {
+	out := make([]scheduler.Endpoint, 0, len(endpoints))
+	for _, e := range endpoints {
+		out = append(out, scheduler.Endpoint{Sender: e.client, URL: e.url})
+	}
+	return out
+}
+
+// newAlertmanagerProbes builds one probe per endpoint. Each reports its own
+// gauge series, so a cluster with one member down says which member, and each
+// runs on its own timer, so one member that hangs delays nobody else's reading
+// (spec 6.5, 8.2).
+func newAlertmanagerProbes(endpoints []alertmanagerEndpoint, metrics *scheduler.Metrics, log *slog.Logger) []*alertmanagerProbe {
+	probes := make([]*alertmanagerProbe, 0, len(endpoints))
+	for _, e := range endpoints {
+		probes = append(probes, &alertmanagerProbe{
+			client:   e.client,
+			url:      e.url,
+			metrics:  metrics,
+			log:      log,
+			interval: probeInterval,
+			timeout:  probeTimeout,
+		})
+	}
+	return probes
+}
+
 // prober is all the probe loop asks of a notify client: whether Alertmanager
 // answers. notify.Client is one.
 //
@@ -67,14 +165,15 @@ type prober interface {
 	Probe(ctx context.Context) error
 }
 
-// alertmanagerProbe asks the configured Alertmanager whether it answers, on its
-// own timer, and reports the answer as a gauge and on a change of state as a
-// log line.
+// alertmanagerProbe asks one Alertmanager whether it answers, on its own timer,
+// and reports the answer as a gauge series of its own and on a change of state
+// as a log line.
 //
-// Neither a readiness term nor a startup refusal: an Alertmanager is one
-// service every replica points at, so either would turn a rolling restart of it
-// into a fleet of rulers that cannot be restarted or cannot pass a rollout, for
-// an outage a delivery retry already rides out (spec 8.1, 6.5).
+// Neither a readiness term nor a startup refusal: an Alertmanager is one service
+// every replica points at, so either would turn a rolling restart of it into a
+// fleet of rulers that cannot be restarted or cannot pass a rollout, for an
+// outage a delivery retry already rides out, and with a list of endpoints a
+// member being down is what the other members are for (spec 8.1, 6.5).
 type alertmanagerProbe struct {
 	client  prober
 	url     string

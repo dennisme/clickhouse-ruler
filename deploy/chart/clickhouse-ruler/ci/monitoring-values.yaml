@@ -1,7 +1,8 @@
 # Everything this chart can render for an operator: a ServiceMonitor, a
 # disruption budget across three replicas, a priority class, and a shutdown
 # timeout the grace period has to follow.
-alertmanagerURL: http://alertmanager.monitoring:9093
+alertmanagerURLs:
+  - http://alertmanager.monitoring:9093
 replicaCount: 3
 rules:
   gitSync:

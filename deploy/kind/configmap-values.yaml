@@ -14,7 +14,8 @@ image:
   tag: cluster-test
   pullPolicy: Never
 
-alertmanagerURL: http://alertmanager:9093
+alertmanagerURLs:
+  - http://alertmanager:9093
 
 rules:
   delivery: configMap

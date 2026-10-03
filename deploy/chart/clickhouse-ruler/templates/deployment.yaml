@@ -84,7 +84,12 @@ spec:
             - run
             - --rules={{ include "clickhouse-ruler.rulesPath" . }}
             - --sources={{ include "clickhouse-ruler.sourcesPath" . }}
-            - --alertmanager={{ required "alertmanagerURL is required" .Values.alertmanagerURL }}
+            {{- if not .Values.alertmanagerURLs }}
+            {{- fail "alertmanagerURLs is required, one entry per member of the Alertmanager cluster" }}
+            {{- end }}
+            {{- range .Values.alertmanagerURLs }}
+            - --alertmanager={{ . }}
+            {{- end }}
             - --listen=:{{ .Values.ruler.port }}
             - --log-level={{ .Values.ruler.logLevel }}
             # Paired with terminationGracePeriodSeconds, which is this plus the

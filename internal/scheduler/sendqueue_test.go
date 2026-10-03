@@ -83,7 +83,7 @@ func (s *slowSender) count() int {
 
 func testQueue(sender notify.Sender, capacity int) *SendQueue {
 	m := NewMetrics(prometheus.NewRegistry())
-	cadence := NewCadence(sender, "am", testResend, m, NewRealClock())
+	cadence := NewCadence(oneEndpoint(sender), testResend, m, NewRealClock())
 	return NewSendQueue(cadence, capacity, m, NewRealClock(), slog.New(slog.DiscardHandler))
 }
 
@@ -95,7 +95,7 @@ func testQueue(sender notify.Sender, capacity int) *SendQueue {
 // and one registry with the scheduler in front of it.
 func loggingQueue(sender notify.Sender, log *slog.Logger) (*SendQueue, *Metrics) {
 	m := NewMetrics(prometheus.NewRegistry())
-	cadence := NewCadence(sender, "am", testResend, m, NewRealClock())
+	cadence := NewCadence(oneEndpoint(sender), testResend, m, NewRealClock())
 	return NewSendQueue(cadence, DefaultNotificationQueueCapacity, m, NewRealClock(), log), m
 }
 
@@ -189,7 +189,7 @@ func TestAGroupMissesNoIterationWhileSendsAreBlocked(t *testing.T) {
 	sender := newBlockingSender()
 	reg := prometheus.NewRegistry()
 	m := NewMetrics(reg)
-	cadence := NewCadence(sender, "am", testResend, m, NewRealClock())
+	cadence := NewCadence(oneEndpoint(sender), testResend, m, NewRealClock())
 	queue := NewSendQueue(cadence, DefaultNotificationQueueCapacity, m, NewRealClock(), slog.New(slog.DiscardHandler))
 
 	sched := New(intervalRuleSet("Blocked", interval),
@@ -275,7 +275,7 @@ func TestShutdownDeliversWhatIsStillQueued(t *testing.T) {
 	sender := &slowSender{per: 20 * time.Millisecond}
 	reg := prometheus.NewRegistry()
 	m := NewMetrics(reg)
-	cadence := NewCadence(sender, "am", testResend, m, NewRealClock())
+	cadence := NewCadence(oneEndpoint(sender), testResend, m, NewRealClock())
 	queue := NewSendQueue(cadence, DefaultNotificationQueueCapacity, m, NewRealClock(), slog.New(slog.DiscardHandler))
 	queue.Start()
 

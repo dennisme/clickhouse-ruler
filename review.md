@@ -14,19 +14,6 @@ None open. The ones that were are under Closed, with their original numbers.
 
 ## Operator unclear
 
-### Single Alertmanager
-
-`--alertmanager` takes one URL (`internal/notify/client.go:34`). Prometheus fans
-out to a set. An HA pair needs a load balancer the operator supplies, and
-`docs/running.md` does not say so. The `alertmanager` metric label implies a
-plurality that does not exist.
-
-Spec 6.5 now carries the argument and the ordering: Alertmanager's own docs say
-not to load balance in front of it, so a list is the right shape here even
-though a source keeps one address. It waited on the send leaving the evaluation
-goroutine, because fan-out multiplies that worst case by the number of
-endpoints, and that item is now closed, so nothing is in front of this one.
-
 ### Flags need a restart and the docs do not say it
 
 `SIGHUP` re-reads three files. `--alertmanager`, `--query-concurrency`,
@@ -80,6 +67,42 @@ on `--format`. Workable and documented, but a lot of rules for one command.
 
 Original numbering and original text kept, so a reference written before the
 fix still points at the right item.
+
+### Single Alertmanager
+
+**Closed by posting every alert to every endpoint.** `--alertmanager` is
+repeated once per member of the cluster, every value parsed at startup and the
+same address twice refused, because two identical values are one series on
+everything labelled `alertmanager`. The fan-out sits under `notify.Cadence` at
+the `Sender` interface rather than as a queue and a worker per endpoint, which
+spec 6.5 used to say and which cannot be built: one Cadence holds what was last
+sent per fingerprint, so two workers calling it is the first one recording the
+send and the second finding nothing due. Endpoints are posted to at once, so the
+worst case stays the one retry ladder it was with a single endpoint rather than
+one per endpoint, and a send is delivered when at least one endpoint accepted it,
+because gossip carries the alert to the rest and requiring all of them would stop
+every alert from ever being recorded while one member is down. The two counters
+that already carried `alertmanager` now have a series per endpoint and the error
+on an undelivered batch names every endpoint that refused it; the four queue
+series stay unlabelled, because there is still one queue;
+`clickhouse_ruler_notification_latency_seconds` times the whole fan-out and says
+so, because it is a term in the lag budget and a page is out once the slowest
+endpoint has it. Each endpoint is probed on its own timer into its own gauge
+series, still not a readiness term. `docs/running.md` carries the repeated flag
+and why there is no balancer, and says the list is one cluster rather than two
+destinations; `docs/operations.md` has how to read one member failing against
+every member failing.
+
+`--alertmanager` takes one URL (`internal/notify/client.go:34`). Prometheus fans
+out to a set. An HA pair needs a load balancer the operator supplies, and
+`docs/running.md` does not say so. The `alertmanager` metric label implies a
+plurality that does not exist.
+
+Spec 6.5 now carries the argument and the ordering: Alertmanager's own docs say
+not to load balance in front of it, so a list is the right shape here even
+though a source keeps one address. It waited on the send leaving the evaluation
+goroutine, because fan-out multiplies that worst case by the number of
+endpoints, and that item is now closed, so nothing is in front of this one.
 
 ### An Alertmanager outage shows up as missed iterations
 
@@ -331,7 +354,6 @@ past CI is running anyway.
 
 ## Order to fix
 
-1. The list of Alertmanagers, which the send queue unblocked.
-2. The consumer toil, starting with what a rule can template: the gap between
+1. The consumer toil, starting with what a rule can template: the gap between
    "a rule names no cluster" and `FROM otel.otel_traces` is the one an author
    meets first.

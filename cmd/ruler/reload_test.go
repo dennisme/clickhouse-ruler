@@ -78,8 +78,9 @@ func startRunner(t *testing.T, dir string) *runner {
 		clock:       scheduler.NewRealClock(),
 		resend:      scheduler.Resend{Interval: notify.DefaultResendInterval, Tolerance: notify.DefaultResendTolerance},
 	}
-	cadence := scheduler.NewCadence(notify.NewClient("http://127.0.0.1:9093"),
-		"http://127.0.0.1:9093", r.resend, r.metrics, r.clock)
+	cadence := scheduler.NewCadence(
+		[]scheduler.Endpoint{{Sender: notify.NewClient("http://127.0.0.1:9093"), URL: "http://127.0.0.1:9093"}},
+		r.resend, r.metrics, r.clock)
 	r.queue = scheduler.NewSendQueue(cadence, scheduler.DefaultNotificationQueueCapacity,
 		r.metrics, r.clock, r.log)
 

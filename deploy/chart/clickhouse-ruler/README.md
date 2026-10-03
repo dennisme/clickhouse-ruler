@@ -26,7 +26,7 @@ Three things, and the render fails without them:
 
 | Value | What it is |
 | --- | --- |
-| `alertmanagerURL` | Where alerts are delivered. |
+| `alertmanagerURLs` | Where alerts are delivered, one entry per member of the Alertmanager cluster. Every alert is posted to every member. |
 | `rules.gitSync.repo` | The repository holding the rule files. `rules.configMap.name` instead, when `rules.delivery` is `configMap`. |
 | `sources` or `sourcesSecret.name` | The ClickHouse clusters to evaluate against, either templated from values or supplied whole in a Secret. Not both. |
 

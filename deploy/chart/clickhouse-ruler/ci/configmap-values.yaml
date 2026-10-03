@@ -1,5 +1,6 @@
 # A ConfigMap mount with a reloader sidecar, since there is no exec hook here.
-alertmanagerURL: http://alertmanager.monitoring:9093
+alertmanagerURLs:
+  - http://alertmanager.monitoring:9093
 rules:
   delivery: configMap
   subdirectory: ""

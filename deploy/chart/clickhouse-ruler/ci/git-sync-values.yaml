@@ -1,5 +1,6 @@
 # The default delivery, with a password read out of a mounted Secret.
-alertmanagerURL: http://alertmanager.monitoring:9093
+alertmanagerURLs:
+  - http://alertmanager.monitoring:9093
 rules:
   delivery: git-sync
   subdirectory: rules
