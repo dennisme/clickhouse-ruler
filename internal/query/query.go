@@ -15,31 +15,59 @@ import (
 // valueColumn is the one result column that is not a label. See spec 6.3.
 const valueColumn = "value"
 
-// timeBounds are what {{ .From }} and {{ .To }} render to: ClickHouse named
-// parameter placeholders, not timestamps.
+// exprVars is everything an expr may read (spec 6.4.1).
+//
+// The bounds are placeholders or literals depending on who is rendering. The
+// identifiers are the matched source's own, so that one rule can select
+// sources that name their table or their timestamp column differently and
+// still be one rule.
+type exprVars struct {
+	From string
+	To   string
+
+	Table           string
+	TimestampColumn string
+}
+
+// boundsAsParameters are what {{ .From }} and {{ .To }} render to for an
+// evaluation: ClickHouse named parameter placeholders, not timestamps.
 //
 // Rendering a timestamp into the SQL text would mean formatting and timezone
 // decisions inside a string, which is how a window silently shifts by hours.
 // Binding leaves both to the driver.
-var timeBounds = struct {
-	From string
-	To   string
-}{
+//
+// The identifiers cannot be bound the same way, because named parameters bind
+// values and a table or a column name is not a value. They substitute into the
+// text, which is why the sources file requires a bare identifier for both
+// (spec 6.4.2).
+var boundsAsParameters = exprVars{
 	From: "{from:DateTime64(3)}",
 	To:   "{to:DateTime64(3)}",
 }
 
-// render replaces the time bound actions with parameter placeholders. Any
-// other template variable is an error, because the ruler supplies only these
-// two and a typo must not reach ClickHouse as empty text.
-func render(expr string) (string, error) {
+// render replaces the time bound actions with parameter placeholders and the
+// identifier actions with the source's own. Any other template variable is an
+// error: the ruler supplies these four and a typo must not reach ClickHouse as
+// empty text.
+func render(expr string, src source.Source) (string, error) {
+	vars := boundsAsParameters
+	vars.Table = src.Table
+	vars.TimestampColumn = src.TimestampColumn
+
+	return renderVars(expr, vars)
+}
+
+// renderVars is the one substitution, shared by the evaluation path and the
+// check path so that the statement a check reads is built the same way as the
+// statement that runs.
+func renderVars(expr string, vars exprVars) (string, error) {
 	t, err := template.New("expr").Option("missingkey=error").Parse(expr)
 	if err != nil {
 		return "", fmt.Errorf("parsing expr template: %w", err)
 	}
 
 	var out strings.Builder
-	if err := t.Execute(&out, timeBounds); err != nil {
+	if err := t.Execute(&out, vars); err != nil {
 		return "", fmt.Errorf("rendering expr: %w", err)
 	}
 	return out.String(), nil

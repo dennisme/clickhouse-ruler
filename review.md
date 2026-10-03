@@ -36,7 +36,48 @@ hole.
 
 ## Consumer toil
 
+### `ruler check` takes a directory only
+
+An author fixing one rule in an 800-rule tree checks the tree. `-changed-since`
+helps in CI, not at a desk. Accepting a file path would be a few lines.
+
+### `--summary` and `--explain` need stdout gymnastics
+
+Three flags each carry their own rule about which stream they land on depending
+on `--format`. Workable and documented, but a lot of rules for one command.
+
+## Closed
+
+Original numbering and original text kept, so a reference written before the
+fix still points at the right item.
+
 ### A rule names its cluster after all
+
+**Closed by templating the table and the timestamp column.** An `expr` may read
+`{{ .Table }}` and `{{ .TimestampColumn }}`, which the matched source supplies,
+so one rule spans clusters that name them differently. Both are optional and an
+author whose clusters agree keeps writing them literally, which is still what
+the quick start shows, with a sentence naming the variables for when they do
+not. The two bounds bind as query parameters and these two substitute into the
+SQL text, because ClickHouse named parameters bind values and a name is not a
+value, so `source/table` and `source/timestamp-column` now require a bare
+identifier as well as a non-empty one: the sources file is the only place a
+source is built from text, which makes it the place to refuse a value carrying
+a quote, a dot or a semicolon. Not quoting the substitution with backticks
+instead was deliberate, since the rendered statement is read back as though the
+author wrote it by the tree checks in 6.7.1 and by the cost prediction in 7.3.
+There is no `{{ .Database }}`: the database is set on the connection, so
+`FROM otel_traces` already resolves per source, and offering the variable would
+invite a cross-database reference against a per-database grant. The offline
+checker gained the other half, since `rule/expr` only counted the two bounds
+before and a typo like `{{ .Tabel }}` reached a running ruler to fail there;
+it now names any variable the ruler does not supply, with a line number.
+
+Two claims in the original text below are wrong and are left as written.
+`table:` is read by the querier, at `internal/query/distributed.go:63`,
+`privileges.go:250`, `sample.go:123` and `cost.go:160`; `spec/design.md` says
+only that rules are not required to read it. And the database never needed
+templating, for the reason above.
 
 The README says "A rule names no cluster. It selects sources by label, and runs
 against every." But `expr` hardcodes `FROM otel.otel_traces`, and only
@@ -52,21 +93,6 @@ is not stated anywhere an author would read.
 Either expose `{{ .Database }}`, `{{ .Table }}` and `{{ .TimestampColumn }}`, or
 say plainly in the quick start that a selector spanning clusters requires
 identical table naming.
-
-### `ruler check` takes a directory only
-
-An author fixing one rule in an 800-rule tree checks the tree. `-changed-since`
-helps in CI, not at a desk. Accepting a file path would be a few lines.
-
-### `--summary` and `--explain` need stdout gymnastics
-
-Three flags each carry their own rule about which stream they land on depending
-on `--format`. Workable and documented, but a lot of rules for one command.
-
-## Closed
-
-Original numbering and original text kept, so a reference written before the
-fix still points at the right item.
 
 ### Single Alertmanager
 
@@ -354,6 +380,15 @@ past CI is running anyway.
 
 ## Order to fix
 
-1. The consumer toil, starting with what a rule can template: the gap between
-   "a rule names no cluster" and `FROM otel.otel_traces` is the one an author
-   meets first.
+Items are named rather than numbered, because closing one used to renumber the
+rest and a reference written before that pointed at the wrong item afterwards.
+
+1. **`ruler check` takes a directory only.** The remaining consumer toil, and
+   the one an author meets at a desk rather than in CI.
+2. **Flags need a restart and the docs do not say it.** A doc change, and the
+   cheapest thing on this list.
+3. **No `--log-format=json`.** One handler swap, asked for.
+
+`--summary` and `--explain` need stdout gymnastics is deliberately not here: it
+names no change, so nothing can close it. It needs a shape to aim at first. No
+reload attempt counter is open but is not worth a slice on its own.

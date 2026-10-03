@@ -30,7 +30,7 @@ func TestRenderBindsTimeBoundsAsParameters(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := render(tc.expr)
+			got, err := render(tc.expr, source.Source{})
 			if err != nil {
 				t.Fatalf("render: %v", err)
 			}
@@ -44,7 +44,7 @@ func TestRenderBindsTimeBoundsAsParameters(t *testing.T) {
 // A timestamp rendered into SQL text would invite injection and timezone
 // bugs, so nothing but the placeholder may reach the query string.
 func TestRenderRejectsUnknownVariables(t *testing.T) {
-	_, err := render("WHERE ts >= {{ .From }} AND host = {{ .Hostname }}")
+	_, err := render("WHERE ts >= {{ .From }} AND host = {{ .Hostname }}", source.Source{})
 	if err == nil {
 		t.Fatal("expected an error for an unknown template variable")
 	}
@@ -195,5 +195,70 @@ func TestSettingsPinSkipUnavailableShards(t *testing.T) {
 	if got["skip_unavailable_shards"] != 0 {
 		t.Errorf("skip_unavailable_shards = %v, want 0 so a dead shard fails the query",
 			got["skip_unavailable_shards"])
+	}
+}
+
+// A rule names no cluster, so one expr has to be able to run against sources
+// that spell their table and timestamp column differently (spec 6.4.1).
+func TestRenderSubstitutesSourceIdentifiers(t *testing.T) {
+	const expr = "SELECT 1 AS value FROM {{ .Table }} " +
+		"WHERE {{ .TimestampColumn }} >= {{ .From }} AND {{ .TimestampColumn }} < {{ .To }}"
+
+	dc1 := source.Source{Table: "otel_traces", TimestampColumn: "Timestamp"}
+	dc2 := source.Source{Table: "traces", TimestampColumn: "ts"}
+
+	got1, err := render(expr, dc1)
+	if err != nil {
+		t.Fatalf("render against dc1: %v", err)
+	}
+	got2, err := render(expr, dc2)
+	if err != nil {
+		t.Fatalf("render against dc2: %v", err)
+	}
+
+	want1 := "SELECT 1 AS value FROM otel_traces " +
+		"WHERE Timestamp >= {from:DateTime64(3)} AND Timestamp < {to:DateTime64(3)}"
+	want2 := "SELECT 1 AS value FROM traces " +
+		"WHERE ts >= {from:DateTime64(3)} AND ts < {to:DateTime64(3)}"
+
+	if got1 != want1 {
+		t.Errorf("render against dc1 =\n %q\nwant\n %q", got1, want1)
+	}
+	if got2 != want2 {
+		t.Errorf("render against dc2 =\n %q\nwant\n %q", got2, want2)
+	}
+}
+
+// The identifiers are optional: a rule author whose clusters agree on the
+// names keeps writing them literally (spec 6.4.1).
+func TestRenderLeavesLiteralIdentifiersAlone(t *testing.T) {
+	const expr = "SELECT 1 AS value FROM otel_traces WHERE Timestamp >= {{ .From }} AND Timestamp < {{ .To }}"
+
+	got, err := render(expr, source.Source{Table: "traces", TimestampColumn: "ts"})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+
+	want := "SELECT 1 AS value FROM otel_traces " +
+		"WHERE Timestamp >= {from:DateTime64(3)} AND Timestamp < {to:DateTime64(3)}"
+	if got != want {
+		t.Errorf("render =\n %q\nwant\n %q", got, want)
+	}
+}
+
+// The check-time render substitutes the same identifiers, so the statement
+// that is explained and described is the one that will be evaluated.
+func TestRenderForCheckSubstitutesSourceIdentifiers(t *testing.T) {
+	src := source.Source{Table: "traces", TimestampColumn: "ts"}
+
+	got, err := renderForCheck("SELECT 1 AS value FROM {{ .Table }} WHERE {{ .TimestampColumn }} >= {{ .From }} AND {{ .TimestampColumn }} < {{ .To }}", src, time.Minute)
+	if err != nil {
+		t.Fatalf("renderForCheck: %v", err)
+	}
+	if !strings.Contains(got, "FROM traces") {
+		t.Errorf("rendered SQL should read the source's table, got: %q", got)
+	}
+	if strings.Contains(got, "{{") {
+		t.Errorf("rendered SQL still carries a template action, got: %q", got)
 	}
 }

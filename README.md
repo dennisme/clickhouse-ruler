@@ -82,7 +82,14 @@ groups:
 ```
 
 One returned row is one alert instance: columns become labels, `value`
-becomes the value. Check the files, then run:
+becomes the value.
+
+That claim about naming no cluster holds literally while the matched sources
+agree on their table and timestamp column names, since the rest of the query is
+text you typed. Where they disagree, write `{{ .Table }}` and
+`{{ .TimestampColumn }}` and each source supplies its own.
+
+Check the files, then run:
 
 ```bash
 ruler check --sources rules/sources.yaml rules/

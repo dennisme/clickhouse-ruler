@@ -50,8 +50,8 @@ Generated from the check table in `internal/lint/checks.go`. Edit the table, the
 | [`source/name`](source.md#source-name) | fixed, always `error` | a source with no name, or a name used twice |
 | [`source/password`](source.md#source-password) | fixed, always `error` | a secret that could not be read, or both secret sources set at once |
 | [`source/privileges`](source.md#source-privileges) | `warning` by default | a source's ClickHouse user does not meet the contract the other checks rely on |
-| [`source/table`](source.md#source-table) | fixed, always `error` | a source naming no table |
-| [`source/timestamp-column`](source.md#source-timestamp-column) | fixed, always `error` | a source naming no timestamp column, so no window can be bound |
+| [`source/table`](source.md#source-table) | fixed, always `error` | a source naming no table, or naming one that is not a bare identifier |
+| [`source/timestamp-column`](source.md#source-timestamp-column) | fixed, always `error` | a source naming no timestamp column, or naming one that is not a bare identifier |
 | [`source/tls`](source.md#source-tls) | fixed, always `error` | TLS key material that could not be read, or a tls_config that contradicts itself |
 | [`source/tls-insecure`](source.md#source-tls-insecure) | `error` by default | a source that skips certificate verification without an exemption |
 | [`source/username`](source.md#source-username) | fixed, always `error` | a source naming no ClickHouse user, which is the tenancy boundary |

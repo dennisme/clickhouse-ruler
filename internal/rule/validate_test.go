@@ -83,6 +83,18 @@ func TestValidate(t *testing.T) {
 					Severity: lint.SeverityError,
 					Text:     "expr does not reference {{ .To }}, so the query has no upper time bound",
 				},
+				// The ruler supplies four variables and nothing else, so a
+				// typo in one is an authoring error with a line number rather
+				// than empty text reaching ClickHouse (spec 6.4.1).
+				{
+					File:     "testdata/rule_expr.yaml",
+					Line:     48,
+					Subject:  "MisspelledTable",
+					Check:    "rule/expr",
+					Severity: lint.SeverityError,
+					Text: "expr reads {{ .Tabel }}, which the ruler does not supply; " +
+						"it supplies From, To, Table and TimestampColumn",
+				},
 			},
 		},
 		{

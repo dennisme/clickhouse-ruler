@@ -136,7 +136,7 @@ type Evaluation struct {
 // Run evaluates one rule and returns a sample per returned row, with what the
 // result looked like and what it cost.
 func (q *Querier) Run(ctx context.Context, r rule.Rule, who Attribution, now time.Time) (Evaluation, error) {
-	sql, err := render(r.Expr)
+	sql, err := render(r.Expr, q.src)
 	if err != nil {
 		return Evaluation{}, fmt.Errorf("rule %q: %w", r.Alert, err)
 	}

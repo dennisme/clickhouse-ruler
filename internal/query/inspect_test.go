@@ -11,6 +11,7 @@ import (
 
 	"github.com/dennisme/clickhouse-ruler/internal/lint"
 	"github.com/dennisme/clickhouse-ruler/internal/rule"
+	"github.com/dennisme/clickhouse-ruler/internal/source"
 
 	"github.com/ClickHouse/clickhouse-go/v2"
 )
@@ -335,7 +336,7 @@ func TestInspectResultSaysNothingAboutAWorkingRule(t *testing.T) {
 // window has to be the one the rule will really read (spec 7.3).
 func TestRenderForCheckBoundsTheWindowOnNow(t *testing.T) {
 	before := time.Now()
-	sql, err := renderForCheck("SELECT 1 AS value WHERE ts >= {{ .From }} AND ts < {{ .To }}", 15*time.Minute)
+	sql, err := renderForCheck("SELECT 1 AS value WHERE ts >= {{ .From }} AND ts < {{ .To }}", source.Source{}, 15*time.Minute)
 	if err != nil {
 		t.Fatalf("renderForCheck: %v", err)
 	}
@@ -358,7 +359,7 @@ func TestRenderForCheckBoundsTheWindowOnNow(t *testing.T) {
 // A rule whose group set no interval still has to be estimated against
 // something, and a zero length window prunes to nothing everywhere.
 func TestRenderForCheckWithNoWindow(t *testing.T) {
-	sql, err := renderForCheck("SELECT 1 AS value WHERE ts >= {{ .From }} AND ts < {{ .To }}", 0)
+	sql, err := renderForCheck("SELECT 1 AS value WHERE ts >= {{ .From }} AND ts < {{ .To }}", source.Source{}, 0)
 	if err != nil {
 		t.Fatalf("renderForCheck: %v", err)
 	}

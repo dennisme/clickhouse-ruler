@@ -543,11 +543,11 @@ var checks = []Check{
 	},
 	{
 		Name: CheckSourceTable, Spec: "6.6", Fixed: true, Always: SeverityError,
-		Summary: "a source naming no table",
+		Summary: "a source naming no table, or naming one that is not a bare identifier",
 	},
 	{
 		Name: CheckSourceTimestampColumn, Spec: "6.8", Fixed: true, Always: SeverityError,
-		Summary: "a source naming no timestamp column, so no window can be bound",
+		Summary: "a source naming no timestamp column, or naming one that is not a bare identifier",
 	},
 	{
 		Name: CheckSourceEvaluationDelay, Spec: "6.8", Fixed: true, Always: SeverityError,

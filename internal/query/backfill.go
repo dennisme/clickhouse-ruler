@@ -196,7 +196,7 @@ func (q *Querier) Backfill(
 	}
 	latest := now.Add(-q.src.EvaluationDelay)
 
-	sql, err := renderBounds(r.Expr, latest.Add(-window), latest)
+	sql, err := renderBounds(r.Expr, q.src, latest.Add(-window), latest)
 	if err != nil {
 		return nil, nil, err
 	}
