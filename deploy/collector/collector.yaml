@@ -32,6 +32,16 @@ exporters:
     username: ruler
     password: ruler
     traces_table_name: otel_traces
+    # Named rather than left to the exporter's defaults, which happen to be
+    # these two names: the tables are checked in, so the config says which
+    # ones it writes. Only the two the rules read are listed; a histogram
+    # arriving would be written to a table that does not exist, and nothing
+    # in the stack emits one.
+    metrics_tables:
+      sum:
+        name: otel_metrics_sum
+      gauge:
+        name: otel_metrics_gauge
     # The checked-in schema is the one under test. Left on, the exporter would
     # create a table of its own on an empty database and the verbatim copy
     # would stop being what anything reads.
@@ -40,6 +50,13 @@ exporters:
 service:
   pipelines:
     traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [clickhouse]
+    # The same path for metrics, so a rule over otel_metrics_sum is read
+    # against what the exporter wrote rather than against an INSERT a test
+    # ran (spec 9.1 item 2).
+    metrics:
       receivers: [otlp]
       processors: [batch]
       exporters: [clickhouse]

@@ -72,3 +72,25 @@ GRANT SELECT(cluster, shard_num) ON system.clusters TO ruler_dc2_reader;
 CREATE USER IF NOT EXISTS ruler_dc2 IDENTIFIED WITH no_password SETTINGS PROFILE ruler;
 GRANT ruler_dc2_reader TO ruler_dc2;
 ALTER USER ruler_dc2 DEFAULT ROLE ALL;
+
+-- The metrics source's user, under the same contract and reading the metrics
+-- tables rather than the traces one.
+--
+-- Its own role rather than a second grant on ruler_reader, because the grant a
+-- source holds is SELECT on the table it names and nothing else. Widening
+-- ruler_reader would give every traces rule read access to a table its rules
+-- never mention, which is the thing the comment above it refuses, and it would
+-- make source/privileges pass for a source whose grant is wider than its rule.
+--
+-- Two tables in one role, because a rule that reads a counter out of
+-- otel_metrics_sum and a reading out of otel_metrics_gauge is one source's
+-- rule: the type decides the table, so a source reading metrics reads both or
+-- is two sources for no reason a rule author would recognise.
+CREATE ROLE IF NOT EXISTS ruler_metrics_reader;
+GRANT SELECT ON otel.otel_metrics_sum TO ruler_metrics_reader;
+GRANT SELECT ON otel.otel_metrics_gauge TO ruler_metrics_reader;
+GRANT SELECT(cluster, shard_num) ON system.clusters TO ruler_metrics_reader;
+
+CREATE USER IF NOT EXISTS ruler_metrics IDENTIFIED WITH no_password SETTINGS PROFILE ruler;
+GRANT ruler_metrics_reader TO ruler_metrics;
+ALTER USER ruler_metrics DEFAULT ROLE ALL;

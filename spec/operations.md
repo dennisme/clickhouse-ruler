@@ -1310,6 +1310,21 @@ which is not a container at all for the reason it gives.
    both shards and one whose second shard never answers. That second cluster is
    the only way to find out what an evaluation does when part of a cluster is
    gone, which is what 6.9 needed the node for.
+
+   The same exporter's metrics tables are copied the same way, from
+   `metrics_sum_table.sql` and `metrics_gauge_table.sql`, with the same two
+   deviations. Two of the five, because a sum is where a counter lands and a
+   gauge is where a reading lands, and those are the pair a rule gets wrong:
+   the sum's `AggregationTemporality` and `IsMonotonic` decide whether a
+   correct rule reads a per-series delta or a plain sum, and a gauge read out
+   of the sum table parses and returns nothing forever. Histograms, summaries
+   and exponential histograms have their own tables and no rule reads one yet.
+   Only in `otel`, since `otel_dc2` exists to disagree about a trace column and
+   a second metrics table nothing reads would be a table nothing reads. The
+   metrics source has its own role and user, because the grant a source holds
+   is `SELECT` on the table it names: widening the traces role would give every
+   traces rule a table its rules never mention, and would make 6.7.2's check
+   pass for a source whose grant is wider than its rules.
 2. **OpenTelemetry collector**, ClickHouse exporter, batch timeout set low so
    data lands in seconds rather than tens of seconds. Its config is
    `deploy/collector`.
@@ -1320,6 +1335,12 @@ which is not a container at all for the reason it gives.
    contradicting the contract 6.7.2 exists to prove. Schema creation is off, so
    the table it writes is the verbatim copy in item 1 rather than one the
    exporter made; left on, the copy would stop being what anything reads.
+
+   It carries a metrics pipeline beside the traces one, over the same receiver
+   and the same batch processor, and names the two metrics tables rather than
+   leaning on the exporter's defaults: the tables are checked in, so the config
+   says which ones it writes. A metric type nothing emits would be written to a
+   table that is not there.
 
    No healthcheck, which is the one service without one. The image is distroless
    and carries no shell, so there is nothing a compose healthcheck could exec.
@@ -1389,8 +1410,9 @@ to catch.
 The OpenTelemetry Demo was considered and rejected. Around 15 services is too
 heavy and too slow for CI, and it is not controllable enough to assert against.
 
-**The emitter is a package the tests drive, not a binary.** `internal/spans`,
-and nothing outside a test calls it. A command would need a flag surface, a
+**The emitter is a package the tests drive, not a binary.** `internal/spans`
+for spans and `internal/datapoints` for metric data points, and nothing outside
+a test calls either. A command would need a flag surface, a
 place in the release and a reason for an operator to run it, and it has none:
 the thing it exists to make possible is an assertion.
 
@@ -1405,6 +1427,17 @@ name, the span attributes, the status, the first span's start time and the
 period the starts are spread across. Those are the columns a rule reads, and
 the start time matters more than when the post happened: a window is a range of
 timestamps, so a scenario can describe a minute ago.
+
+**Two packages rather than one**, for the reason the exporter keeps metrics in
+their own tables: a span is an event with a duration and a data point is a
+reading on a series, so nothing about one describes the other. What a metrics
+scenario controls is the series identity, which is the service name and the
+attributes a rule has to group by before it subtracts anything, the kind, the
+two columns that say how a sum accumulates, and every point's time and value.
+It also controls the series start each point carries, which is how a scenario
+says the exporting process restarted: the total begins again from nothing, and
+a reader subtracting across that boundary gets a negative number out of a
+monotonic counter.
 
 **Exactly one request per scenario.** The table either holds every span or none
 of them, so a test that found fewer rows than it asked for is looking at a
