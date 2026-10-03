@@ -871,6 +871,10 @@ Usage errors and lint findings are a different stream: unstructured, on
 stderr, because a person ran a command and the command has something to say
 about what they typed.
 
+Under `--log-format=json` these are the same lines encoded as JSON objects, and
+the fields this table names are the object's keys, so a pipeline query is
+written off the field names below.
+
 | Level | Message | What to do |
 | --- | --- | --- |
 | info | `ruler running` | Nothing. It carries `rules` and `listen`; a `rules` count lower than you expect means rules were filtered by source matching, not dropped. |
@@ -929,7 +933,8 @@ functions, `readonly = 2`, the constraints behind each limit, or the grant on
 the source's own table.
 
 Everything else that refuses is a flag: an `--alertmanager` that is not an
-`http://` or `https://` URL with a host, an unparseable `--log-level`, a
+`http://` or `https://` URL with a host, an unparseable `--log-level` or
+`--log-format`, a
 non-positive `--resend-interval`, a `--resend-tolerance` below two. All of
 them exit 2 and say so on stderr, rather than starting with a value that
 would quietly misbehave. A source the ruler cannot connect to at all exits 3,

@@ -630,8 +630,13 @@ not a duplicate of it.
 
 `log/slog` from the standard library, text output, on stdout. `--log-level`
 takes `debug`, `info`, `warn` or `error` and defaults to `info`. An
-unparseable level is refused at startup rather than defaulted. There is no
-`--log-format` until somebody asks for one.
+unparseable level is refused at startup rather than defaulted. `--log-format`
+takes `text` or `json`, defaults to `text`, and an unparseable format is
+refused for the same reason. Text is the default because the commonest reader
+is a person at a terminal, while a pipeline that wants JSON is configured once.
+The flag changes the encoding and nothing about what is encoded: every row in
+the table below says the same thing in both formats, under the same field
+names.
 
 Two streams, two audiences. Usage errors, lint findings and the refusal to
 start are CLI output, unstructured, on stderr: a person ran a command and the
