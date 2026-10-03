@@ -413,6 +413,7 @@ Validation and config:
 | `clickhouse_ruler_problem` | gauge | `rule`, `check`, `severity`, `team`, `file`, `source` |
 | `clickhouse_ruler_source_problem` | gauge | `source`, `check`, `severity`, `file` |
 | `clickhouse_ruler_rules_unmatched` | gauge | `rule_group` |
+| `clickhouse_ruler_config_reloads_total` | counter | `outcome` |
 | `clickhouse_ruler_config_last_reload_successful` | gauge | none |
 | `clickhouse_ruler_config_last_reload_timestamp_seconds` | gauge | none |
 | `clickhouse_ruler_config_info` | gauge | `revision`, `rules_root` |
@@ -491,9 +492,18 @@ author owns the fix and the team and the file are the only way to reach them, an
 it keeps the name the pull request used so one setting covers both. The third is the load feed, which carries the fixed
 checks that no longer refuse a reading (7.6), so a file that merged past the
 checker says so instead of running silently. Each feed rebuilds only the checks it
-owns, so a finding answered on one clock is not blanked by a pass on another. The reload pair exists
-because `SIGHUP` reloads the files, and the two deliberately do not say the same
-thing. `clickhouse_ruler_config_last_reload_successful` is about the last
+owns, so a finding answered on one clock is not blanked by a pass on another. The three reload
+metrics exist because `SIGHUP` reloads the files, and they deliberately do not
+say the same thing: attempts over time, the last attempt, and the age of what is
+running. `clickhouse_ruler_config_reloads_total` counts every reload attempt,
+labelled `outcome` with `succeeded` or `refused`, which is two series per
+process and the only one of the three that survives a scrape interval: a reload
+refused and then retried between two scrapes leaves the gauge back at 1 and no
+other trace, so a ruler whose every other rollout is rejected looks like a ruler
+nobody has touched. The startup load is a load and not a reload, so it is not
+counted: a restart would otherwise read as a reload on
+`rate(clickhouse_ruler_config_reloads_total[5m])`, which is the query the metric
+is for. `clickhouse_ruler_config_last_reload_successful` is about the last
 attempt, so a refused reload leaves it at 0 until one succeeds, which is the
 alert: the rules that are running are valid and nothing about them looks wrong,
 so a ruler running last week's rules is invisible otherwise.
