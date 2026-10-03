@@ -8,12 +8,16 @@ import (
 	"strings"
 )
 
-// Filter decides which findings a pull request is answerable for.
+// Filter decides which findings a run is answerable for: the ones a pull
+// request touched, or the ones under a path an author named.
 //
 // A zero Filter keeps everything, which is what `ruler check` with no
-// --changed-since does: the whole directory, because that is what the loader
-// reads at startup, and a CI run whose scope quietly differs from the
-// loader's is a rule that passes review and fails to load (spec 10.3).
+// --changed-since and no paths does: the whole directory, because that is what
+// the loader reads at startup, and a CI run whose scope quietly differs from
+// the loader's is a rule that passes review and fails to load (spec 10.3).
+//
+// Two filters narrow by being applied in turn, which is how asking for both
+// means both.
 type Filter struct {
 	// files is the changed set, already resolved to absolute paths. A nil map
 	// keeps everything, so the failure modes below cannot narrow anything by
@@ -148,4 +152,48 @@ func resolvePath(path string) string {
 		return resolved
 	}
 	return abs
+}
+
+// Paths builds a filter for the rule files at or under the paths an author
+// named, which is the desk question --changed-since does not answer: the file
+// being edited may be committed already, and the rule wanted may be one of
+// several a branch has touched (spec 10.3).
+//
+// ruleFiles is every file the loader read, which is what a path is matched
+// against rather than the filesystem: a path matching nothing the loader read
+// can only report nothing, and a run that reports nothing is indistinguishable
+// from a clean one. That makes it an error here instead, which also covers a
+// path outside the rules tree and a path naming the policy or the sources
+// file, since none of the three is a file the loader read as rules.
+//
+// Returns an error rather than widening, the opposite of ChangedSince. A
+// widening ChangedSince still answers the question that was asked, which is
+// every rule the branch might have affected. A path that matches nothing is
+// not a question anybody meant to ask.
+func Paths(ruleFiles, args []string) (Filter, error) {
+	if len(args) == 0 {
+		return Filter{}, nil
+	}
+
+	resolved := make(map[string]bool, len(ruleFiles))
+	for _, path := range ruleFiles {
+		resolved[resolvePath(path)] = true
+	}
+
+	files := make(map[string]bool)
+	for _, arg := range args {
+		under := resolvePath(arg)
+
+		matched := false
+		for file := range resolved {
+			if file == under || strings.HasPrefix(file, under+string(filepath.Separator)) {
+				files[file] = true
+				matched = true
+			}
+		}
+		if !matched {
+			return Filter{}, fmt.Errorf("no rule file at or under %s", arg)
+		}
+	}
+	return Filter{files: files}, nil
 }

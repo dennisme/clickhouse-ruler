@@ -1916,6 +1916,61 @@ directory, because that is what the loader does at startup, and a CI run whose
 scope quietly differs from the loader's is a rule that passes review and fails
 to load.
 
+#### Checking one file at a desk
+
+`ruler check` also takes paths after the rules directory, which narrow what it
+reports:
+
+```text
+ruler check [flags] <rules-dir> [path...]
+```
+
+An author fixing one rule in a tree of hundreds wants the findings for that
+rule. `--changed-since` answers a question about a branch, which is the CI
+question and not this one: the file may be committed already, or the author may
+want the one rule they are editing rather than every rule they have touched.
+
+**The directory stays required, and it is still the whole directory that is
+read.** Naming the file alone would be the obvious shape and it is the wrong
+one, because the directory decides two things the file cannot. The instance
+policy is the `ruler.yaml` beside it, and team policies are the `ruler.yaml`
+files between it and the rule, so the severity a finding carries is a fact
+about the tree (7.7). Duplicate alert names are a fact about the tree as well.
+A run rooted at the file's own directory answers both differently, which is how
+a check passes at a desk and blocks in CI.
+
+This is not hypothetical: naming a subdirectory already does exactly that
+today, silently, and it is the thing these paths exist to replace.
+
+**So a path narrows the findings, not the reading**, in the same place and for
+the same reason `--changed-since` does. The loader walks the tree, every check
+runs, and a finding is kept when it belongs to a file at or under one of the
+paths. The run can only drop a finding a full run would also have reported.
+
+Four rules it has to follow:
+
+- **A path that names no rule file the loader read is a usage error**, naming
+  the path. Reporting nothing instead is indistinguishable from a clean run,
+  which is the worst answer a check command has. The policy file and the
+  sources file are refused by the same rule, since their findings belong to the
+  tree rather than to a path.
+- **A directory is a path too.** A team checking its own subtree is the same
+  request as an author checking one file, and a path matched as a prefix costs
+  nothing extra.
+- **A path outside the rules directory is a usage error.** There is nothing
+  under it the loader read, so it can only be a mistake.
+- **Paths and `--changed-since` together mean both**, the changed files among
+  the paths asked for. Each answers a different question and neither outranks
+  the other. In particular a `--changed-since` that failed and widened to
+  everything does not widen past the paths, because those were asked for
+  explicitly.
+
+What a narrowed run writes is what it already writes for `--changed-since`:
+`--markdown` carries the kept findings, and `--summary` carries the whole tree.
+The summary is a table of what the estate costs, which is read whole and is
+answered by the cluster rather than by the diff, so it is deliberately not
+narrowed by either filter.
+
 #### The action is composite, and owns nothing but the wiring
 
 7.1 chose a composite action in `action/`, consumed as

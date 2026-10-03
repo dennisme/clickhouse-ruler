@@ -106,8 +106,8 @@ func check(args []string, stdout, stderr io.Writer) int {
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
 	}
-	if fs.NArg() != 1 {
-		printf(stderr, "%s\n", "usage: ruler check [flags] <rules-dir>")
+	if fs.NArg() < 1 {
+		printf(stderr, "%s\n", "usage: ruler check [flags] <rules-dir> [path...]")
 		return exitUsage
 	}
 	dir := fs.Arg(0)
@@ -149,6 +149,16 @@ func check(args []string, stdout, stderr io.Writer) int {
 
 	set, ruleProblems := ruleset.Load(dir, sources, root)
 	problems = append(problems, ruleProblems...)
+
+	// Resolved before the online checks rather than beside the narrowing
+	// below, so a mistyped path costs nothing: it is the one filter that can
+	// fail, and failing after connecting to every cluster would charge an
+	// author for a typo (spec 10.3).
+	paths, err := lint.Paths(set.Files, fs.Args()[1:])
+	if err != nil {
+		printf(stderr, "%s\n", err)
+		return exitUsage
+	}
 
 	// Reading rows implies a connection, whether once or once per window: the
 	// checks that read them need the columns and types the metadata checks
@@ -193,6 +203,12 @@ func check(args []string, stdout, stderr io.Writer) int {
 		}
 		problems = filter.Keep(problems)
 	}
+
+	// Both filters apply when both were asked for, which is the changed files
+	// among the paths named. A ChangedSince that widened to everything does
+	// not widen past a path, because that path was asked for explicitly
+	// (spec 10.3).
+	problems = paths.Keep(problems)
 
 	// Written before the log format, so a workflow gets the annotations and the
 	// comment body from one run of the checks rather than two (spec 10.3).
