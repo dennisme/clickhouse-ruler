@@ -40,6 +40,22 @@ func parseLogLevel(s string) (slog.Level, error) {
 	return level, nil
 }
 
+// newLogHandler reads the --log-format flag. An unparseable format is refused
+// for the reason parseLogLevel refuses a level: a pipeline configured to read
+// JSON objects and handed text lines has no way to tell why. The two handlers
+// get the same options and the same stream, so the flag picks an encoding and
+// changes nothing about what is encoded.
+func newLogHandler(format string, w io.Writer, opts *slog.HandlerOptions) (slog.Handler, error) {
+	switch format {
+	case "text":
+		return slog.NewTextHandler(w, opts), nil
+	case "json":
+		return slog.NewJSONHandler(w, opts), nil
+	default:
+		return nil, fmt.Errorf("--log-format %q: want text or json", format)
+	}
+}
+
 func runRun(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -69,6 +85,7 @@ func runRun(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		"how many alerts may wait to be sent to Alertmanager before the oldest are dropped; the send runs off the "+
 			"evaluation goroutine, so this is what an Alertmanager outage fills instead of a group's interval")
 	logLevel := fs.String("log-level", "info", "log verbosity: debug, info, warn or error")
+	logFormat := fs.String("log-format", "text", "log encoding: text or json")
 	reloadEndpoint := fs.Bool("enable-reload-endpoint", false,
 		"serve POST /-/reload, which re-reads the same files SIGHUP does, for deployments where a signal cannot "+
 			"reach the process")
@@ -117,7 +134,12 @@ func runRun(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		printf(stderr, "%s\n", err)
 		return exitUsage
 	}
-	log := slog.New(slog.NewTextHandler(stdout, &slog.HandlerOptions{Level: level}))
+	handler, err := newLogHandler(*logFormat, stdout, &slog.HandlerOptions{Level: level})
+	if err != nil {
+		printf(stderr, "%s\n", err)
+		return exitUsage
+	}
+	log := slog.New(handler)
 
 	reg := prometheus.NewRegistry()
 	rn := &runner{

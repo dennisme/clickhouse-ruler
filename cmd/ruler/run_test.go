@@ -3,9 +3,12 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -131,6 +134,89 @@ func TestParseLogLevel(t *testing.T) {
 		}
 		if got != tc.want {
 			t.Errorf("parseLogLevel(%q) = %v, want %v", tc.in, got, tc.want)
+		}
+	}
+}
+
+// A log format nobody can parse is refused for the reason an unparseable
+// level is: a pipeline that expected JSON and got text lines has no way to
+// tell why.
+func TestRunRejectsAnUnknownLogFormat(t *testing.T) {
+	dir := fixture(t, bareRule, "")
+
+	code, stderr := runRunCmd(t, "run",
+		"--rules", filepath.Join(dir, "rules"),
+		"--sources", filepath.Join(dir, "sources.yaml"),
+		"--alertmanager", "http://127.0.0.1:9093",
+		"--log-format", "logfmt")
+
+	if code != exitUsage {
+		t.Errorf("exit = %d, want exitUsage\n%s", code, stderr)
+	}
+	for _, want := range []string{"--log-format", "text", "json"} {
+		if !strings.Contains(stderr, want) {
+			t.Errorf("expected the reason on stderr to name %q, got:\n%s", want, stderr)
+		}
+	}
+}
+
+// What --log-format=json buys is a line a log pipeline reads without parsing
+// it back out of text, so the assertion is that encoding/json takes it and
+// that the fields a caller passed survive under their own names.
+func TestNewLogHandlerEncodesJSON(t *testing.T) {
+	var out bytes.Buffer
+
+	h, err := newLogHandler("json", &out, &slog.HandlerOptions{Level: slog.LevelInfo})
+	if err != nil {
+		t.Fatalf("newLogHandler: %v", err)
+	}
+	slog.New(h).Info("ruler running", "rules", 3, "listen", ":9090")
+
+	var line map[string]any
+	if err := json.Unmarshal(out.Bytes(), &line); err != nil {
+		t.Fatalf("stdout is not JSON: %v\n%s", err, out.String())
+	}
+	for _, key := range []string{"time", "level", "msg", "rules", "listen"} {
+		if _, ok := line[key]; !ok {
+			t.Errorf("the JSON line is missing %q: %v", key, line)
+		}
+	}
+	if line["msg"] != "ruler running" {
+		t.Errorf("msg = %v, want the message unchanged", line["msg"])
+	}
+	if line["listen"] != ":9090" {
+		t.Errorf("listen = %v, want the field unchanged", line["listen"])
+	}
+}
+
+// text stays the default spelling, so the flag's other value has to leave
+// today's output exactly where it was.
+func TestNewLogHandlerKeepsTextLines(t *testing.T) {
+	var out bytes.Buffer
+
+	h, err := newLogHandler("text", &out, &slog.HandlerOptions{Level: slog.LevelInfo})
+	if err != nil {
+		t.Fatalf("newLogHandler: %v", err)
+	}
+	slog.New(h).Info("ruler running", "rules", 3, "listen", ":9090")
+
+	var want bytes.Buffer
+	slog.New(slog.NewTextHandler(&want, &slog.HandlerOptions{Level: slog.LevelInfo})).
+		Info("ruler running", "rules", 3, "listen", ":9090")
+
+	// The timestamp is the only part that differs between two writes.
+	got := regexp.MustCompile(`time=[^ ]+ `).ReplaceAllString(out.String(), "")
+	stripped := regexp.MustCompile(`time=[^ ]+ `).ReplaceAllString(want.String(), "")
+	if got != stripped {
+		t.Errorf("text output changed:\ngot  %q\nwant %q", got, stripped)
+	}
+}
+
+func TestNewLogHandlerRejectsAnUnknownFormat(t *testing.T) {
+	for _, format := range []string{"", "logfmt", "JSON "} {
+		h, err := newLogHandler(format, io.Discard, nil)
+		if err == nil {
+			t.Errorf("newLogHandler(%q) = %v, want an error", format, h)
 		}
 	}
 }
