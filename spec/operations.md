@@ -1361,7 +1361,7 @@ which is not a container at all for the reason it gives.
    layer cache keeps it off every other `compose-up`.
 
    Its rules are not the ones in `cmd/ruler/testdata`. That tree is a fixture
-   whose `sources.yaml` a test rewrites in place, and the address it names is
+   whose `ruler.yaml` a test rewrites in place, and the address it names is
    reachable from the host rather than from inside a container. The stack's own
    rules and sources are `deploy/stack`, mounted read only, addressing the
    ClickHouse nodes by service name.
@@ -1468,7 +1468,7 @@ end to end.
 `evaluation_delay` from 6.8 is what absorbs ingestion lag here. Set it to a few
 seconds in the test config rather than racing the collector.
 
-That is now two source files rather than one. `cmd/ruler/testdata/sources.yaml`
+That is now two source files rather than one. `cmd/ruler/testdata/ruler.yaml`
 pins `0s`, because a test that inserted its own rows has no lag to absorb and a
 delay there is dead waiting. The test reading what the collector wrote uses its
 own file with a delay set, since the collector's batch timeout and the insert
@@ -1641,7 +1641,7 @@ changed on disk, which is 10.4's job rather than the signal's.
 
 What a reload reaches is those three files and nothing else. Every flag on
 `ruler run` is read once, at startup, and a reload re-reads no part of the
-command line: the paths in `--rules`, `--sources` and `--config` included, so a
+command line: the paths in `--rules`, `--config` and `--policy` included, so a
 reload reads the same three paths it was started with, with whatever they now
 contain. That is deliberate rather than pending. A flag is the deployment's own
 text, held wherever the process is declared, and whoever can edit it can already
@@ -1926,10 +1926,10 @@ always said, and it is easy to read as "the action passes the changed paths
 to the checker". That is wrong, because the changed set of *files* is not the
 affected set of *rules*:
 
-- A change to `sources.yaml` can move a source's labels, so a rule in an
+- A change to `ruler.yaml` can move a source's labels, so a rule in an
   untouched file stops matching, starts matching, or matches a different
   cluster (6.10).
-- A change to `ruler.yaml`, or to a `checks:` block on a source, can raise a
+- A change to `policy.yaml`, or to a `checks:` block on a source, can raise a
   check, so a rule that warned yesterday blocks today (7.7).
 - A source's `database`, `table` or caps changing alters what the tier 1
   checks conclude about rules nobody edited (7.3).
@@ -1962,7 +1962,7 @@ How that lands as behaviour: `--changed-since <ref>` resolves the merge base
 of `HEAD` and `ref`, takes every path that differs between the merge base and
 the work tree, and adds the files git does not track yet, because a rule
 written and not yet committed is exactly the rule an author wants checked. The
-sources file and any `ruler.yaml` in that set widen the run to everything. A
+sources file and any `policy.yaml` in that set widen the run to everything. A
 base that will not resolve, a shallow checkout or a directory that is not a
 repository all widen it too, and say on stderr which of those happened.
 
@@ -1995,7 +1995,7 @@ want the one rule they are editing rather than every rule they have touched.
 **The directory stays required, and it is still the whole directory that is
 read.** Naming the file alone would be the obvious shape and it is the wrong
 one, because the directory decides two things the file cannot. The instance
-policy is the `ruler.yaml` beside it, and team policies are the `ruler.yaml`
+policy is the `policy.yaml` beside it, and team policies are the `policy.yaml`
 files between it and the rule, so the severity a finding carries is a fact
 about the tree (7.7). Duplicate alert names are a fact about the tree as well.
 A run rooted at the file's own directory answers both differently, which is how
@@ -2193,7 +2193,7 @@ reports blocks every pull request. In a rules repository there is nothing worth
 filtering anyway.
 
 **`CODEOWNERS` on the sources file**, which carries addresses, credentials and
-caps and which no rule author needs to read (6.2). Not on `ruler.yaml`: policy
+caps and which no rule author needs to read (6.2). Not on `policy.yaml`: policy
 merges as a maximum, severities take the strictest and allowlists intersect
 (7.7), so a team file cannot loosen what the instance set and a guard there
 would protect nothing.

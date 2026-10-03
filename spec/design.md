@@ -74,9 +74,23 @@ do not reference one by name: a source declares which rules it accepts, and
 they find each other by label (6.10). Borrowed from the ClickStack sources
 concept.
 
-Sources live in their own file, never inline in a rule file. Credentials, the
-evaluation delay and the cost caps are operator concerns, and a separate file
-is what lets CODEOWNERS stop rule authors editing them. See 6.6.
+Sources live in `ruler.yaml`, the operator's file, never inline in a rule file.
+Credentials, the evaluation delay and the cost caps are operator concerns, and a
+separate file is what lets CODEOWNERS stop rule authors editing them. See 6.6.
+
+`sources:` is one section of that file rather than the whole of it. The
+Alertmanagers the ruler delivers to are an operator concern on the same terms,
+held by the same people under the same review, so they sit beside it as
+`alertmanagers:` (6.5). The file is named after the tool rather than after
+either section, which is what `prometheus.yml` does for the same reason.
+
+`--config` names it and defaults to `ruler.yaml`; `--policy` names the policy
+file and defaults to `policy.yaml` beside the rules if present. `--sources` is
+gone and `--config` moves from the policy file to this one, which is the one
+hazard in the rename worth stating: a reader who remembers the old meaning will
+pass the policy file to `--config`. That fails rather than misleads, since a
+policy file carries no `sources:` and the load refuses, but it is the reason
+both flags are renamed together rather than one at a time.
 
 ```yaml
 sources:
@@ -913,12 +927,12 @@ This is memory only, as it is in Prometheus. Retention buys surviving a failed
 send, not surviving a restart: a ruler that stops mid-window forgets the resolve
 either way, and that is 12.2's problem rather than this one's.
 
-**How the ruler authenticates to Alertmanager is not yet designed, and today
-the answer is that it does not.** `--alertmanager` takes a URL and the client
-sends an unauthenticated POST. There is no field for a credential, a token or a
-certificate, so an Alertmanager behind basic auth, behind a bearer token, or
-requiring TLS to be reachable at all is not reachable by this ruler as
-configured.
+**How the ruler authenticates to Alertmanager is decided and not yet built.**
+Today `--alertmanager` takes a URL and the client sends an unauthenticated
+POST. There is no field for a credential, a token or a certificate, so an
+Alertmanager behind basic auth, behind a bearer token, or requiring TLS to be
+reachable at all is not reachable by this ruler as configured. What follows is
+the design, and the flag does not survive it.
 
 One thing does work, by accident and not by design. Go's `http.Client` turns
 userinfo in a request URL into an `Authorization: Basic` header, so
@@ -930,9 +944,9 @@ already settled this question for ClickHouse: a credential comes from a file or
 the environment, named in a file the operator owns, never from a flag (6.2,
 6.6).
 
-**What it should grow into is Prometheus' own `http_config`,** because an
-operator configuring an Alertmanager has written that block before and the names
-should mean the same thing here:
+**The block is Prometheus' own `http_config`,** because an operator
+configuring an Alertmanager has written that block before and the names mean
+the same thing here:
 
 - `basic_auth` with `username`, and `password_file` or `password`
 - `authorization` with `type` and `credentials_file`, which is the bearer token
@@ -942,10 +956,48 @@ should mean the same thing here:
 - `proxy_url`, for the estates that reach Alertmanager through one
 - `oauth2`, last and only if somebody asks
 
-Where that block lives is the open question and the reason this is a note rather
-than a decision. The sources file is per source and this is one target, the
-policy file is about checks, and a third file is a third file. A flag per
-credential is already ruled out above.
+**It lives in the operator's file, which is renamed for it.** `sources.yaml`
+becomes `ruler.yaml` and gains `alertmanagers:` beside `sources:`. The policy
+file's `checks:` block moves to `policy.yaml`, which frees the name. Nothing is
+migrated: there are no external users, so both files are renamed outright.
+
+The axis is ownership rather than direction. An Alertmanager is an operator
+concern in exactly the way a cluster is: a team that wants to bring its own
+needs the operator to agree, to hold its credential and to let the network
+reach it. That is the same conversation as adding a source, held by the same
+people, so it belongs in the same file under the same CODEOWNERS lane (6.6).
+
+The filename was the only thing that made this look like a mismatch. A source
+is something we pull from and an Alertmanager is something we push to, so
+`sources:` would be the wrong name for the new block, but it remains the right
+name for the old one. The file was named after its single section back when it
+had one, and adding a sink does not make the section wrong, it makes the
+filename wrong. Renaming the file is the smaller correction.
+
+A third file was the alternative and the precedent splits. Prometheus carries
+its Alertmanager block in `prometheus.yml`, the operator's own file, and names
+the rules elsewhere with `rule_files:`. `pint` goes further and keeps the
+servers it connects to in the same `.pint.hcl` as the check policy, which is
+both halves of this question in one file. vmalert is the dissent, with
+`-notifier.config`, and the reason is the part of it we refuse: that file exists
+to carry `consul_sd_configs` and `dns_sd_configs`, and no service discovery is
+a decision here rather than a phase (below). The thing that earns vmalert a
+third file is the thing this ruler does not have.
+
+**`--alertmanager` is removed, not kept beside the block.** A destination
+nameable two ways is the same defect as a credential nameable two ways, and
+`ruler run` already requires the operator's file, so the local case loses
+nothing: the block goes in the file that was going to be there anyway.
+
+**The block is a list of sets, and exactly one set is supported.** Each set
+carries `urls:` and its own auth, which is the shape that lets a second set be
+added later without rewriting the first. Nothing selects between sets, because
+selecting would be routing and that is not ours (below).
+
+Three check names carry its refusals, joining 7.6 when they are built:
+`alertmanager/url` for a URL that will not parse or carries userinfo,
+`alertmanager/auth` for the credential keys, reusing the refusals `source/password`
+already makes, and `alertmanager/tls` for TLS material, reusing `source/tls`.
 
 **When it lands, userinfo in `--alertmanager` stops being supported.** Not
 deprecated, refused: `parseAlertmanagerURL` rejects a URL carrying userinfo and
@@ -1285,6 +1337,30 @@ alert labels on the way out would make the rule file stop describing what gets
 delivered, and Alertmanager owns routing (below). A label is for routing and
 nothing else (6.1), which is a property of what the author wrote, not of what
 the sender edited.
+
+**If a second Alertmanager set is ever wanted, it selects on source labels and
+never on an alert's.** That is the line between the two, and it is worth
+drawing before the mechanism exists, because the mechanism will not draw it.
+Source labels are the operator's own property, written in the operator's file,
+so "payments' alerts go to the Alertmanager payments operates" is the same
+argument that already gives each source its own ClickHouse user (6.6). An
+alert's labels belong to the author, so selecting on them is a route tree in
+the ruler, which is the `alert_relabel_configs` refusal above wearing a
+different hat.
+
+Selecting on source labels needs no new mechanism: `File.Match` already does it
+for rules (6.10). What it does need is a check, because a source matching no
+set fires and pages nobody. `alertmanager/match` reports it at `error`, which
+blocks a merge, loads, and raises `clickhouse_ruler_problem` (11). It does not
+refuse a start: refusing would take every tenant's alerting down over one
+tenant's labelling mistake, and a default set to fall through to is worse again,
+because delivering to the wrong Alertmanager is harder to notice than
+delivering to none.
+
+What an absent selector means is deliberately not decided, because no selector
+key exists. For rules an empty selector matches nothing, on purpose, so that
+omitting it cannot hand a rule the whole estate (6.10), and whether a set
+inherits that convention is a question for whoever needs the second set.
 
 Alertmanager owns grouping, silences, inhibition, and routing. The ruler does
 not.
@@ -1835,7 +1911,7 @@ wants. A source matches when every term in the selector is present and equal
 in its labels.
 
 ```yaml
-# sources.yaml, operator owned
+# ruler.yaml, operator owned
 sources:
   - name: payments_main
     username: ruler_payments
