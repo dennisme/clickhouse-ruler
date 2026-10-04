@@ -1006,9 +1006,17 @@ exempt:
 
 Four rules keep it from becoming the escape hatch 7.9 refuses:
 
-- Only a source can carry one. A rule file cannot, so the author who is
-  blocked is never the person who unblocks themselves, and the file that
-  grants it is operator-owned through CODEOWNERS.
+- Only the operator's file can carry one, on a source or on an Alertmanager
+  set (6.5). A rule file cannot, so the author who is blocked is never the
+  person who unblocks themselves, and the file that grants it is
+  operator-owned through CODEOWNERS.
+
+  Both blocks report a malformed or expired exemption under `source/exemption`
+  rather than growing a second name per block. The check is about the
+  mechanism rather than about what granted it, and one name means one page to
+  read and one refusal policy to keep true; what it costs is a check named
+  `source/*` pointing at the `alertmanagers:` block, which the finding's own
+  line number resolves.
 - A fixed check cannot be exempted, the same refusal a `checks:` block gives.
   Nothing that blocks a rule from working can be dropped by anybody.
 - `reason` and `until` are both required. An exemption with no expiry is a
@@ -1021,9 +1029,13 @@ Four rules keep it from becoming the escape hatch 7.9 refuses:
   finding depend on where it was evaluated rather than on what was written.
   An operator who needs a particular local moment writes the RFC3339 form
   with its offset, `2026-12-01T09:00:00+11:00`.
-- An expired exemption is itself an error, naming the source, the check and
-  the date. It fails CI and refuses to start on a day somebody chose, and
-  renewing it means stating the reason again in front of a reviewer.
+- An expired exemption is itself an error, naming what granted it, the check
+  and the date. It fails CI on a day somebody chose, loads, and raises
+  `clickhouse_ruler_problem`, and renewing it means stating the reason again
+  in front of a reviewer. It does not refuse a start: an expiry that bricked
+  the next restart would arrive as a pod that will not come up at three in the
+  morning, over a calendar entry, which is the argument 6.5 makes for the
+  Alertmanager side of the same check.
 
 `ruler check --explain` prints every active exemption under the source that
 granted it, because a check that stopped reporting otherwise looks exactly
