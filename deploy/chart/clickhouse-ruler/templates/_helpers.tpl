@@ -69,6 +69,14 @@ several sources sharing one Secret share one mount.
 {{- end -}}
 
 {{/*
+Directory the Alertmanager credential Secret is mounted at. One Secret, because
+one set of Alertmanagers shares one credential (spec 6.5).
+*/}}
+{{- define "clickhouse-ruler.alertmanagerSecretDir" -}}
+{{ include "clickhouse-ruler.configDir" . }}/secrets/alertmanager
+{{- end -}}
+
+{{/*
 Names of every Secret a templated source reads its password from, sorted and
 deduplicated, as a JSON list.
 */}}
@@ -138,6 +146,15 @@ which allows no source key the operator's file does not have.
 {{- end -}}
 {{- if and (not .Values.sources) (not .Values.sourcesSecret.name) -}}
 {{- fail "no sources: set sources, or sourcesSecret.name to a Secret holding the whole operator's file" -}}
+{{- end -}}
+{{- if and .Values.sources (not .Values.alertmanagerURLs) -}}
+{{- fail "alertmanagerURLs is required, one entry per member of the Alertmanager cluster" -}}
+{{- end -}}
+{{- if and .Values.sourcesSecret.name .Values.alertmanagerURLs -}}
+{{- fail "alertmanagerURLs cannot be set beside sourcesSecret.name: that Secret is the whole operator's file, so its alertmanagers block comes from the Secret too" -}}
+{{- end -}}
+{{- if and .Values.alertmanagerAuth .Values.alertmanagerAuth.basicAuth .Values.alertmanagerAuth.authorization -}}
+{{- fail "set either alertmanagerAuth.basicAuth or alertmanagerAuth.authorization, not both: they write the same Authorization header" -}}
 {{- end -}}
 {{- end -}}
 

@@ -99,6 +99,52 @@ services:
       timeout: 2s
       retries: 30
 
+  # A second Alertmanager, behind basic auth, so the ruler's credential is
+  # proven against a server that actually demands one rather than against a
+  # header a test read back off its own request (spec 6.5).
+  #
+  # Beside the plain one rather than replacing it. Most of the suite posts
+  # anonymously and has to keep working, and an authenticated server that
+  # accepted an anonymous request would prove nothing, so both paths stay
+  # covered.
+  #
+  # It routes to the same sink on the host. A test tells its deliveries apart
+  # by the unique label every run carries, which is what group_by: ['...']
+  # already relies on.
+  alertmanager-auth:
+    image: prom/alertmanager:v0.28.1
+    container_name: ruler-alertmanager-auth
+    ports:
+      - "127.0.0.1:9094:9093"
+    volumes:
+      - ./deploy/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - ./deploy/alertmanager/web-auth.yml:/etc/alertmanager/web-auth.yml:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+      - --web.config.file=/etc/alertmanager/web-auth.yml
+      - --storage.path=/alertmanager
+      - --log.level=warn
+    # Authenticated, because /-/ready is behind the same basic auth as
+    # everything else: an anonymous probe would report a healthy server as
+    # unhealthy forever, which is the same trap the ruler's own probe had to
+    # avoid (spec 8.2).
+    #
+    # The header rather than --user, because the image carries BusyBox wget and
+    # that has no such option. The value is `ruler:ruler-test-password` base64
+    # encoded, which is what basic auth is on the wire.
+    healthcheck:
+      test:
+        - CMD
+        - wget
+        - -qO-
+        - "--header=Authorization: Basic cnVsZXI6cnVsZXItdGVzdC1wYXNzd29yZA=="
+        - http://localhost:9093/-/ready
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
   # Writes the rows the rules read, so a rule is proven against real collector
   # output rather than against rows a test inserted (spec 9.1 item 2).
   #
@@ -136,7 +182,6 @@ services:
       - run
       - --rules=/etc/ruler/rules
       - --config=/etc/ruler/ruler.yaml
-      - --alertmanager=http://alertmanager:9093
       - --listen=:9090
       - --log-level=warn
     depends_on:

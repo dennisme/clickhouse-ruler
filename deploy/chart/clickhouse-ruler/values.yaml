@@ -32,8 +32,31 @@ fullnameOverride: ""
 # Alertmanager cluster to deliver to, one entry per member. Every alert is
 # posted to every entry, because members gossip and deduplicate, so a balancer
 # in front of them is the one topology to avoid. See docs/running.md.
-# Required, at least one entry.
+# Required when `sources` is set. With `sourcesSecret.name` the whole
+# operator's file comes from that Secret, so its alertmanagers block does too
+# and this must be left empty.
 alertmanagerURLs: []
+
+# Credential the ruler authenticates to Alertmanager with. Empty for an
+# Alertmanager that is not behind auth, which is the common in-cluster case.
+#
+# The secret itself is never written here. secretName is a Secret this chart
+# mounts, and the key inside it holds the bytes, which is the posture
+# sources.passwordSecret already takes. basicAuth and authorization write the
+# same Authorization header, so set one.
+#
+# Prefer this over a password in the URL: userinfo in an Alertmanager URL is
+# refused, because it would reach the pod spec and the rendered manifest.
+#
+# alertmanagerAuth:
+#   secretName: ruler-alertmanager
+#   basicAuth:
+#     username: ruler
+#     key: password
+#   authorization:
+#     type: Bearer
+#     key: credentials
+alertmanagerAuth: {}
 
 ruler:
   # Port the /metrics, /-/healthy, /-/ready and /-/reload surface listens on.

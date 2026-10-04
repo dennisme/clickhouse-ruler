@@ -3,6 +3,19 @@
 Five ways to run this, all the same binary with a different `ruler.yaml`.
 Which one you want depends on who owns the clusters and who writes the rules.
 
+Every one of them carries the same two sections in that file: `sources`, which
+is the clusters it reads, and `alertmanagers`, which is where its alerts go.
+Only the first differs between the topologies below, because every ruler here
+delivers to one Alertmanager cluster and the question of whose Alertmanager it
+is belongs to whoever runs it. [Running it](running.md) has the block and its
+credential.
+
+```yaml
+# the half that is the same in all five
+alertmanagers:
+  - urls: [http://alertmanager-0:9093, http://alertmanager-1:9093]
+```
+
 ## How a rule reaches the ruler
 
 The topologies below all assume the rules are on a disk the ruler can read and
@@ -182,6 +195,12 @@ so both rulers arrive at the same fingerprint and Alertmanager deduplicates
 them. No leader election, no shared state.
 
 Three things to know before you run more than one.
+
+**Every replica delivers to the same Alertmanager cluster.** That is what
+makes the duplication safe: deduplication happens in Alertmanager, so two
+rulers posting the same fingerprint to the same cluster is one notification,
+while pointing them at different Alertmanagers is two. Give each replica the
+same `alertmanagers` block.
 
 **Replicas need identical source labels, and a replica label breaks
 deduplication.** Source `labels` land on alerts, so two rulers meant to be

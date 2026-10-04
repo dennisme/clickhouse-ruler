@@ -16,13 +16,14 @@ const DocsBase = "https://dennisme.github.io/clickhouse-ruler/checks/"
 // the same for every check in a namespace, and repeating it 38 times produces
 // documentation nobody reads and nobody keeps current.
 var pages = map[string]string{
-	"rule":        "rule.md",
-	"labels":      "rule.md",
-	"annotations": "rule.md",
-	"source":      "source.md",
-	"policy":      "policy.md",
-	"yaml":        "policy.md",
-	"ruleset":     "policy.md",
+	"rule":         "rule.md",
+	"labels":       "rule.md",
+	"annotations":  "rule.md",
+	"source":       "source.md",
+	"alertmanager": "alertmanager.md",
+	"policy":       "policy.md",
+	"yaml":         "policy.md",
+	"ruleset":      "policy.md",
 }
 
 // DocsPage returns the file a check is documented in, empty for a name the

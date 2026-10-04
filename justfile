@@ -11,6 +11,11 @@ clickhouse_addr := env("RULER_CLICKHOUSE_ADDR", "127.0.0.1:9000")
 clickhouse_addr_2 := env("RULER_CLICKHOUSE_ADDR_2", "127.0.0.1:9001")
 alertmanager_url := env("RULER_ALERTMANAGER_URL", "http://127.0.0.1:9093")
 
+# The second Alertmanager from compose.yaml, behind basic auth. Only the
+# credential test reads it, and it is a separate server rather than the one
+# above because the anonymous path has to keep being covered too (spec 6.5).
+alertmanager_auth_url := env("RULER_ALERTMANAGER_AUTH_URL", "http://127.0.0.1:9094")
+
 # The Prometheus scraping the ruler container, also from compose.yaml. Only the
 # dashboard tests read it, and they read it rather than Grafana: the datasource
 # is what knows whether an expression matches anything (spec 9.8).
@@ -58,6 +63,7 @@ integration:
     RULER_CLICKHOUSE_ADDR="{{clickhouse_addr}}" \
     RULER_CLICKHOUSE_ADDR_2="{{clickhouse_addr_2}}" \
     RULER_ALERTMANAGER_URL="{{alertmanager_url}}" \
+    RULER_ALERTMANAGER_AUTH_URL="{{alertmanager_auth_url}}" \
     RULER_PROMETHEUS_URL="{{prometheus_url}}" \
     RULER_OTLP_HTTP_URL="{{otlp_http_url}}" \
         env -u GOROOT GOTOOLCHAIN=auto go test -tags=integration -count=1 -p 1 ./...
@@ -96,6 +102,7 @@ coverage-integration:
     RULER_CLICKHOUSE_ADDR="{{clickhouse_addr}}" \
     RULER_CLICKHOUSE_ADDR_2="{{clickhouse_addr_2}}" \
     RULER_ALERTMANAGER_URL="{{alertmanager_url}}" \
+    RULER_ALERTMANAGER_AUTH_URL="{{alertmanager_auth_url}}" \
     RULER_PROMETHEUS_URL="{{prometheus_url}}" \
     RULER_OTLP_HTTP_URL="{{otlp_http_url}}" \
         env -u GOROOT GOTOOLCHAIN=auto go test -tags=integration -count=1 -p 1 \

@@ -18,86 +18,51 @@ import (
 
 	"github.com/dennisme/clickhouse-ruler/internal/notify"
 	"github.com/dennisme/clickhouse-ruler/internal/scheduler"
+	"github.com/dennisme/clickhouse-ruler/internal/source"
 )
 
-// A URL with no scheme is accepted by the flag package, builds a request path
-// of localhost:9093/api/v2/alerts, and fails inside net/http at the first
-// send, which may be the first page this ruler was ever asked to deliver.
-// Parsing costs nothing and needs no network, so it happens at startup (spec
-// 8.1).
-func TestParseAlertmanagerURL(t *testing.T) {
-	good := []string{
-		"http://localhost:9093",
-		"https://alertmanager.example.com",
-		"http://alertmanager:9093/alerts",
-		"http://127.0.0.1:9093/",
-	}
-	for _, in := range good {
-		if _, err := parseAlertmanagerURL(in); err != nil {
-			t.Errorf("parseAlertmanagerURL(%q) = %v, want it accepted", in, err)
-		}
-	}
-
-	bad := []string{
-		"localhost:9093",  // no scheme: url.Parse reads localhost as one
-		"alertmanager",    // a host on its own is not a URL
-		"ftp://host:9093", // a scheme net/http will not speak
-		"http://",         // no host to send to
-		"://localhost",    // not parseable at all
-	}
-	for _, in := range bad {
-		if _, err := parseAlertmanagerURL(in); err == nil {
-			t.Errorf("parseAlertmanagerURL(%q) = nil, want a refusal", in)
-		}
-	}
-}
-
-// The refusal is read by whoever typed the flag, so it has to name the flag and
-// say what a URL looks like rather than only that this one is wrong.
-func TestParseAlertmanagerURLSaysWhatItWanted(t *testing.T) {
-	_, err := parseAlertmanagerURL("localhost:9093")
-	if err == nil {
-		t.Fatal("want a refusal")
-	}
-	for _, want := range []string{"--alertmanager", "localhost:9093", "http://"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Errorf("error %q does not mention %q", err, want)
-		}
-	}
-}
-
-// A URL may carry userinfo, and the refusal is printed. The password does not
-// belong in it, for the reason it does not belong in a log line (spec 8.4).
-func TestParseAlertmanagerURLKeepsThePasswordOutOfTheRefusal(t *testing.T) {
-	for _, in := range []string{"ftp://user:hunter2@host:9093", "://user:hunter2@host"} {
-		_, err := parseAlertmanagerURL(in)
-		if err == nil {
-			t.Fatalf("parseAlertmanagerURL(%q) = nil, want a refusal", in)
-		}
-		if strings.Contains(err.Error(), "hunter2") {
-			t.Errorf("refusal carries the password: %v", err)
-		}
-	}
-}
-
 // An unparseable --log-level exits 2 rather than defaulting, and an
-// unparseable --alertmanager is wrong in the same way: silence an operator
-// cannot account for (spec 8.1).
+// Alertmanager URL that no send could succeed against is wrong in the same
+// way: silence an operator cannot account for (spec 8.1).
+//
+// The parsing itself is internal/source's, tested there against twelve
+// refusals. What this asserts is that a refusal reaches the exit code, because
+// a finding nothing acts on is a ruler that starts with nowhere to send.
 func TestRunRejectsAMalformedAlertmanagerURL(t *testing.T) {
-	dir := fixture(t, bareRule, "")
-
 	for _, in := range []string{"localhost:9093", "ftp://localhost:9093", "http://"} {
+		dir := fixture(t, bareRule, "")
+		operatorFile(t, dir, alertmanagerURLs(in))
+
 		code, stderr := runRunCmd(t, "run",
 			"--rules", filepath.Join(dir, "rules"),
-			"--config", filepath.Join(dir, "ruler.yaml"),
-			"--alertmanager", in)
+			"--config", filepath.Join(dir, "ruler.yaml"))
 
-		if code != exitUsage {
-			t.Errorf("--alertmanager %s: exit = %d, want exitUsage\n%s", in, code, stderr)
+		if code == exitOK {
+			t.Errorf("urls [%s]: exit = %d, want a refusal\n%s", in, code, stderr)
 		}
-		if !strings.Contains(stderr, "--alertmanager") {
-			t.Errorf("--alertmanager %s: expected the reason on stderr, got:\n%s", in, stderr)
+		if !strings.Contains(stderr, "alertmanager") {
+			t.Errorf("urls [%s]: expected the reason on stderr, got:\n%s", in, stderr)
 		}
+	}
+}
+
+// A ruler with nowhere to send refuses to start, which is what the required
+// --alertmanager flag used to say. Not a finding: the file was read and
+// nothing in it is malformed, there is simply no job this process could do
+// (spec 6.5).
+func TestRunRefusesWithNoAlertmanager(t *testing.T) {
+	dir := fixture(t, bareRule, "")
+	operatorFile(t, dir, alertmanagerURLs())
+
+	code, stderr := runRunCmd(t, "run",
+		"--rules", filepath.Join(dir, "rules"),
+		"--config", filepath.Join(dir, "ruler.yaml"))
+
+	if code != exitUsage {
+		t.Errorf("exit = %d, want exitUsage with no alertmanagers block\n%s", code, stderr)
+	}
+	if !strings.Contains(stderr, "names no alertmanager") {
+		t.Errorf("expected the reason on stderr, got:\n%s", stderr)
 	}
 }
 
@@ -279,50 +244,22 @@ func TestAlertmanagerProbeAsksTheConfiguredURL(t *testing.T) {
 	}
 }
 
-// Every value of a repeated flag goes through the same parsing, because the
-// second address being a typo is no less silent than the first one being one.
-func TestParseAlertmanagerURLsChecksEveryValue(t *testing.T) {
-	urls, err := parseAlertmanagerURLs([]string{"http://am-1:9093", "https://am-2:9093/alerts"})
-	if err != nil {
-		t.Fatalf("parseAlertmanagerURLs: %v", err)
-	}
-	if len(urls) != 2 {
-		t.Fatalf("got %d URLs, want 2", len(urls))
-	}
-
-	if _, err := parseAlertmanagerURLs([]string{"http://am-1:9093", "am-2:9093"}); err == nil {
-		t.Error("parseAlertmanagerURLs accepted a malformed second value, want a refusal")
-	}
-}
-
 // The same address twice is one series on everything labelled `alertmanager`,
-// so a failure counter would count two endpoints as one. Deduplicating quietly
-// leaves the flag list describing something the ruler is not doing (spec 6.5).
-func TestParseAlertmanagerURLsRefusesADuplicate(t *testing.T) {
-	_, err := parseAlertmanagerURLs([]string{"http://am-1:9093", "http://am-1:9093/"})
-	if err == nil {
-		t.Fatal("parseAlertmanagerURLs accepted the same address twice, want a refusal")
-	}
-	for _, want := range []string{"--alertmanager", "am-1:9093"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Errorf("error %q does not mention %q", err, want)
-		}
-	}
-}
-
+// so a failure counter would count two endpoints as one. The refusal itself is
+// internal/source's; what this asserts is that it reaches the exit code
+// (spec 6.5).
 func TestRunRejectsADuplicateAlertmanagerURL(t *testing.T) {
 	dir := fixture(t, bareRule, "")
+	operatorFile(t, dir, alertmanagerURLs("http://localhost:9093", "http://localhost:9093/"))
 
 	code, stderr := runRunCmd(t, "run",
 		"--rules", filepath.Join(dir, "rules"),
-		"--config", filepath.Join(dir, "ruler.yaml"),
-		"--alertmanager", "http://localhost:9093",
-		"--alertmanager", "http://localhost:9093")
+		"--config", filepath.Join(dir, "ruler.yaml"))
 
-	if code != exitUsage {
-		t.Errorf("exit = %d, want exitUsage\n%s", code, stderr)
+	if code == exitOK {
+		t.Errorf("exit = %d, want a refusal\n%s", code, stderr)
 	}
-	if !strings.Contains(stderr, "--alertmanager") {
+	if !strings.Contains(stderr, "given twice") {
 		t.Errorf("expected the reason on stderr, got:\n%s", stderr)
 	}
 }
@@ -339,13 +276,10 @@ func TestEveryAlertmanagerReportsItsOwnProbeGauge(t *testing.T) {
 	}))
 	defer down.Close()
 
-	urls, err := parseAlertmanagerURLs([]string{answering.URL, down.URL})
-	if err != nil {
-		t.Fatalf("parseAlertmanagerURLs: %v", err)
-	}
+	set := source.Alertmanager{URLs: []string{answering.URL, down.URL}}
 
 	metrics := scheduler.NewMetrics(prometheus.NewRegistry())
-	probes := newAlertmanagerProbes(alertmanagerEndpoints(urls), metrics, slog.New(slog.DiscardHandler))
+	probes := newAlertmanagerProbes(alertmanagerEndpoints(set), metrics, slog.New(slog.DiscardHandler))
 	if len(probes) != 2 {
 		t.Fatalf("got %d probes, want one per endpoint", len(probes))
 	}

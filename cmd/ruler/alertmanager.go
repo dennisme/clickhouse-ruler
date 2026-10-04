@@ -2,15 +2,12 @@ package main
 
 import (
 	"context"
-	"errors"
-	"fmt"
 	"log/slog"
-	"net/url"
-	"strings"
 	"time"
 
 	"github.com/dennisme/clickhouse-ruler/internal/notify"
 	"github.com/dennisme/clickhouse-ruler/internal/scheduler"
+	"github.com/dennisme/clickhouse-ruler/internal/source"
 )
 
 // How often each configured Alertmanager is asked whether it answers, and how
@@ -26,104 +23,63 @@ const (
 	probeTimeout  = 5 * time.Second
 )
 
-// parseAlertmanagerURL reads one value of the --alertmanager flag.
-//
-// An unparseable URL is refused at startup rather than handed to the notify
-// client, which is the precedent parseLogLevel sets and for the same reason:
-// `--alertmanager localhost:9093` builds localhost:9093/api/v2/alerts, and
-// net/http refuses that at the first send, which may be hours later and is the
-// first page the ruler was ever asked to deliver (spec 8.1).
-//
-// Three things make it malformed, and each of them is a URL no send could ever
-// succeed against: no scheme, a scheme net/http will not speak, or no host to
-// send to. Reachability is not one of them, because that needs the network and
-// changes while the ruler runs.
-func parseAlertmanagerURL(s string) (*url.URL, error) {
-	u, err := url.Parse(s)
-	if err != nil {
-		// The error from url.Parse prints the value it was given, userinfo
-		// and all, so only its reason is repeated here (spec 8.4).
-		var uerr *url.Error
-		if errors.As(err, &uerr) {
-			err = uerr.Err
-		}
-		return nil, fmt.Errorf("--alertmanager is not a URL: %w, want one like http://localhost:9093", err)
-	}
-
-	if u.Scheme != "http" && u.Scheme != "https" {
-		return nil, fmt.Errorf("--alertmanager %q: want a http:// or https:// URL, e.g. http://localhost:9093", u.Redacted())
-	}
-	if u.Host == "" {
-		return nil, fmt.Errorf("--alertmanager %q: no host to send alerts to, want one like http://localhost:9093", u.Redacted())
-	}
-	return u, nil
-}
-
-// alertmanagerFlag collects a repeated --alertmanager, in the order it was
-// given, because the flag package keeps only the last value of a plain string
-// flag.
-type alertmanagerFlag []string
-
-func (f *alertmanagerFlag) String() string { return strings.Join(*f, ",") }
-
-func (f *alertmanagerFlag) Set(v string) error {
-	*f = append(*f, v)
-	return nil
-}
-
-// parseAlertmanagerURLs reads every value of the repeated --alertmanager.
-//
-// Every value goes through the same parsing, because the second address being a
-// typo is no less silent than the first one being one.
-//
-// The same address twice is refused. It is the same page posted twice to one
-// member, which Alertmanager deduplicates, so nothing breaks and nothing is
-// gained; what it does break is the metrics, because the `alertmanager` label is
-// the redacted URL and two identical values are one series, so a failure counter
-// would report two endpoints as one. Deduplicating quietly would leave an
-// operator with a flag list that does not describe what the ruler is doing
-// (spec 6.5).
-func parseAlertmanagerURLs(values []string) ([]*url.URL, error) {
-	urls := make([]*url.URL, 0, len(values))
-	seen := make(map[string]struct{}, len(values))
-
-	for _, v := range values {
-		u, err := parseAlertmanagerURL(v)
-		if err != nil {
-			return nil, err
-		}
-
-		// A trailing slash is the same endpoint: notify.Client trims one
-		// before it builds a request path.
-		key := strings.TrimSuffix(u.String(), "/")
-		if _, dup := seen[key]; dup {
-			return nil, fmt.Errorf("--alertmanager %q: given twice, list each member of the cluster once",
-				u.Redacted())
-		}
-		seen[key] = struct{}{}
-
-		urls = append(urls, u)
-	}
-	return urls, nil
-}
-
 // alertmanagerEndpoint is one member of the cluster alerts go to: the client
-// that posts and probes, and the redacted spelling that labels its series and
-// names it in a log line (spec 8.4).
+// that posts and probes, and the URL that labels its series and names it in a
+// log line.
+//
+// The URL itself rather than a redacted spelling of it. A URL carrying
+// userinfo is refused when the operator's file is read, so no URL that reaches
+// here can hold a secret and there is nothing left to redact (spec 6.5, 8.4).
 type alertmanagerEndpoint struct {
 	url    string
 	client *notify.Client
 }
 
-func alertmanagerEndpoints(urls []*url.URL) []alertmanagerEndpoint {
-	endpoints := make([]alertmanagerEndpoint, 0, len(urls))
-	for _, u := range urls {
-		endpoints = append(endpoints, alertmanagerEndpoint{
-			url:    u.Redacted(),
-			client: notify.NewClient(u.String()),
-		})
+// alertmanagerEndpoints builds one client per member of the set.
+//
+// The credential is resolved once here and set on each client, because every
+// member of one cluster shares it: the set is the cluster, and its auth is a
+// property of the cluster rather than of an address (spec 6.5).
+func alertmanagerEndpoints(set source.Alertmanager) []alertmanagerEndpoint {
+	credential, _ := set.Credential()
+
+	endpoints := make([]alertmanagerEndpoint, 0, len(set.URLs))
+	for _, u := range set.URLs {
+		client := notify.NewClient(u)
+		client.SetAuthorization(credential)
+		endpoints = append(endpoints, alertmanagerEndpoint{url: u, client: client})
 	}
 	return endpoints
+}
+
+// rotateCredential applies a freshly read credential to every endpoint.
+//
+// What a reload does to this block, and the whole of it. The URLs are topology
+// and are read once at startup, because each one owns a probe goroutine and a
+// gauge series whose lifecycle a changing list would have to manage; the
+// credential is a secret and rotates in place, which is the same split 6.2
+// draws between a CA that needs a reload and a client certificate that does
+// not (spec 6.5).
+func rotateCredential(endpoints []alertmanagerEndpoint, set source.Alertmanager) {
+	credential, _ := set.Credential()
+	for _, e := range endpoints {
+		e.client.SetAuthorization(credential)
+	}
+}
+
+// sameAlertmanagerURLs reports whether a freshly read set names the endpoints
+// already running, so a reload can say that a changed list needs a restart
+// rather than appearing to apply one.
+func sameAlertmanagerURLs(endpoints []alertmanagerEndpoint, set source.Alertmanager) bool {
+	if len(endpoints) != len(set.URLs) {
+		return false
+	}
+	for i, e := range endpoints {
+		if e.url != set.URLs[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // sendEndpoints is what a send is fanned out across: every endpoint, each

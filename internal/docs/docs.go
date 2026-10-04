@@ -23,7 +23,7 @@ import (
 
 // Pages are the files the checks are documented in, in the order the index
 // lists them.
-var Pages = []string{"rule.md", "source.md", "policy.md"}
+var Pages = []string{"rule.md", "source.md", "alertmanager.md", "policy.md"}
 
 // Markers fence the generated region. A reader who edits inside them loses
 // the edit on the next generate, so the opening one says so.

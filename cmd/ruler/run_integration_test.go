@@ -145,7 +145,7 @@ func TestRunEndToEndFiringAlertReachesAlertmanager(t *testing.T) {
 	seed(t, chAddr, serviceName)
 
 	configPath := filepath.Join("testdata", "ruler.yaml")
-	rewritten := rewriteAddress(t, configPath, chAddr)
+	rewritten := rewriteAddress(t, configPath, chAddr, amURL)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -156,7 +156,6 @@ func TestRunEndToEndFiringAlertReachesAlertmanager(t *testing.T) {
 		runDone <- runRun(ctx, []string{
 			"--rules", filepath.Join("testdata", "rules"),
 			"--config", rewritten,
-			"--alertmanager", amURL,
 			"--listen", ":0",
 		}, &stdout, &stderr)
 	}()
@@ -217,10 +216,14 @@ func TestRunEndToEndFiringAlertReachesAlertmanager(t *testing.T) {
 	}
 }
 
-// rewriteAddress copies the sources fixture into the test's temp directory
-// with its address overridden, the same trick the check tests use, so the
-// checked-in fixture stays reviewable without a live cluster address in it.
-func rewriteAddress(t *testing.T, path, addr string) string {
+// rewriteAddress copies the operator's file into the test's temp directory
+// with the cluster address and the Alertmanager URL overridden, the same trick
+// the check tests use, so the checked-in fixture stays reviewable without live
+// addresses in it.
+//
+// Both are rewritten here because both are in that file now: where alerts go
+// moved off a flag and into the operator's file (spec 6.5).
+func rewriteAddress(t *testing.T, path, addr string, amURL ...string) string {
 	t.Helper()
 
 	data, err := os.ReadFile(path)
@@ -228,8 +231,13 @@ func rewriteAddress(t *testing.T, path, addr string) string {
 		t.Fatalf("reading %s: %v", path, err)
 	}
 
-	out := filepath.Join(t.TempDir(), "ruler.yaml")
 	rewritten := bytes.ReplaceAll(data, []byte("address: 127.0.0.1:9000"), []byte("address: "+addr))
+	if len(amURL) > 0 && amURL[0] != "" {
+		rewritten = bytes.ReplaceAll(rewritten,
+			[]byte("urls: [http://127.0.0.1:9093]"), []byte("urls: ["+amURL[0]+"]"))
+	}
+
+	out := filepath.Join(t.TempDir(), "ruler.yaml")
 	if err := os.WriteFile(out, rewritten, 0o600); err != nil {
 		t.Fatalf("writing %s: %v", out, err)
 	}
@@ -268,7 +276,7 @@ func TestRunReloadsOnSighup(t *testing.T) {
 	// A copy of the rules tree, because this test adds a file to it and the
 	// checked-in fixture is shared with every other test in this package.
 	rulesDir := copyTree(t, filepath.Join("testdata", "rules"))
-	rewritten := rewriteAddress(t, filepath.Join("testdata", "ruler.yaml"), chAddr)
+	rewritten := rewriteAddress(t, filepath.Join("testdata", "ruler.yaml"), chAddr, amURL)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -279,7 +287,6 @@ func TestRunReloadsOnSighup(t *testing.T) {
 		runDone <- runRun(ctx, []string{
 			"--rules", rulesDir,
 			"--config", rewritten,
-			"--alertmanager", amURL,
 			"--listen", ":0",
 		}, &stdout, &stderr)
 	}()

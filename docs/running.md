@@ -3,10 +3,23 @@
 Every flag the binary takes, and everything it exposes once it is up.
 
 ```bash
-ruler run --rules ./rules --config ./rules/ruler.yaml \
-  --alertmanager http://alertmanager-0:9093 \
-  --alertmanager http://alertmanager-1:9093 \
-  --alertmanager http://alertmanager-2:9093
+ruler run --rules ./rules --config ./rules/ruler.yaml
+```
+
+Where alerts go is a section of the operator's file rather than a flag,
+because the credential that reaches it has to come from a file and never from
+argv:
+
+```yaml
+# ruler.yaml
+alertmanagers:
+  - urls:
+      - http://alertmanager-0:9093
+      - http://alertmanager-1:9093
+      - http://alertmanager-2:9093
+    basic_auth:
+      username: ruler
+      password_file: /run/secrets/ruler/alertmanager
 ```
 
 A file that is not valid YAML refuses to start, and so does a rules directory
@@ -16,8 +29,8 @@ merge, because a ruler that will not start pages nobody. A source failing the
 user contract at error severity is refused on its own: its rules stop
 evaluating and every other source carries on.
 
-**`--alertmanager` is repeated once per member of one Alertmanager cluster, and
-there is no balancer in front of it.** Members gossip and deduplicate identical
+**`urls` names every member of one Alertmanager cluster, and there is no
+balancer in front of it.** Members gossip and deduplicate identical
 alerts, so every alert is posted to every member and the cluster's own
 deduplication is what makes that safe. A balancer collapses it: it picks one
 member, and a member partitioned from its peers accepts a page no other member
@@ -29,6 +42,39 @@ balancer, and this is the list.
 given here are not two routes for the same alert: a send is delivered as soon as
 one of them accepts it, so while the other is down its pages are silently not
 re-tried. Two clusters that must both receive everything are two rulers.
+
+**The credential is the cluster's, not an address's.** One `basic_auth` or one
+`authorization` on the set is used for every url in it, because the set is the
+cluster. The names are Prometheus' own, so an operator who has configured an
+Alertmanager before reads familiar keys, and the secret itself is never in the
+file: it comes from `password_file` or `password_env`, as a source's does.
+Setting both of those is refused, as is setting `basic_auth` beside
+`authorization`, since they write the same header.
+
+A password in the URL is refused rather than ignored. Go's HTTP client would
+turn it into an `Authorization` header and it would work, which is exactly the
+problem: it would also be in the pod spec, the rendered chart manifest and any
+dump that echoes argv.
+
+**A rotated secret costs a `SIGHUP`. A changed url costs a restart.** The
+credential is re-read on every reload and swapped in place, so rotating it
+disturbs nothing: no firing alert is re-posted and no resend timer is reset.
+The url list is read once at startup, because each member owns a probe
+goroutine and a metric series of its own. A reload that sees a different list
+logs that a restart is needed and keeps delivering to the endpoints it already
+has, so an operator who edited the list is told the running process still has
+the old one.
+
+If the block does not read cleanly on a reload, the credential already running
+is kept. A secret file that is briefly unreadable is what a rotation looks like
+half way through, and applying what that resolves to, which is nothing, would
+turn a working delivery path into a 401 on every send.
+
+**Nowhere to send refuses the start.** No `alertmanagers` block, no urls in it,
+or any `alertmanager/*` finding at error severity, and `ruler run` exits 2
+naming the file. This is not one of the findings that loads and raises
+`clickhouse_ruler_problem`: those cost one rule behaving as written, where this
+costs every alert in the checkout.
 
 `ruler check` stays offline unless it is asked not to. `--online` runs the
 checks that need a connection, connecting as each source's own user, because
@@ -167,7 +213,6 @@ is picked up by a reload: changing one needs the process restarted, which
 | Flag | Default | What it does |
 | --- | --- | --- |
 | `--rules` | required | rules directory |
-| `--alertmanager` | required | Alertmanager base URL, repeated once per member of the cluster. Every value is refused at startup unless it is an `http://` or `https://` URL with a host, because `localhost:9093` with no scheme fails inside `net/http` at the first send instead, and the same address twice is refused too: it is one series on every `alertmanager`-labelled metric, so a failure counter would report two endpoints as one |
 | `--config` | `ruler.yaml` | operator's file |
 | `--policy` | `policy.yaml` beside `--rules` | policy file |
 | `--listen` | `:9090` | address for `/metrics`, `/-/healthy`, `/-/ready`, and `/-/reload` when it is enabled |

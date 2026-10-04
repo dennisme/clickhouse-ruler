@@ -55,6 +55,7 @@ nav:
       - Every check: checks/index.md
       - Rule checks: checks/rule.md
       - Source checks: checks/source.md
+      - Alertmanager checks: checks/alertmanager.md
       - File and policy checks: checks/policy.md
   - How it compares: comparison.md
 

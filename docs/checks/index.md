@@ -6,6 +6,8 @@ Generated from the check table in `internal/lint/checks.go`. Edit the table, the
 
 | Check | Severity | What it reports |
 | --- | --- | --- |
+| [`alertmanager/auth`](alertmanager.md#alertmanager-auth) | fixed, always `error` | a credential that could not be read, or both credential sources set at once |
+| [`alertmanager/url`](alertmanager.md#alertmanager-url) | fixed, always `error` | an Alertmanager URL that will not parse, carries a credential, or is named twice |
 | [`annotations/protected`](rule.md#annotations-protected) | fixed, always `error` | a rule setting an annotation the ruler owns, which the ruler overwrites on a failed template |
 | [`annotations/required`](rule.md#annotations-required) | `warning` by default | an annotation this repository requires on every alert is missing |
 | [`annotations/runbook`](rule.md#annotations-runbook) | `warning` by default | a runbook_url that is not an absolute http or https URL |

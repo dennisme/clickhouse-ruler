@@ -208,3 +208,21 @@ func TestHeadingsDoNotKeepTheAnchorInTheBodyAbove(t *testing.T) {
 		t.Errorf("body = %q, want the prose alone", got["rule/for"])
 	}
 }
+
+// A page nothing navigates to is a page nobody finds, which makes a check
+// nobody can look up, which is what spec 7.8 exists to prevent. The page
+// existing and being generated is not enough on its own: both were true of
+// the Alertmanager checks while the nav listed three pages.
+func TestEveryPageIsInTheSiteNav(t *testing.T) {
+	data, err := os.ReadFile("../../mkdocs.yml")
+	if err != nil {
+		t.Fatalf("reading mkdocs.yml: %v", err)
+	}
+	nav := string(data)
+
+	for _, page := range Pages {
+		if !strings.Contains(nav, "checks/"+page) {
+			t.Errorf("checks/%s is not in the mkdocs nav, so no reader can reach it", page)
+		}
+	}
+}

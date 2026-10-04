@@ -1,0 +1,25 @@
+# An Alertmanager behind basic auth. The credential is a key in a Secret this
+# chart mounts, never a value in here and never userinfo in the URL, which the
+# ruler refuses (spec 6.5).
+#
+# The Secret is the operator's to create. The chart mounts it read-only and
+# writes its path into the operator's file as password_file, which is what
+# sources.passwordSecret already does for ClickHouse.
+alertmanagerURLs:
+  - http://alertmanager-0.monitoring:9093
+  - http://alertmanager-1.monitoring:9093
+alertmanagerAuth:
+  secretName: ruler-alertmanager
+  basicAuth:
+    username: ruler
+    key: password
+rules:
+  gitSync:
+    repo: https://github.com/example/alert-rules
+sources:
+  - name: traces
+    address: clickhouse.data:9000
+    database: otel
+    username: ruler
+    table: otel_traces
+    timestamp_column: Timestamp

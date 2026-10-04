@@ -1,0 +1,16 @@
+# Basic auth for the second Alertmanager in the stack, which exists so the
+# ruler's credential is proven against a server that actually demands one
+# (spec 6.5, 9.1).
+#
+# The plain Alertmanager beside it keeps no auth, because both paths have to
+# stay covered: most of the suite posts anonymously, and an authenticated
+# server that accepted an anonymous request would prove nothing.
+#
+# The hash is bcrypt of `ruler-test-password`, generated with
+# `htpasswd -nbB -C 10 ruler ruler-test-password`. A test credential checked in
+# on purpose: it authenticates to a container bound to localhost and to
+# nothing else. The plaintext lives in the test that uses it, which writes it
+# to a file the way a deployment mounts a Secret, so rotating it means changing
+# this hash and that constant.
+basic_auth_users:
+  ruler: $2y$10$3xVOlBlSteQnVUqCMbeM4..4OdVwsPPSPjoM1JniC6HBE0ihIJ0we
