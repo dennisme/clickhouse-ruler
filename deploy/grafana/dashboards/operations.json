@@ -324,7 +324,7 @@
     },
     {
       "title": "Alertmanager answering",
-      "description": "Whether the address in --alertmanager answers its own readiness endpoint, probed every 30 seconds. Zero on a ruler that has delivered nothing is the typo'd host this panel exists for: the send counters have no series until something fires, so an expression over send failures cannot fire on a ruler that was never asked to deliver anything. Zero on a ruler that was delivering is Alertmanager being down or not ready, which the send failures beside it will show as well. The probe sends no alert and touches no alert state, and it is deliberately not part of /-/ready: one Alertmanager serves every replica, so a readiness term here would take a whole deployment unready at once (spec 8.1, 8.2).",
+      "description": "Whether the address in the alertmanagers block answers its own readiness endpoint, probed every 30 seconds. Zero on a ruler that has delivered nothing is the typo'd host this panel exists for: the send counters have no series until something fires, so an expression over send failures cannot fire on a ruler that was never asked to deliver anything. Zero on a ruler that was delivering is Alertmanager being down or not ready, which the send failures beside it will show as well. The probe sends no alert and touches no alert state, and it is deliberately not part of /-/ready: one Alertmanager serves every replica, so a readiness term here would take a whole deployment unready at once (spec 8.1, 8.2).",
       "type": "timeseries",
       "datasource": {
         "type": "prometheus",

@@ -114,7 +114,7 @@ func TestCollectorWrittenSpansFireOnlyTheServiceThatIsSlow(t *testing.T) {
 	waitForRows(t, chAddr, fast, spanCount)
 
 	configPath := filepath.Join("testdata", "sources_ingest.yaml")
-	rewritten := rewriteAddress(t, configPath, chAddr)
+	rewritten := rewriteAddress(t, configPath, chAddr, amURL)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -125,7 +125,6 @@ func TestCollectorWrittenSpansFireOnlyTheServiceThatIsSlow(t *testing.T) {
 		runDone <- runRun(ctx, []string{
 			"--rules", filepath.Join("testdata", "rules"),
 			"--config", rewritten,
-			"--alertmanager", amURL,
 			"--listen", ":0",
 		}, &stdout, &stderr)
 	}()

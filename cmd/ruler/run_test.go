@@ -22,23 +22,23 @@ func runRunCmd(t *testing.T, args ...string) (code int, stderr string) {
 	return code, errOut.String()
 }
 
-// --rules and --alertmanager are the two flags run cannot do without: no
-// rules directory means nothing to evaluate, and no Alertmanager means
-// nowhere to send a firing alert.
-func TestRunRequiresRulesAndAlertmanagerFlags(t *testing.T) {
+// --rules is the one flag run cannot do without: no rules directory means
+// nothing to evaluate.
+//
+// Where alerts go used to be the second one. It is read from the operator's
+// file now, so having nowhere to send is refused after that file is read
+// rather than before it, which is TestRunRefusesWithNoAlertmanager
+// (spec 6.5).
+func TestRunRequiresTheRulesFlag(t *testing.T) {
 	dir := fixture(t, bareRule, "")
 
 	code, stderr := runRunCmd(t, "run",
 		"--config", filepath.Join(dir, "ruler.yaml"))
 	if code != exitUsage {
-		t.Errorf("exit = %d, want exitUsage when --rules and --alertmanager are missing\n%s", code, stderr)
+		t.Errorf("exit = %d, want exitUsage when --rules is missing\n%s", code, stderr)
 	}
-
-	code, stderr = runRunCmd(t, "run",
-		"--rules", filepath.Join(dir, "rules"),
-		"--config", filepath.Join(dir, "ruler.yaml"))
-	if code != exitUsage {
-		t.Errorf("exit = %d, want exitUsage when --alertmanager is missing\n%s", code, stderr)
+	if !strings.Contains(stderr, "usage: ruler run") {
+		t.Errorf("expected the usage line on stderr, got:\n%s", stderr)
 	}
 }
 
@@ -49,8 +49,7 @@ func TestRunRefusesToStartOnAnUnreadableFile(t *testing.T) {
 
 	code, stderr := runRunCmd(t, "run",
 		"--rules", filepath.Join(dir, "rules"),
-		"--config", filepath.Join(dir, "ruler.yaml"),
-		"--alertmanager", "http://127.0.0.1:9093")
+		"--config", filepath.Join(dir, "ruler.yaml"))
 
 	if code != exitFinding {
 		t.Errorf("exit = %d, want exitFinding\n%s", code, stderr)
@@ -73,7 +72,6 @@ func TestRunRejectsANonPositiveResendInterval(t *testing.T) {
 		code, stderr := runRunCmd(t, "run",
 			"--rules", filepath.Join(dir, "rules"),
 			"--config", filepath.Join(dir, "ruler.yaml"),
-			"--alertmanager", "http://127.0.0.1:9093",
 			"--resend-interval", interval)
 
 		if code != exitUsage {
@@ -94,7 +92,6 @@ func TestRunRejectsAnUnknownLogLevel(t *testing.T) {
 	code, stderr := runRunCmd(t, "run",
 		"--rules", filepath.Join(dir, "rules"),
 		"--config", filepath.Join(dir, "ruler.yaml"),
-		"--alertmanager", "http://127.0.0.1:9093",
 		"--log-level", "chatty")
 
 	if code != exitUsage {
@@ -147,7 +144,6 @@ func TestRunRejectsAnUnknownLogFormat(t *testing.T) {
 	code, stderr := runRunCmd(t, "run",
 		"--rules", filepath.Join(dir, "rules"),
 		"--config", filepath.Join(dir, "ruler.yaml"),
-		"--alertmanager", "http://127.0.0.1:9093",
 		"--log-format", "logfmt")
 
 	if code != exitUsage {
@@ -232,7 +228,6 @@ func TestRunRejectsAToleranceWithNoHeadroom(t *testing.T) {
 		code, stderr := runRunCmd(t, "run",
 			"--rules", filepath.Join(dir, "rules"),
 			"--config", filepath.Join(dir, "ruler.yaml"),
-			"--alertmanager", "http://127.0.0.1:9093",
 			"--resend-tolerance", tolerance)
 
 		if code != exitUsage {

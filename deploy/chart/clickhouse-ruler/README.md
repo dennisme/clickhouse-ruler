@@ -26,12 +26,38 @@ Three things, and the render fails without them:
 
 | Value | What it is |
 | --- | --- |
-| `alertmanagerURLs` | Where alerts are delivered, one entry per member of the Alertmanager cluster. Every alert is posted to every member. |
+| `alertmanagerURLs` | Where alerts are delivered, one entry per member of the Alertmanager cluster. Every alert is posted to every member. Templated into the `alertmanagers` block of the operator's file, so it must be left empty when `sourcesSecret.name` supplies that whole file and the block comes from the Secret instead. |
 | `rules.gitSync.repo` | The repository holding the rule files. `rules.configMap.name` instead, when `rules.delivery` is `configMap`. |
 | `sources` or `sourcesSecret.name` | The ClickHouse clusters to evaluate against, either templated from values or supplied whole in a Secret. Not both. |
 
 A source's password is never a value. It is read from a Secret you create,
 named per source under `passwordSecret`.
+
+The Alertmanager credential works the same way, under `alertmanagerAuth`. It is
+optional, because an Alertmanager on a network only the ruler can reach needs
+none:
+
+```yaml
+alertmanagerAuth:
+  secretName: ruler-alertmanager
+  basicAuth:
+    username: ruler
+    key: password          # defaults to password
+  # or, for a bearer token, instead of basicAuth:
+  # authorization:
+  #   type: Bearer         # defaults to Bearer
+  #   key: credentials     # defaults to credentials
+```
+
+You create the Secret; the chart mounts it read-only and writes its path into
+the file as `password_file`. `basicAuth` and `authorization` write the same
+header, so the render fails if both are set. A password in an Alertmanager URL
+is refused by the ruler, because it would reach the pod spec and the rendered
+manifest.
+
+Rotating that Secret needs a reload rather than a restart, and changing
+`alertmanagerURLs` needs a restart. See
+[Operations](https://dennisme.github.io/clickhouse-ruler/operations/).
 
 Everything else has a default that runs, and `values.yaml` says what each one
 is for. `values.schema.json` refuses an unknown key at render, so a typo fails

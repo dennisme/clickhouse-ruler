@@ -53,6 +53,10 @@ const (
 type File struct {
 	File    string
 	Sources []Source
+
+	// Alertmanagers holds at most one set today. 6.5 chose a list so a second
+	// set is additive later rather than a rewrite of the first.
+	Alertmanagers []Alertmanager
 }
 
 // Source is one queryable table and how to reach it.
@@ -177,6 +181,8 @@ func Parse(file string, data []byte, env func(string) (string, bool)) (*File, []
 		switch e.Key.Value {
 		case "sources":
 			f.Sources = parseSources(r, e.Value, env)
+		case "alertmanagers":
+			f.Alertmanagers = parseAlertmanagers(r, e.Value, env)
 		default:
 			r.UnknownField(e.Key, "file")
 		}
@@ -318,57 +324,71 @@ func (s Source) checkConnection(r *lint.Reader) {
 	}
 }
 
-// resolvePassword reads the secret from a file or the environment.
+// resolvePassword reads a source's password from a file or the environment.
+//
+// No password at all is legal: local development against the compose stack,
+// and mTLS, where the client certificate in tls_config is what ClickHouse
+// authenticates.
+func (s Source) resolvePassword(r *lint.Reader, secret secretRef, env func(string) (string, bool)) string {
+	return resolveSecret(r, s.lines.Of("password_file", "password_env"),
+		lint.CheckSourcePassword, "password", secret, env)
+}
+
+// resolveSecret reads a secret from a file or the environment, reporting on
+// check and naming the pair of keys the caller spells it with: `password` for
+// a source and for basic_auth, `credentials` for a bearer token.
+//
+// One implementation for every credential this ruler reads, because each of
+// these refusals is a decision rather than a detail and a second copy is a
+// second place for one of them to be forgotten (spec 6.2, 6.5).
 //
 // Setting both is an error rather than a precedence rule. If the two differ
 // one of them is stale, and silently picking either can mean authenticating
 // with a credential that was supposed to have been rotated away.
-func (s Source) resolvePassword(r *lint.Reader, secret secretRef, env func(string) (string, bool)) string {
-	line := s.lines.Of("password_file", "password_env")
+func resolveSecret(
+	r *lint.Reader, line int, check, key string,
+	secret secretRef, env func(string) (string, bool),
+) string {
+	fileKey, envKey := key+"_file", key+"_env"
 
 	switch {
 	case secret.file != "" && secret.env != "":
-		r.Add(line, lint.CheckSourcePassword, lint.SeverityError,
-			"password_file and password_env are mutually exclusive, set one")
+		r.Add(line, check, lint.SeverityError,
+			"%s and %s are mutually exclusive, set one", fileKey, envKey)
 		return ""
 
 	case secret.file != "":
 		// Read errors name the path, never the contents.
 		raw, err := os.ReadFile(secret.file)
 		if err != nil {
-			r.Add(line, lint.CheckSourcePassword, lint.SeverityError,
-				"cannot read password_file %q: %s", secret.file, errReason(err))
+			r.Add(line, check, lint.SeverityError,
+				"cannot read %s %q: %s", fileKey, secret.file, errReason(err))
 			return ""
 		}
 		// A projected secret volume that has not populated yet reads as
-		// empty. Sending that to ClickHouse as a real password produces a
-		// confusing auth failure instead of a clear config error.
-		password := strings.TrimRight(string(raw), "\r\n")
-		if password == "" {
-			r.Add(line, lint.CheckSourcePassword, lint.SeverityError,
-				"password_file %q is empty", secret.file)
+		// empty. Sending that on as a real secret produces a confusing auth
+		// failure instead of a clear config error.
+		value := strings.TrimRight(string(raw), "\r\n")
+		if value == "" {
+			r.Add(line, check, lint.SeverityError, "%s %q is empty", fileKey, secret.file)
 			return ""
 		}
-		return password
+		return value
 
 	case secret.env != "":
-		password, ok := env(secret.env)
+		value, ok := env(secret.env)
 		if !ok {
-			r.Add(line, lint.CheckSourcePassword, lint.SeverityError,
-				"password_env references ${%s}, which is not set in the environment", secret.env)
+			r.Add(line, check, lint.SeverityError,
+				"%s references ${%s}, which is not set in the environment", envKey, secret.env)
 			return ""
 		}
-		if password == "" {
-			r.Add(line, lint.CheckSourcePassword, lint.SeverityError,
-				"password_env ${%s} is set but empty", secret.env)
+		if value == "" {
+			r.Add(line, check, lint.SeverityError, "%s ${%s} is set but empty", envKey, secret.env)
 			return ""
 		}
-		return password
+		return value
 	}
 
-	// No password at all is legal: local development against the compose
-	// stack, and mTLS, where the client certificate in tls_config is what
-	// ClickHouse authenticates.
 	return ""
 }
 

@@ -67,16 +67,15 @@ Running it is the same shape, plus the port it serves on:
 ```bash
 docker run --rm -p 9090:9090 -v "$PWD/rules:/rules:ro" \
   ghcr.io/dennisme/clickhouse-ruler:v0.1.0 \
-  run --rules /rules --config /rules/ruler.yaml \
-  --alertmanager http://alertmanager:9093
+  run --rules /rules --config /rules/ruler.yaml
 ```
 
 One port, `9090`, carrying `/metrics`, `/-/healthy`, `/-/ready`, and
 `/-/reload` if you started it with `--enable-reload-endpoint`. It is the
 `--listen` address and nothing else listens; change both halves of `-p` if you
-move it. Alerts go out over the Alertmanager URL, so that host has to resolve
-from inside the container: `localhost` there is the container, not your
-machine.
+move it. Alerts go out over the urls in the `alertmanagers` block of
+`ruler.yaml`, so those hosts have to resolve from inside the container:
+`localhost` there is the container, not your machine.
 
 The image runs as an unprivileged user, `ruler`, uid 100. On Linux a bind
 mount keeps the host's ownership and permissions, so a rules directory that

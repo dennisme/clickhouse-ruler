@@ -152,7 +152,7 @@ failure recovers on its own. A sustained one means alerts that have fired are
 not reaching anybody, and the ruler cannot tell you that any other way.
 
 **Read it by its label, because it is per endpoint.** Every batch is posted to
-every `--alertmanager`, so one member of the cluster refusing batches raises this
+every url in the set, so one member of the cluster refusing batches raises this
 against that member's label alone while delivery keeps working: one endpoint
 accepting is enough, and gossip carries the alert to the rest. One label above
 zero is a member to repair at warning severity. Nothing getting through anywhere
@@ -176,7 +176,7 @@ clickhouse_ruler_alertmanager_last_probe_successful == 0
 ```
 
 **Trouble after a few minutes, and the only signal that works before anything
-has fired.** The ruler probes every address in `--alertmanager` every 30
+has fired.** The ruler probes every url in the `alertmanagers` set every 30
 seconds, each on its own timer, asking Alertmanager's own `/-/ready`, and this is
 1 when that member answered and 0 when it did not. One series per endpoint, so
 the label says which member. Give it two or three probes before paging on it, so
@@ -944,8 +944,13 @@ eleven healthy ones. The finding names which assertion failed: revoked table
 functions, `readonly = 2`, the constraints behind each limit, or the grant on
 the source's own table.
 
-Everything else that refuses is a flag: an `--alertmanager` that is not an
-`http://` or `https://` URL with a host, an unparseable `--log-level` or
+An Alertmanager url that is not an `http://` or `https://` URL with a host,
+one carrying a credential, the same one twice, a credential that cannot be
+read, or no `alertmanagers` block at all, all refuse the start too. They are
+read from the operator's file rather than from a flag, and they refuse because
+they mean every alert in the checkout rather than one rule.
+
+Everything else that refuses is a flag: an unparseable `--log-level` or
 `--log-format`, a
 non-positive `--resend-interval`, a `--resend-tolerance` below two. All of
 them exit 2 and say so on stderr, rather than starting with a value that
@@ -991,7 +996,7 @@ exactly what it was evaluating before the signal, and raises the refused-reload
 gauge above.
 
 **A flag is not one of the three files.** Every flag on `ruler run` is read once
-at startup and a reload re-reads none of them, so editing `--alertmanager`,
+at startup and a reload re-reads none of them, so editing
 `--listen`, `--query-concurrency`, `--recheck-interval`, `--resend-interval`,
 `--resend-tolerance`, `--notification-queue-capacity`, `--shutdown-timeout`,
 `--log-level` or `--enable-reload-endpoint` and sending `SIGHUP` gives you a
@@ -1009,13 +1014,29 @@ that needs no action at all.
 | --- | --- | --- |
 | `cert_file`, `key_file` | the driver's next handshake | nothing |
 | `ca_file` | a reload, which reopens that source's connection | `SIGHUP`, or `POST /-/reload` |
-| `password_file` | a reload | `SIGHUP`, or `POST /-/reload` |
+| `password_file` on a source | a reload | `SIGHUP`, or `POST /-/reload` |
+| `password_file` or `credentials_file` on an `alertmanagers` entry | a reload | `SIGHUP`, or `POST /-/reload` |
+| a changed `urls` list | nothing | restart the process |
 
 **The client certificate and its key need nothing.** They are read at each TLS
 handshake rather than held, so a certificate manager that writes a new pair over
 the old paths is picked up on the driver's next connection, which is within the
 hour it keeps one for. Nothing to signal, and no window where the ruler presents
 a certificate that has expired.
+
+**An Alertmanager credential needs a reload, and a changed url list needs a
+restart.** The credential is re-read on every reload and swapped into the
+clients in place, so rotating it disturbs nothing: no firing alert is re-posted
+and no resend timer is reset. The url list is read once at startup, because each
+member owns a probe goroutine and a series of its own, so a reload that reads a
+different list logs that a restart is needed and keeps delivering to the
+endpoints it already has. An operator who edited the list is told the running
+process still has the old one.
+
+If the block does not read cleanly on a reload, the credential already running
+is kept. A secret file caught half way through being written resolves to no
+credential at all, and applying that would turn a working delivery path into a
+401 on every send.
 
 **A replaced CA needs a reload.** `crypto/tls` takes its roots as a built pool
 with no way to re-read them, so the connection has to be reopened against a new

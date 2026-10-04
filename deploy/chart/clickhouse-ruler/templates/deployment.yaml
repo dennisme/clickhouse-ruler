@@ -84,12 +84,6 @@ spec:
             - run
             - --rules={{ include "clickhouse-ruler.rulesPath" . }}
             - --config={{ include "clickhouse-ruler.sourcesPath" . }}
-            {{- if not .Values.alertmanagerURLs }}
-            {{- fail "alertmanagerURLs is required, one entry per member of the Alertmanager cluster" }}
-            {{- end }}
-            {{- range .Values.alertmanagerURLs }}
-            - --alertmanager={{ . }}
-            {{- end }}
             - --listen=:{{ .Values.ruler.port }}
             - --log-level={{ .Values.ruler.logLevel }}
             - --log-format={{ .Values.ruler.logFormat }}
@@ -151,6 +145,11 @@ spec:
             {{- range $name := include "clickhouse-ruler.passwordSecretNames" . | fromJsonArray }}
             - name: password-{{ $name }}
               mountPath: {{ include "clickhouse-ruler.passwordSecretDir" (dict "ctx" $ "name" $name) }}
+              readOnly: true
+            {{- end }}
+            {{- if and .Values.alertmanagerAuth .Values.alertmanagerAuth.secretName }}
+            - name: alertmanager-credential
+              mountPath: {{ include "clickhouse-ruler.alertmanagerSecretDir" . }}
               readOnly: true
             {{- end }}
             {{- with .Values.extraVolumeMounts }}
@@ -225,6 +224,11 @@ spec:
         - name: password-{{ $name }}
           secret:
             secretName: {{ $name }}
+        {{- end }}
+        {{- if and .Values.alertmanagerAuth .Values.alertmanagerAuth.secretName }}
+        - name: alertmanager-credential
+          secret:
+            secretName: {{ .Values.alertmanagerAuth.secretName }}
         {{- end }}
         {{- with .Values.extraVolumes }}
         {{- toYaml . | nindent 8 }}

@@ -94,8 +94,7 @@ Check the files, then run:
 ```bash
 ruler check --config rules/ruler.yaml rules/
 ruler check --online --config rules/ruler.yaml rules/
-ruler run --rules ./rules --config ./rules/ruler.yaml \
-  --alertmanager http://localhost:9093
+ruler run --rules ./rules --config ./rules/ruler.yaml
 ```
 
 `check` stays offline unless asked otherwise: `--online` asks ClickHouse what

@@ -1,6 +1,11 @@
 # Matches compose.yaml. The test overrides the address from
 # RULER_CLICKHOUSE_ADDR, so this file stays reviewable without a live cluster
 # to check it against.
+# Where alerts go, overridden from RULER_ALERTMANAGER_URL for the same reason
+# as the address below.
+alertmanagers:
+  - urls: [http://127.0.0.1:9093]
+
 sources:
   - name: otel_traces
     labels: {team: payments}

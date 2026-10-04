@@ -927,22 +927,20 @@ This is memory only, as it is in Prometheus. Retention buys surviving a failed
 send, not surviving a restart: a ruler that stops mid-window forgets the resolve
 either way, and that is 12.2's problem rather than this one's.
 
-**How the ruler authenticates to Alertmanager is decided and not yet built.**
-Today `--alertmanager` takes a URL and the client sends an unauthenticated
-POST. There is no field for a credential, a token or a certificate, so an
-Alertmanager behind basic auth, behind a bearer token, or requiring TLS to be
-reachable at all is not reachable by this ruler as configured. What follows is
-the design, and the flag does not survive it.
+**How the ruler authenticates to Alertmanager.** `basic_auth` and
+`authorization` ship; `tls_config` is the one part still to come, so an
+Alertmanager that requires TLS to be reachable at all is not reachable by this
+ruler yet. `--alertmanager` is gone.
 
-One thing does work, by accident and not by design. Go's `http.Client` turns
-userinfo in a request URL into an `Authorization: Basic` header, so
-`--alertmanager http://user:pass@alertmanager:9093` authenticates. Nothing in
-this repository asks for that, no test pins it, and a password in a flag is in
-`ps` output, in the pod spec, in the rendered chart manifest and in any dump
-that echoes argv, where no amount of redaction can reach it. The sources file
-already settled this question for ClickHouse: a credential comes from a file or
-the environment, named in a file the operator owns, never from a flag (6.2,
-6.6).
+It used to work by accident, which is why the URL is now checked for it. Go's
+`http.Client` turns userinfo in a request URL into an `Authorization: Basic`
+header, so `http://user:pass@alertmanager:9093` authenticated with nothing in
+this repository asking for it and no test pinning it, while a password in a
+flag is in `ps` output, in the pod spec, in the rendered chart manifest and in
+any dump that echoes argv, where no amount of redaction can reach it. The
+sources file had already settled this for ClickHouse: a credential comes from a
+file or the environment, named in a file the operator owns, never from a flag
+(6.2, 6.6).
 
 **The block is Prometheus' own `http_config`,** because an operator
 configuring an Alertmanager has written that block before and the names mean
@@ -994,17 +992,60 @@ carries `urls:` and its own auth, which is the shape that lets a second set be
 added later without rewriting the first. Nothing selects between sets, because
 selecting would be routing and that is not ours (below).
 
-Three check names carry its refusals, joining 7.6 when they are built:
-`alertmanager/url` for a URL that will not parse or carries userinfo,
-`alertmanager/auth` for the credential keys, reusing the refusals `source/password`
-already makes, and `alertmanager/tls` for TLS material, reusing `source/tls`.
+Three check names carry its refusals: `alertmanager/url` for a URL that will
+not parse or carries userinfo, `alertmanager/auth` for the credential keys,
+reusing the refusals `source/password` already makes, and `alertmanager/tls`
+for TLS material, reusing `source/tls`. The first two ship; the third arrives
+with `tls_config`.
 
-**When it lands, userinfo in `--alertmanager` stops being supported.** Not
-deprecated, refused: `parseAlertmanagerURL` rejects a URL carrying userinfo and
-says which field to use instead, so there is one way to authenticate rather than
-two, one of which is the insecure one nobody documented. Two pieces of
-machinery exist only to make the accidental path safe and are deleted in the same
-change, not kept:
+**Having nowhere usable to send refuses the start, and it is not a finding.**
+Severity says who has to be involved to unblock a contributor, and
+`RefusesReading` is about a file nobody can read, which 11 keeps to
+`yaml/syntax` and `ruleset/directory`. Neither describes this. An Alertmanager
+the ruler cannot address or cannot authenticate to is every alert in the
+checkout rather than one rule behaving as written, so it sits with the required
+flags, where `--alertmanager` already was, and `ruler run` exits 2 naming the
+file.
+
+Any error on an `alertmanager` check counts, not only an empty list. A
+duplicate URL dedupes to a working endpoint and an unreadable secret resolves
+to no credential, so taking only the empty case would start a ruler that posts
+to the wrong number of members, or authenticates with nothing, and says so only
+on `clickhouse_ruler_problem`.
+
+**A reload rotates the credential and does not move the URLs.** The block now
+lives in a file a reload re-reads, which is what moving it off a flag bought,
+and the split is the one 6.2 already draws for TLS material: the secret is
+re-read, the topology needs a signal.
+
+The credential is swapped in place on each client, so a rotated secret costs a
+`SIGHUP` rather than a restart, and a restart would make every pending alert
+serve its `for` again (12.2). Nothing above it is rebuilt: `Cadence` keys what
+it last sent on an alert's fingerprint and never on an endpoint, so replacing a
+client cannot reset a resend timer, and the send queue and the probe goroutines
+keep running.
+
+The URL list is read once. Each member owns a probe goroutine and a gauge
+series, so moving the list means starting and stopping goroutines and deleting
+series nothing would otherwise clear, which is the lifecycle problem
+`deleteSource` exists for and a slice of its own. A reload that reads a
+different list logs that it needs a restart and keeps the endpoints already
+running, because an operator who edited the list has to know the process still
+has the old one.
+
+A block that did not read cleanly keeps the credential already running. A
+secret file that is briefly unreadable is what a rotation looks like half way
+through, and applying what that resolves to, which is no credential at all,
+would turn a working delivery path into a 401 on every send. It refuses a start
+and not a reload for the same reason the findings do: the endpoints already
+running are still the ones the alerts are reaching, and refusing would strand a
+rules change behind an edit to an unrelated section.
+
+**Userinfo in a URL is refused.** Not deprecated, refused:
+`parseAlertmanagerURL` rejects a URL carrying one and says which field to use
+instead, so there is one way to authenticate rather than two, one of which was
+the insecure one nobody documented. Two pieces of machinery existed only to
+make the accidental path safe and were deleted in the same change, not kept:
 
 - the removal of credentials from `net/http` errors in `internal/notify`, which
   exists because a `*url.Error` prints the URL it was built from (8.4)
@@ -1012,21 +1053,11 @@ change, not kept:
   the log lines naming it (8.2), which collapses back to the URL itself once no
   URL can hold a password
 
-A credential read from a file never reaches a URL, so neither has anything left
-to protect once the URL cannot carry one. Leaving them behind would mean the
-codebase still reads as though the flag might hold a password, which is exactly
-the state this change ends.
-
-**Whether the credential belongs in the URL at all is the cheaper half of this,
-and it is worth doing first.** Go's client builds the `Authorization` header
-from userinfo at request time, which is why the accidental path works. Building
-it once at client construction and clearing `User` from the stored URL is
-identical on the wire and changes what the rest of the code has to defend
-against: no error, label or log line can hold a credential, because the URL no
-longer has one. That deletes the removal in `internal/notify` and both uses of
-the redacted spelling, and leaves the `alertmanager` label as the host. It is
-also the shape the real work lands on: the header stops being read from the URL
-and starts being read from a file, in one place.
+A credential read from a file never reaches a URL, so neither had anything left
+to protect once the URL could not carry one. Leaving them behind would have
+meant a codebase still reading as though the flag might hold a password, which
+is the state this change ended. The `alertmanager` metric label is the URL
+itself now.
 
 **What stays deleted, and the test for it.** vmalert masks notifier URLs
 permanently rather than removing the need to: `-notifier.showURL` defaults to

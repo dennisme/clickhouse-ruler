@@ -74,6 +74,8 @@ groups:
 	// name and granting it another would widen the contract the other tests
 	// prove (spec 6.7.2).
 	writeFile(t, filepath.Join(dir, "ruler.yaml"), fmt.Sprintf(`
+alertmanagers:
+  - urls: [%s]
 sources:
   - name: drift_source
     labels: {team: drift}
@@ -83,7 +85,7 @@ sources:
     table: %s
     timestamp_column: Timestamp
     evaluation_delay: 0s
-`, chAddr, table))
+`, amURL, chAddr, table))
 
 	port := freePort(t)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -95,7 +97,6 @@ sources:
 		runDone <- runRun(ctx, []string{
 			"--rules", rulesDir,
 			"--config", filepath.Join(dir, "ruler.yaml"),
-			"--alertmanager", amURL,
 			"--listen", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)),
 		}, &stdout, &stderr)
 	}()

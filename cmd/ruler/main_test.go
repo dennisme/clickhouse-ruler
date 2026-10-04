@@ -84,7 +84,9 @@ const repeatedGroupRule = `groups:
         expr: "SELECT 1 AS value FROM t WHERE ts >= {{ .From }} AND ts < {{ .To }}"
 `
 
-const sourcesYAML = `sources:
+const sourcesYAML = `alertmanagers:
+  - urls: [http://127.0.0.1:9093]
+sources:
   - name: otel_traces
     labels: {team: payments}
     address: 127.0.0.1:9000
@@ -93,6 +95,31 @@ const sourcesYAML = `sources:
     table: otel_traces
     timestamp_column: Timestamp
 `
+
+// operatorFile writes the operator's file with a given alertmanagers block, so
+// a test that cares where alerts go can say so without restating the sources.
+// Where alerts go is read from this file now rather than from a flag
+// (spec 6.5).
+func operatorFile(t *testing.T, dir, alertmanagers string) {
+	t.Helper()
+
+	path := filepath.Join(dir, "ruler.yaml")
+	body := alertmanagers + strings.TrimPrefix(sourcesYAML, `alertmanagers:
+  - urls: [http://127.0.0.1:9093]
+`)
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// alertmanagerURLs renders an alertmanagers block naming each url given, and
+// none at all for no urls, which is what a ruler with nowhere to send reads.
+func alertmanagerURLs(urls ...string) string {
+	if len(urls) == 0 {
+		return ""
+	}
+	return "alertmanagers:\n  - urls: [" + strings.Join(urls, ", ") + "]\n"
+}
 
 func runCheck(t *testing.T, args ...string) (code int, stdout, stderr string) {
 	t.Helper()

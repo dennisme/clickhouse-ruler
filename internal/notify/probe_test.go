@@ -6,8 +6,6 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-
-	"github.com/dennisme/clickhouse-ruler/internal/alert"
 )
 
 // The question a probe asks is whether Alertmanager would accept an alert now,
@@ -59,45 +57,5 @@ func TestProbeDoesNotRetry(t *testing.T) {
 	_ = NewClient(srv.URL).Probe(context.Background())
 	if attempts != 1 {
 		t.Errorf("got %d requests, want 1", attempts)
-	}
-}
-
-// An error from net/http is a *url.Error and prints the URL it was built
-// from, userinfo and all. That URL came from --alertmanager, so the password
-// in it reaches whatever reads the error unless it is removed (spec 8.4).
-func TestProbeKeepsThePasswordOutOfItsError(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
-	addr := strings.TrimPrefix(srv.URL, "http://")
-	srv.Close()
-
-	c := NewClient("http://ruler:hunter2@" + addr)
-	err := c.Probe(context.Background())
-	if err == nil {
-		t.Fatal("Probe = nil against a closed server, want a failure")
-	}
-	if strings.Contains(err.Error(), "hunter2") {
-		t.Errorf("error carries the password: %v", err)
-	}
-	if !strings.Contains(err.Error(), addr) {
-		t.Errorf("error %q no longer says which address failed", err)
-	}
-}
-
-// The same hazard on the path that already logs its error: a failed send is
-// logged with the error as a field (spec 8.4).
-func TestSendKeepsThePasswordOutOfItsError(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
-	addr := strings.TrimPrefix(srv.URL, "http://")
-	srv.Close()
-
-	c := NewClient("http://ruler:hunter2@" + addr)
-	c.MaxAttempts = 1
-
-	err := c.Send(context.Background(), []alert.Alert{firingAlert()})
-	if err == nil {
-		t.Fatal("Send = nil against a closed server, want a failure")
-	}
-	if strings.Contains(err.Error(), "hunter2") {
-		t.Errorf("error carries the password: %v", err)
 	}
 }

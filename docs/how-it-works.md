@@ -12,6 +12,9 @@ places.
 
 ```yaml
 # rules/ruler.yaml
+alertmanagers:
+  - urls: [http://alertmanager:9093]
+
 sources:
   - name: payments_prod
     labels: {team: payments, cluster: prod, env: prod}
@@ -27,6 +30,14 @@ sources:
     max_memory_usage: 1073741824
     max_concurrent_queries: 4
 ```
+
+`alertmanagers` is the other half of this file: where every alert goes. One
+entry, with every member of the Alertmanager cluster in its `urls`, because
+members gossip and deduplicate and a balancer in front of them hides a
+partition. It is here rather than on a flag because the credential that reaches
+it has to come from a file and never from argv, and a ruler with nowhere to
+send refuses to start. [Running it](running.md) has the credential and what a
+reload does to it.
 
 Everything from `evaluation_delay` down can be left out. `max_rows` caps how
 many alert instances one evaluation may produce; `max_execution_time` and

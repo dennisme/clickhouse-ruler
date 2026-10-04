@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"reflect"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -28,6 +29,10 @@ type config struct {
 	set      *ruleset.Set
 	root     *policy.Policy
 	problems []lint.Problem
+
+	// alertmanagers is the block as just read. At most one set ships, so this
+	// is one or none (spec 6.5).
+	alertmanagers []source.Alertmanager
 }
 
 // refused reports whether these files may not run. Only a finding whose check
@@ -44,6 +49,38 @@ func (c *config) refused() bool {
 		}
 	}
 	return false
+}
+
+// deliverable reports why this reading has no usable delivery path, or nil
+// when it has one.
+//
+// Outside the findings mechanism on purpose. RefusesReading is about a file
+// nobody can read, and spec 7.6 keeps it to exactly the two checks that mean
+// that, because refusing costs every alert in the checkout while loading costs
+// one rule behaving as written. The delivery path is neither: an Alertmanager
+// the ruler cannot address or cannot authenticate to is every alert in the
+// checkout, so it belongs with the required flags rather than with the
+// findings. It is what the required --alertmanager flag used to say
+// (spec 6.5, 7.6).
+//
+// Any error on an alertmanager check counts, not only an empty list. A
+// duplicate url dedupes to a working endpoint and an unreadable secret
+// resolves to no credential, so both would otherwise start a ruler that posts
+// to the wrong number of members or authenticates with nothing, and say so
+// only on the problem gauge.
+func (c *config) deliverable() error {
+	for _, p := range c.problems {
+		if p.Severity != lint.SeverityError {
+			continue
+		}
+		if ns, _, _ := strings.Cut(p.Check, "/"); ns == "alertmanager" {
+			return fmt.Errorf("%s is not usable: %s", p.Check, p.Text)
+		}
+	}
+	if len(c.alertmanagers) == 0 || len(c.alertmanagers[0].URLs) == 0 {
+		return errors.New("no alertmanagers block with at least one url")
+	}
+	return nil
 }
 
 // runner is what `ruler run` holds for the life of the process, as opposed to
@@ -69,6 +106,12 @@ type runner struct {
 
 	concurrency int
 	resend      scheduler.Resend
+
+	// endpoints are the Alertmanagers alerts go to, built once at startup.
+	// The list is topology and does not move under a reload, because each
+	// member owns a probe goroutine and a gauge series; only the credential on
+	// each client rotates (spec 6.5).
+	endpoints []alertmanagerEndpoint
 
 	// recheck is how often loaded rules are re-checked against real data, zero
 	// for not at all (spec 10.4).
@@ -136,7 +179,12 @@ func (r *runner) load() (*config, error) {
 	set, ruleProblems := ruleset.Load(r.rulesDir, sources, root)
 	problems = append(problems, ruleProblems...)
 
-	return &config{set: set, root: root, problems: problems}, nil
+	return &config{
+		set:           set,
+		root:          root,
+		problems:      problems,
+		alertmanagers: sources.Alertmanagers,
+	}, nil
 }
 
 // report writes the findings where a person will read them.
@@ -288,6 +336,8 @@ func (r *runner) reload(ctx context.Context) error {
 		return r.refuse("a source could not be opened", err)
 	}
 
+	r.rotateAlertmanagerCredential(cfg)
+
 	r.metrics.ConfigReloads.WithLabelValues("succeeded").Inc()
 
 	r.mu.Lock()
@@ -295,6 +345,43 @@ func (r *runner) reload(ctx context.Context) error {
 	r.mu.Unlock()
 	r.log.Info("reloaded", "rules", rules, "sources", sources)
 	return nil
+}
+
+// rotateAlertmanagerCredential applies the credential just read to every
+// endpoint, which is the whole of what a reload does to the alertmanagers
+// block.
+//
+// A rotated secret therefore costs a signal and not a restart, which matters
+// because a restart makes every pending alert serve its `for` again (12.2).
+//
+// A changed url list is reported and not applied. Each member owns a probe
+// goroutine and a gauge series, so moving the list means starting and stopping
+// goroutines and deleting series that nothing would otherwise clear, and that
+// is a slice of its own rather than a side effect of a rules change. Saying so
+// is the part that matters: an operator who edited the list has to know the
+// running process still has the old one (spec 6.5).
+//
+// The block going missing entirely is treated the same way. It refuses a
+// start, but refusing a reload over it would strand a rules change behind an
+// edit to an unrelated section, and the endpoints already running are still
+// the ones the alerts are reaching.
+func (r *runner) rotateAlertmanagerCredential(cfg *config) {
+	// A block that did not read cleanly keeps the credential already running.
+	// A secret file that is briefly unreadable, which is what a rotation looks
+	// like half way through, resolves to no credential at all, so applying it
+	// would turn a working delivery path into a 401 on every send.
+	if err := cfg.deliverable(); err != nil {
+		r.log.Warn("the alertmanagers block did not read cleanly, keeping the credential already running",
+			"file", r.configPath, "reason", err.Error())
+		return
+	}
+
+	set := cfg.alertmanagers[0]
+	if !sameAlertmanagerURLs(r.endpoints, set) {
+		r.log.Warn("the alertmanager urls changed, which a reload cannot apply: restart to pick them up",
+			"file", r.configPath, "running", len(r.endpoints), "configured", len(set.URLs))
+	}
+	rotateCredential(r.endpoints, set)
 }
 
 // refuse records a reload that did not happen and returns the reason, for

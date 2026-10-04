@@ -75,6 +75,9 @@ const (
 	CheckSourceExemption       = "source/exemption"
 	CheckSourcePrivileges      = "source/privileges"
 
+	CheckAlertmanagerURL  = "alertmanager/url"
+	CheckAlertmanagerAuth = "alertmanager/auth"
+
 	CheckPolicyUnknown  = "policy/unknown-check"
 	CheckPolicyFixed    = "policy/fixed-check"
 	CheckPolicySeverity = "policy/severity"
@@ -532,6 +535,14 @@ var checks = []Check{
 	{
 		Name: CheckSourceTLS, Spec: "6.2", Fixed: true, Always: SeverityError,
 		Summary: "TLS key material that could not be read, or a tls_config that contradicts itself",
+	},
+	{
+		Name: CheckAlertmanagerURL, Spec: "6.5", Fixed: true, Always: SeverityError,
+		Summary: "an Alertmanager URL that will not parse, carries a credential, or is named twice",
+	},
+	{
+		Name: CheckAlertmanagerAuth, Spec: "6.5", Fixed: true, Always: SeverityError,
+		Summary: "a credential that could not be read, or both credential sources set at once",
 	},
 	// Configurable so that an exemption can clear it, which is the whole
 	// design: a downgrade an operator chose, with a reason and a date, rather

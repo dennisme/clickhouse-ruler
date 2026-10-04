@@ -63,11 +63,6 @@ func runRun(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	rulesDir := fs.String("rules", "", "path to the rules directory (required)")
 	configPath := fs.String("config", "ruler.yaml", "path to the operator's file, which names the sources")
 	policyPath := fs.String("policy", "", "path to a policy file, defaults to policy.yaml beside the rules directory if present")
-	var alertmanagerURLs alertmanagerFlag
-	fs.Var(&alertmanagerURLs, "alertmanager",
-		"Alertmanager URL, e.g. http://localhost:9093 (required). Repeat it once per member of the cluster: "+
-			"every alert is posted to every member, which is what Alertmanager's own documentation asks for, "+
-			"and a balancer in front of them is not")
 	listen := fs.String("listen", ":9090", "address for the /metrics, /-/healthy and /-/ready HTTP surface")
 	queryConcurrency := fs.Int("query-concurrency", scheduler.DefaultQueryConcurrency,
 		"how many rule queries may run against ClickHouse at once, across every group; 0 means unbounded")
@@ -93,8 +88,8 @@ func runRun(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
 	}
-	if *rulesDir == "" || len(alertmanagerURLs) == 0 {
-		printf(stderr, "%s\n", "usage: ruler run --rules <dir> --alertmanager <url> [--alertmanager <url> ...] [flags]")
+	if *rulesDir == "" {
+		printf(stderr, "%s\n", "usage: ruler run --rules <dir> [flags]")
 		return exitUsage
 	}
 	// A non-positive interval makes every firing alert due on every
@@ -117,15 +112,6 @@ func runRun(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	// fail. Tolerating nothing is not a tolerance.
 	if *resendTolerance < 2 {
 		printf(stderr, "--resend-tolerance must be at least 2, got %d\n", *resendTolerance)
-		return exitUsage
-	}
-
-	// Parsing needs no network and the answer cannot change while the ruler
-	// runs, so a URL no send could ever succeed against is refused here rather
-	// than failing inside net/http at the first page (spec 8.1).
-	alertmanagers, err := parseAlertmanagerURLs(alertmanagerURLs)
-	if err != nil {
-		printf(stderr, "%s\n", err)
 		return exitUsage
 	}
 
@@ -156,18 +142,6 @@ func runRun(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		// from these two, so they travel as the pair they are (spec 6.5).
 		resend: scheduler.Resend{Interval: *resendInterval, Tolerance: *resendTolerance},
 	}
-	// Every alert is posted to every endpoint, because Alertmanager members
-	// gossip and deduplicate, so a sender posting to all of them gets resilience
-	// out of deduplication the cluster already has where a balancer picks one
-	// member and hides a partition (spec 6.5).
-	endpoints := alertmanagerEndpoints(alertmanagers)
-	cadence := scheduler.NewCadence(sendEndpoints(endpoints), rn.resend, rn.metrics, rn.clock)
-	// Delivery is one goroutine behind a bounded queue, so an Alertmanager
-	// outage fills the queue instead of holding a group's evaluation past its
-	// interval (spec 6.5). The queue outlives every reload, as the cadence
-	// behind it does.
-	rn.queue = scheduler.NewSendQueue(cadence, *queueCapacity, rn.metrics, rn.clock, log)
-
 	// SIGHUP is the whole trigger. Nothing watches the filesystem: an operator
 	// or whatever rolled the files out says when they are complete, and a
 	// watcher would read a rules tree half way through being written.
@@ -201,6 +175,27 @@ func runRun(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return exitFinding
 	}
 
+	// Having nowhere usable to send refuses the start, for the reason a
+	// missing --rules does: there is no job this process could do. config
+	// .deliverable says why it is not a finding.
+	//
+	// Every alert is posted to every endpoint, because Alertmanager members
+	// gossip and deduplicate, so a sender posting to all of them gets
+	// resilience out of deduplication the cluster already has where a balancer
+	// picks one member and hides a partition (spec 6.5).
+	if err := cfg.deliverable(); err != nil {
+		printf(stderr, "refusing to start: %s names no alertmanager to send to: %s\n", *configPath, err)
+		return exitUsage
+	}
+	rn.endpoints = alertmanagerEndpoints(cfg.alertmanagers[0])
+
+	cadence := scheduler.NewCadence(sendEndpoints(rn.endpoints), rn.resend, rn.metrics, rn.clock)
+	// Delivery is one goroutine behind a bounded queue, so an Alertmanager
+	// outage fills the queue instead of holding a group's evaluation past its
+	// interval (spec 6.5). The queue outlives every reload, as the cadence
+	// behind it does.
+	rn.queue = scheduler.NewSendQueue(cadence, *queueCapacity, rn.metrics, rn.clock, log)
+
 	if err := rn.connect(ctx, cfg); err != nil {
 		printf(stderr, "%s\n", err)
 		return exitRun
@@ -228,15 +223,15 @@ func runRun(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	}()
 
 	// Where alerts go is neither a readiness term nor a startup refusal, so
-	// these are the only thing that says the addresses in --alertmanager answer
-	// at all before something fires, one gauge series per endpoint (spec 8.1).
-	for _, probe := range newAlertmanagerProbes(endpoints, rn.metrics, log) {
+	// these are the only thing that says the configured addresses answer at all
+	// before something fires, one gauge series per endpoint (spec 8.1).
+	for _, probe := range newAlertmanagerProbes(rn.endpoints, rn.metrics, log) {
 		go probe.run(ctx)
 	}
 
 	rn.sched.Start(ctx)
 	log.Info("ruler running", "rules", len(cfg.set.Rules), "listen", *listen,
-		"alertmanagers", len(endpoints))
+		"alertmanagers", len(rn.endpoints))
 
 	for running := true; running; {
 		select {

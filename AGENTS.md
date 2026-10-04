@@ -46,8 +46,7 @@ Running the binary directly:
 go run ./cmd/ruler check --config rules/ruler.yaml rules/
 go run ./cmd/ruler check --online --config rules/ruler.yaml rules/
 go run ./cmd/ruler check --sample --config rules/ruler.yaml rules/
-go run ./cmd/ruler run --rules ./rules --config ./rules/ruler.yaml \
-  --alertmanager http://localhost:9093
+go run ./cmd/ruler run --rules ./rules --config ./rules/ruler.yaml
 go run ./cmd/ruler version
 ```
 

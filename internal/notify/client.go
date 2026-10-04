@@ -7,8 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"net/url"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/dennisme/clickhouse-ruler/internal/alert"
@@ -33,6 +33,21 @@ const (
 type Client struct {
 	URL  string
 	HTTP *http.Client
+
+	// auth is the Authorization header value sent on every request, unset for
+	// an Alertmanager that is not behind auth. It is built from the credential
+	// the operator's file named, never from the URL (spec 6.5).
+	//
+	// A resolved header rather than a username and a password, because
+	// basic_auth and a bearer token differ only in how this string is spelled,
+	// and the client has no reason to know which it was given.
+	//
+	// Atomic rather than a plain field because a reload rotates it from the
+	// run loop while the delivery worker and this endpoint's probe are both
+	// using the client. Swapping the value in place rather than rebuilding the
+	// client is what keeps the Cadence, the send queue and the probe goroutine
+	// untouched by a rotation (spec 6.5).
+	auth atomic.Pointer[string]
 
 	// MaxAttempts counts the first try, so 1 disables retrying.
 	MaxAttempts int
@@ -99,13 +114,14 @@ func (c *Client) Send(ctx context.Context, alerts []alert.Alert) error {
 func (c *Client) post(ctx context.Context, body []byte) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.URL+alertsPath, bytes.NewReader(body))
 	if err != nil {
-		return scrub(err)
+		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	c.authenticate(req)
 
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
-		return retryableError{scrub(err)}
+		return retryableError{err}
 	}
 	defer func() { _ = resp.Body.Close() }()
 
@@ -127,12 +143,17 @@ func (c *Client) post(ctx context.Context, body []byte) error {
 func (c *Client) Probe(ctx context.Context) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.URL+readyPath, nil)
 	if err != nil {
-		return scrub(err)
+		return err
 	}
+	// The probe authenticates too. An Alertmanager behind basic auth answers
+	// /-/ready with a 401 to an anonymous request, so a probe that skipped the
+	// header would report a healthy Alertmanager as unreachable for the life
+	// of the process (spec 8.2).
+	c.authenticate(req)
 
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
-		return scrub(err)
+		return err
 	}
 	defer func() { _ = resp.Body.Close() }()
 
@@ -142,23 +163,23 @@ func (c *Client) Probe(ctx context.Context) error {
 	return nil
 }
 
-// scrub removes the credentials an error out of net/http echoes. A *url.Error
-// prints the URL the request was built from, and that URL is --alertmanager,
-// which may carry userinfo. The scheme, host and path survive, because
-// whoever reads the line needs them; the password does not (spec 8.4).
-func scrub(err error) error {
-	var uerr *url.Error
-	if !errors.As(err, &uerr) {
-		return err
-	}
+// SetAuthorization replaces the credential every later request authenticates
+// with. An empty value means no header at all, which is the Alertmanager that
+// is not behind auth.
+//
+// Safe while sends and probes are in flight. A request already built keeps the
+// credential it was built with, which is one request posted with the previous
+// secret rather than a request lost.
+func (c *Client) SetAuthorization(value string) { c.auth.Store(&value) }
 
-	// A URL this package cannot parse is one it cannot redact either, so it
-	// is dropped rather than printed on the chance it holds no password.
-	safe := "the alertmanager URL"
-	if u, perr := url.Parse(uerr.URL); perr == nil {
-		safe = u.Redacted()
+// authenticate adds the credential, if there is one. Set rather than added, so
+// a retry of the same request cannot stack two headers.
+func (c *Client) authenticate(req *http.Request) {
+	value := c.auth.Load()
+	if value == nil || *value == "" {
+		return
 	}
-	return fmt.Errorf("%s %s: %w", uerr.Op, safe, uerr.Err)
+	req.Header.Set("Authorization", *value)
 }
 
 // retryableError marks a failure worth repeating with the same payload.
