@@ -31,7 +31,7 @@ jobs:
       - uses: dennisme/clickhouse-ruler/action@v1
         with:
           rules: ./rules
-          sources: ./rules/sources.yaml
+          config: ./rules/ruler.yaml
           changed-since: origin/${{ github.base_ref }}
           comment: true
 ```
@@ -95,8 +95,8 @@ mitigation for a failure the checks cannot catch alone:
 - **Do not filter the workflow by path.** A workflow a `paths` filter skipped
   reports no status at all, and a required status that never reports blocks
   every pull request. In a rules repository there is nothing worth filtering.
-- **`CODEOWNERS` on the sources file.** It carries addresses, credentials and
-  caps, and no rule author needs to read it. Not on `ruler.yaml`: policy merges
+- **`CODEOWNERS` on the operator's file.** It carries addresses, credentials and
+  caps, and no rule author needs to read it. Not on `policy.yaml`: policy merges
   as a maximum, so a team file cannot loosen what the instance set and a guard
   there would protect nothing.
 
@@ -116,7 +116,7 @@ Two cases widen it back to everything, and both say so on stderr:
 
 | What happened | Why everything is checked |
 | --- | --- |
-| The sources file or a `ruler.yaml` changed | A source's labels or a check's severity moved, so rules in untouched files are affected |
+| The operator's file or a `policy.yaml` changed | A source's labels or a check's severity moved, so rules in untouched files are affected |
 | The base will not resolve: a shallow checkout, or not a repository | Not knowing what changed is a reason to do more work, never less |
 
 It is not a CI-only feature. `ruler check --changed-since origin/main ./rules/`
@@ -132,7 +132,7 @@ changed files among the paths named. See
 
 `online: true` adds the checks that need a connection, which read metadata and
 no rows. They need network access to the cluster and the credentials in the
-sources file.
+operator's file.
 
 A pull request from a fork gets a read-only token and no secrets, so it can do
 neither: no online checks, and no comment. The comment step reports that as a
@@ -180,8 +180,8 @@ min by (version) (clickhouse_ruler_build_info)
 | Input | Default | What it does |
 | --- | --- | --- |
 | `rules` | required | The rules directory to check |
-| `sources` | `sources.yaml` | The sources file |
-| `config` | `ruler.yaml` beside the rules, if present | A policy file |
+| `config` | `ruler.yaml` | The operator's file, which names the sources |
+| `policy` | `policy.yaml` beside the rules, if present | A policy file |
 | `format` | `github` | `github` for annotations on the diff, or `text`, or `json` |
 | `changed-since` | everything | Report only findings in files that differ from the merge base with this reference |
 | `online` | `false` | Also run the checks that need a ClickHouse connection |
@@ -210,7 +210,7 @@ workflow that downloads nothing:
 
 ```yaml
 - run: |
-    ruler check --sources rules/sources.yaml \
+    ruler check --config rules/ruler.yaml \
       --format=github \
       --changed-since "origin/$BASE" \
       --markdown report.md \

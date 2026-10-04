@@ -198,7 +198,7 @@ func TestComplexityLimitTakesTheLowest(t *testing.T) {
 func TestParseRejectsAMalformedLimit(t *testing.T) {
 	in := []byte("checks:\n  rule/complexity:\n    keys: [max-joins, max-subqueries:many]\n")
 
-	_, problems := Parse("ruler.yaml", in)
+	_, problems := Parse("policy.yaml", in)
 	if len(problems) != 2 {
 		t.Fatalf("got %d problems, want one per malformed key: %v", len(problems), problems)
 	}
@@ -235,7 +235,7 @@ func TestComplexityScopeMayRaiseTheShippedCeiling(t *testing.T) {
 func TestParseAcceptsADeclaredFlag(t *testing.T) {
 	in := []byte("checks:\n  rule/attribute-key:\n    keys: [require-rows]\n")
 
-	p, problems := Parse("ruler.yaml", in)
+	p, problems := Parse("policy.yaml", in)
 	if len(problems) != 0 {
 		t.Fatalf("problems = %v, want none", problems)
 	}
@@ -247,7 +247,7 @@ func TestParseAcceptsADeclaredFlag(t *testing.T) {
 func TestParseRejectsACeilingWrittenAsAFlag(t *testing.T) {
 	in := []byte("checks:\n  rule/attribute-key:\n    keys: [max-sample-rows]\n")
 
-	_, problems := Parse("ruler.yaml", in)
+	_, problems := Parse("policy.yaml", in)
 	if len(problems) != 1 {
 		t.Fatalf("problems = %v, want one", problems)
 	}
@@ -261,7 +261,7 @@ func TestParseRejectsACeilingWrittenAsAFlag(t *testing.T) {
 func TestParseRejectsAnUndeclaredFlag(t *testing.T) {
 	in := []byte("checks:\n  rule/attribute-key:\n    keys: [require-row]\n")
 
-	if _, problems := Parse("ruler.yaml", in); len(problems) != 1 {
+	if _, problems := Parse("policy.yaml", in); len(problems) != 1 {
 		t.Fatalf("problems = %v, want one", problems)
 	}
 }

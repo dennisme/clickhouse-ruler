@@ -722,7 +722,7 @@ version each replica is running.
 | Label | What it says |
 | --- | --- |
 | `source` | Which source's ClickHouse user does not meet the contract. |
-| `file` | The sources file to edit. |
+| `file` | The operator's file to edit. |
 | `check` | Always `source/privileges`, and the name of the page that explains it: [the check pages](checks/index.md). |
 | `severity` | What the same finding would do in CI. |
 
@@ -955,7 +955,7 @@ which is a distinct code so a supervisor can tell "the flags were wrong" from
 
 ## What a reload refuses
 
-`SIGHUP` re-reads the rules directory, the sources file and the policy file,
+`SIGHUP` re-reads the rules directory, the operator's file and the policy file,
 and replaces what is running with them. Nothing watches the filesystem: you say
 when the files are complete, because a watcher would read a rules tree half way
 through being written.
@@ -996,7 +996,7 @@ at startup and a reload re-reads none of them, so editing `--alertmanager`,
 `--resend-tolerance`, `--notification-queue-capacity`, `--shutdown-timeout`,
 `--log-level` or `--enable-reload-endpoint` and sending `SIGHUP` gives you a
 reload that succeeded and changed nothing. Restart the process. The same is true
-of `--rules`, `--sources` and `--config`: a reload re-reads the paths it was
+of `--rules`, `--config` and `--policy`: a reload re-reads the paths it was
 started with, so a new path needs a restart while new contents at the same path
 need only the signal.
 
@@ -1031,7 +1031,7 @@ rather than at the next handshake, reload: it is the same signal, it costs one
 reconnect per changed source, and it reports what it read.
 
 **A file that cannot be read refuses the whole reading.** A file that is not
-valid YAML, a missing sources file, a policy file that will not parse, a rules
+valid YAML, a missing operator's file, a policy file that will not parse, a rules
 directory that has gone. Including the files in the reading that are fine: a
 rules tree is loaded as a tree, and half of one is not a configuration anybody
 wrote down. The running configuration is kept, because a reload is not an

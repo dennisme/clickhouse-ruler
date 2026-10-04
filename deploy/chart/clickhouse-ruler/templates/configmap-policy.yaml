@@ -6,6 +6,6 @@ metadata:
   labels:
     {{- include "clickhouse-ruler.labels" . | nindent 4 }}
 data:
-  ruler.yaml: |
+  policy.yaml: |
     {{- .Values.policy | nindent 4 }}
 {{- end }}

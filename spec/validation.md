@@ -438,13 +438,13 @@ rather than replacing it: the tier 1 checks resolve the columns and types tier 2
 samples against, so the sampling checks have nothing to ask without them.
 
 The `check:` block above is what this becomes when that file exists, and it does
-not yet. `ruler.yaml` is the policy file and its only section is `checks:`, the
+not yet. `policy.yaml` is the policy file and its only section is `checks:`, the
 per-check severities in 7.6; the connection is not configured there at all,
-because a source carries its own address in `sources.yaml` (6.6), which is also
+because a source carries its own address in `ruler.yaml` (6.6), which is also
 why the `clickhouse:` key above describes something the ruler does not read.
 Sampling is a `ruler check` concern either way: `ruler run` evaluates rules
 rather than validating them, so there is nothing for the two to disagree about
-and no drift for the file to prevent (7.1). What does belong in `ruler.yaml` is
+and no drift for the file to prevent (7.1). What does belong in `policy.yaml` is
 already there: the check's severity, its ceiling and its flag.
 
 Per team severity overrides by path or rule name matcher, so the central team
@@ -814,15 +814,15 @@ to `error`. Needing one means asking a repo owner to change the policy file,
 which is the CODEOWNERS workflow doing its job rather than being worked
 around.
 
-**Configuration lives in the operator's file**, `ruler.yaml`, alongside
-`sources.yaml` in the CODEOWNERS lane from 6.6. This is what preserves the
+**Configuration lives in a file rule authors cannot reach**, `policy.yaml`,
+alongside `ruler.yaml` in the CODEOWNERS lane from 6.6. This is what preserves the
 argument in 7.1. Enforcement is not weakened by making policy configurable,
 because rule authors still cannot reach the policy; the platform team sets it
 and authors are still bound by it. What changes is that we stop guessing what
 that policy should be.
 
 ```yaml
-# ruler.yaml
+# policy.yaml
 checks:
   labels/required:
     severity: error
@@ -842,7 +842,7 @@ Two consequences worth stating before this is built.
 it; `warn` means it loads and reports. Turning a check down does not just quiet
 CI, it changes what the running ruler will accept.
 
-**CI and the ruler must read the same `ruler.yaml`**, or a rule passes CI and
+**CI and the ruler must read the same `policy.yaml`**, or a rule passes CI and
 then fails to load, which is the drift 7.1 exists to prevent. That is the
 reason the file belongs in the rules repository rather than in deployment
 configuration.
@@ -858,9 +858,9 @@ instance serves teams and datasources with genuinely different needs.
 
 | Scope | Where | Owned by |
 |---|---|---|
-| instance | `ruler.yaml` at the rules root | platform |
-| datasource | a `checks:` block in `sources.yaml` | platform |
-| team | `ruler.yaml` in a team directory | that team |
+| instance | `policy.yaml` at the rules root | platform |
+| datasource | a `checks:` block in `ruler.yaml` | platform |
+| team | `policy.yaml` in a team directory | that team |
 
 A rule's effective policy is the **strictest** setting across every scope that
 applies to it. Severity takes the maximum on `off < warn < error`. A required
@@ -946,7 +946,7 @@ shipped default. Carrying `max-joins:2` into every union would make the default
 a maximum nobody could raise, and an operator who means to permit a fourth join
 could write it, have it parse, merge, and do nothing.
 
-**A team file governs its directory and everything below it.** A `ruler.yaml`
+**A team file governs its directory and everything below it.** A `policy.yaml`
 anywhere in the rules tree applies to every rule at or under its directory, so
 a rule's policy is the instance file, every team file above it, and the
 policies of the sources it matched, all merged at once. Nested team
@@ -954,14 +954,14 @@ directories are not a chain with a winner: both files are scopes, both apply,
 and the maximum decides, which is the same sentence as everywhere else in this
 section.
 
-The `ruler.yaml` at the rules root is the instance scope and not also a team
+The `policy.yaml` at the rules root is the instance scope and not also a team
 file. Under a maximum, reading one file twice changes no severity, so this is
 not about the result: the origin recorded on a finding is what `--explain`
 prints, and naming the team scope for a setting the platform made points an
 author at the wrong file and the wrong owner.
 
 **Two names are reserved in the rules tree, and the decision is by name rather
-than by content.** `ruler.yaml` is policy and `sources.yaml` is the sources
+than by content.** `policy.yaml` is policy and `ruler.yaml` is the operator's
 file, which the quick start keeps beside the rules. Neither is a rule file, and
 walking every `*.yaml` as one reports a pile of unknown fields against a file
 that is exactly right. The alternative is sniffing for a `groups:` key, which
@@ -969,7 +969,7 @@ guesses about a file whose name the author can already read, and which reports
 nothing useful about a rule file with a typo in that one key.
 
 A team file's own parse problems are reported like any other file's. A
-`ruler.yaml` that will not parse is a file whose author believes a check is
+`policy.yaml` that will not parse is a file whose author believes a check is
 raised when it is not, and that silence is the one failure this scope cannot
 afford: what makes a team-owned file safe is that it can only tighten, which
 stops being true when a typo quietly drops the setting.
@@ -1044,7 +1044,7 @@ Every finding names three things:
 
 `ruler check --explain` prints the resolved policy for each rule with the
 origin of every setting, so an author can see that `labels/required` is
-`error` because `sources.yaml:12` raised it, not because of anything in their
+`error` because `ruler.yaml:12` raised it, not because of anything in their
 own directory.
 
 It also prints the sources a rule matched, because with 6.10 that is no
@@ -1114,7 +1114,7 @@ September 2026.
 
 | | `pint` | here |
 |---|---|---|
-| config files | one `.pint.hcl` at the repo root; no includes, no per-directory files | `ruler.yaml` at the rules root, plus a `checks:` block per source in `sources.yaml` |
+| config files | one `.pint.hcl` at the repo root; no includes, no per-directory files | `policy.yaml` at the rules root, plus a `checks:` block per source in `ruler.yaml` |
 | which server checks a rule | `include`/`exclude` path regexes on the `prometheus` block | label selectors on the rule, matched against source labels (6.10) |
 | severity | set on the check inside a `rule` block, `bug\|warning\|info` | set per check in any scope, `off\|warn\|error`, merged strictest-wins (7.7) |
 | selecting which rules a setting applies to | `match`/`ignore` on `path`, `state`, `name`, `kind`, `command`, `annotation`, `label`, `for`, `keep_firing_for` | scope: instance-wide, or per source |
@@ -1158,7 +1158,7 @@ is what makes the merge in 7.7 mean anything: if a rule file could turn a
 check off, no statement about the strictest scope winning would be true.
 
 The cost lands on the legitimate case. A rule that is correct everywhere and
-fails against one staging cluster needs a source owner to edit `sources.yaml`,
+fails against one staging cluster needs a source owner to edit `ruler.yaml`,
 where a `pint` author would write one comment. If that case turns up often
 enough to matter, the answer is an operator-owned exemption with a reason and
 an expiry, which is what 7.7 specifies: the finding is dropped for one check
@@ -1261,7 +1261,7 @@ rather than implying the tool handles it:
   repository's secrets and must not be used to work around it: that is how a
   fork's code gets a credential.
 - **Which cluster CI points at.** This needs no new configuration. Sources are
-  a file passed with `--sources`, so CI can be given a different one: a
+  a file passed with `--config`, so CI can be given a different one: a
   read-only replica, with a ClickHouse user that exists only for validation,
   while the ruler evaluating in production uses its own. Labels already
   decide which rules match which sources, so the same rules resolve against

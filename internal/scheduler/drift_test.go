@@ -37,12 +37,12 @@ func shape(pairs ...string) []query.Column {
 // costPolicy sets rule/cost's ceilings to what a case wants to cross.
 func costPolicy(rows, rate string) *policy.Policy {
 	return &policy.Policy{
-		File: "rules/ruler.yaml",
+		File: "rules/policy.yaml",
 		Checks: map[string]policy.Setting{
 			lint.CheckRuleCost: {
 				Severity: lint.SeverityWarning,
 				Keys:     []string{lint.LimitRowsRead + ":" + rows, lint.LimitRowsPerSecond + ":" + rate},
-				File:     "rules/ruler.yaml",
+				File:     "rules/policy.yaml",
 				Line:     4,
 			},
 		},
@@ -216,7 +216,7 @@ func TestDriftReportsCostOverTheCeiling(t *testing.T) {
 	if p.Severity != lint.SeverityWarning {
 		t.Errorf("severity is %s, want the warning policy set", p.Severity)
 	}
-	if p.PolicyFile != "rules/ruler.yaml" {
+	if p.PolicyFile != "rules/policy.yaml" {
 		t.Errorf("policy file is %q, want the file that set the ceiling", p.PolicyFile)
 	}
 	if !strings.Contains(p.Text, "5000 rows") {

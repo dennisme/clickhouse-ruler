@@ -23,8 +23,8 @@ func repo(t *testing.T) string {
 	gitIn(t, dir, "init", "--initial-branch=main")
 	writeFile(t, dir, "rules/payments/latency.yaml", "base\n")
 	writeFile(t, dir, "rules/search/latency.yaml", "base\n")
-	writeFile(t, dir, "sources.yaml", "base\n")
-	writeFile(t, dir, "rules/payments/ruler.yaml", "base\n")
+	writeFile(t, dir, "ruler.yaml", "base\n")
+	writeFile(t, dir, "rules/payments/policy.yaml", "base\n")
 	gitIn(t, dir, "add", ".")
 	gitIn(t, dir, "commit", "-m", "base")
 	return dir
@@ -126,9 +126,9 @@ func TestChangedSinceUsesTheMergeBase(t *testing.T) {
 func TestChangedSinceWidensOnTheSourcesFile(t *testing.T) {
 	dir := repo(t)
 	gitIn(t, dir, "branch", "base-tip")
-	writeFile(t, dir, "sources.yaml", "changed\n")
+	writeFile(t, dir, "ruler.yaml", "changed\n")
 
-	f := ChangedSince(dir, "base-tip", []string{filepath.Join(dir, "sources.yaml")})
+	f := ChangedSince(dir, "base-tip", []string{filepath.Join(dir, "ruler.yaml")})
 	if f.Note == "" {
 		t.Error("widening to a full run must say why")
 	}
@@ -140,11 +140,11 @@ func TestChangedSinceWidensOnTheSourcesFile(t *testing.T) {
 }
 
 // A policy file can raise a check, so a rule that warned yesterday blocks
-// today (spec 7.7, 10.3). Any ruler.yaml, not only the one named by --config.
+// today (spec 7.7, 10.3). Any policy.yaml, not only the one named by --policy.
 func TestChangedSinceWidensOnAPolicyFile(t *testing.T) {
 	dir := repo(t)
 	gitIn(t, dir, "branch", "base-tip")
-	writeFile(t, dir, "rules/payments/ruler.yaml", "changed\n")
+	writeFile(t, dir, "rules/payments/policy.yaml", "changed\n")
 
 	f := ChangedSince(dir, "base-tip", nil)
 	if f.Note == "" {
@@ -278,7 +278,7 @@ func TestPathsRefusesWhatTheLoaderNeverRead(t *testing.T) {
 	for _, arg := range []string{
 		filepath.Join(dir, "payments", "typo.yaml"),
 		filepath.Join(dir, "search"),
-		filepath.Join(dir, "sources.yaml"),
+		filepath.Join(dir, "ruler.yaml"),
 		filepath.Join(dir, "..", "elsewhere"),
 	} {
 		if _, err := Paths(files, []string{arg}); err == nil {

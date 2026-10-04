@@ -19,7 +19,7 @@ func errorSetting() policy.Setting {
 	return policy.Setting{
 		Severity: lint.SeverityError,
 		Keys:     lint.Assertions(),
-		File:     "ruler.yaml",
+		File:     "policy.yaml",
 		Line:     7,
 	}
 }
@@ -32,7 +32,7 @@ func TestPrivilegeProblemsReportsEachFailedAssertion(t *testing.T) {
 		{Name: lint.AssertionTableReadable, Status: query.StatusPass},
 	}
 
-	problems := privilegeProblems("sources.yaml", "payments_prod", 12, errorSetting(), results)
+	problems := privilegeProblems("ruler.yaml", "payments_prod", 12, errorSetting(), results)
 	if len(problems) != 2 {
 		t.Fatalf("got %d problems, want one per failed assertion: %v", len(problems), problems)
 	}
@@ -47,12 +47,12 @@ func TestPrivilegeProblemsReportsEachFailedAssertion(t *testing.T) {
 		if p.Subject != "payments_prod" {
 			t.Errorf("subject = %q, want the source name", p.Subject)
 		}
-		if p.File != "sources.yaml" || p.Line != 12 {
+		if p.File != "ruler.yaml" || p.Line != 12 {
 			t.Errorf("location = %s:%d, want the source's line in the sources file", p.File, p.Line)
 		}
 		// --explain has to be able to name the file that raised this.
-		if p.PolicyFile != "ruler.yaml" || p.PolicyLine != 7 {
-			t.Errorf("policy origin = %s:%d, want ruler.yaml:7", p.PolicyFile, p.PolicyLine)
+		if p.PolicyFile != "policy.yaml" || p.PolicyLine != 7 {
+			t.Errorf("policy origin = %s:%d, want policy.yaml:7", p.PolicyFile, p.PolicyLine)
 		}
 	}
 
@@ -74,7 +74,7 @@ func TestPrivilegeProblemsNeverBlockOnInconclusive(t *testing.T) {
 		{Name: lint.AssertionReadonly, Status: query.StatusInconclusive, Detail: "clickhouse did not answer"},
 	}
 
-	problems := privilegeProblems("sources.yaml", "payments_prod", 12, errorSetting(), results)
+	problems := privilegeProblems("ruler.yaml", "payments_prod", 12, errorSetting(), results)
 	if len(problems) != 1 {
 		t.Fatalf("got %d problems, want 1: %v", len(problems), problems)
 	}
@@ -92,7 +92,7 @@ func TestPrivilegeProblemsSaysNothingWhenTheContractHolds(t *testing.T) {
 		{Name: lint.AssertionReadonly, Status: query.StatusPass},
 	}
 
-	if problems := privilegeProblems("sources.yaml", "payments_prod", 12, errorSetting(), results); len(problems) != 0 {
+	if problems := privilegeProblems("ruler.yaml", "payments_prod", 12, errorSetting(), results); len(problems) != 0 {
 		t.Fatalf("got %v, want nothing", problems)
 	}
 }
@@ -146,21 +146,21 @@ func TestPublishContractProblems(t *testing.T) {
 	m := scheduler.NewMetrics(reg)
 
 	problems := []lint.Problem{
-		lint.NewProblem("sources.yaml", 12, lint.CheckSourcePrivileges, lint.SeverityWarning,
+		lint.NewProblem("ruler.yaml", 12, lint.CheckSourcePrivileges, lint.SeverityWarning,
 			"clusters-readable: cannot count the cluster's shards"),
 	}
 	problems[0].Subject = "payments_shards"
 
 	publishContractProblems(m, problems)
 
-	if got := contractGauge(t, m, "sources.yaml", "payments_shards", lint.SeverityWarning); got != 1 {
+	if got := contractGauge(t, m, "ruler.yaml", "payments_shards", lint.SeverityWarning); got != 1 {
 		t.Errorf("gauge = %v, want the failing source raised", got)
 	}
 
 	// Rebuilt rather than incremented, so a grant an operator added stops being
 	// a series on the next reload instead of alerting forever.
 	publishContractProblems(m, nil)
-	if got := contractGauge(t, m, "sources.yaml", "payments_shards", lint.SeverityWarning); got != 0 {
+	if got := contractGauge(t, m, "ruler.yaml", "payments_shards", lint.SeverityWarning); got != 0 {
 		t.Errorf("gauge = %v, want the finding cleared once the contract holds", got)
 	}
 }

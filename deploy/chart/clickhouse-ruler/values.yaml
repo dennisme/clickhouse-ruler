@@ -107,7 +107,7 @@ rules:
       # its root filesystem is writable where the ruler's is not.
       readOnlyRootFilesystem: false
 
-# Sources the ruler evaluates against, templated into a sources file. Every
+# Sources the ruler evaluates against, templated into `ruler.yaml`. Every
 # field a source takes is reviewable configuration except the password, which
 # is read out of a mounted Secret: no value in this chart holds one.
 #
@@ -127,15 +127,15 @@ rules:
 #     max_rows: 10000
 sources: []
 
-# The other path: a Secret holding the whole sources file, templated by
-# nothing. This is for the topology where the sources file is the platform
+# The other path: a Secret holding the whole operator's file, templated by
+# nothing. This is for the topology where the operator's file is the platform
 # team's own artifact, owned through CODEOWNERS rather than restated here.
 # Setting this and `sources` together is refused.
 sourcesSecret:
   name: ""
-  key: sources.yaml
+  key: ruler.yaml
 
-# Policy file contents, mounted as a small object and passed as --config. Empty
+# Policy file contents, mounted as a small object and passed as --policy. Empty
 # means no policy file, so every check keeps its default severity.
 #
 # policy: |

@@ -1,6 +1,6 @@
 # Deployment topologies
 
-Five ways to run this, all the same binary with a different sources file.
+Five ways to run this, all the same binary with a different `ruler.yaml`.
 Which one you want depends on who owns the clusters and who writes the rules.
 
 ## How a rule reaches the ruler
@@ -77,11 +77,11 @@ being evaluated.
 A source's address, database, table, timestamp column, caps and labels are
 reviewable configuration and live in values. Its password does not: it is a
 `password_file` pointing into a mounted Secret, and no value in the chart holds
-one. The values schema refuses a source key the sources file does not have,
+one. The values schema refuses a source key the operator's file does not have,
 which is how a password in a values file fails at render.
 
 There is a second path for the "ruler as a service" topology below, where the
-sources file is the platform team's own artifact rather than something to
+operator's file is the platform team's own artifact rather than something to
 restate in values: `sourcesSecret` names a Secret holding the whole file, and
 the chart templates none of it. Setting both is refused.
 
@@ -138,7 +138,7 @@ would throw away.
 
 ## One ruler, one cluster
 
-One process, one sources file, one ClickHouse. Sources need no labels at all,
+One process, one operator's file, one ClickHouse. Sources need no labels at all,
 because there is nothing to select between.
 
 Start here. Everything below is this plus a reason.
@@ -153,7 +153,7 @@ sources it holds.
 Label your sources by location and select on that:
 
 ```yaml
-# rules/sources.yaml, in eu-west
+# rules/ruler.yaml, in eu-west
 sources:
   - name: traces
     labels:
@@ -175,7 +175,7 @@ Watch that it returns to zero after a rollout, not that it is zero. See
 
 ## Central rulers, highly available
 
-Several rulers with the same sources file. It works by duplication, not by
+Several rulers with the same operator's file. It works by duplication, not by
 coordination: an alert's identity is its final label set, every part of that
 set comes from the files and the query result rather than from the process,
 so both rulers arrive at the same fingerprint and Alertmanager deduplicates
@@ -190,7 +190,7 @@ naming the replica, which is the obvious thing to reach for when two
 processes emit the same alert, is precisely what stops Alertmanager
 deduplicating: it makes every alert two alerts, and your route tree then
 routes both. If you need to tell the replicas apart, do it with the `job`
-label in Prometheus, not in the sources file.
+label in Prometheus, not in the operator's file.
 
 **Query load is linear in replicas.** Each replica evaluates every matched
 rule against every matched source, so three rulers is three times the
@@ -221,7 +221,7 @@ they name, and the on-call that follows from both.
 
 ## Ruler as a service
 
-The team operating ClickHouse owns the sources file and the clusters. Other
+The team operating ClickHouse owns the operator's file and the clusters. Other
 teams contribute only rules.
 
 This is the split worth keeping: adding a cluster or a ClickHouse user is an

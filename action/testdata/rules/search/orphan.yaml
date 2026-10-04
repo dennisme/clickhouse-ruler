@@ -1,5 +1,5 @@
 # Deliberately broken the other way: the selector matches no source in
-# sources.yaml, so this rule would never be evaluated by any ruler holding this
+# ruler.yaml, so this rule would never be evaluated by any ruler holding this
 # file. A warning rather than an error, which is what proves the action reports
 # both severities rather than only the blocking one.
 groups:

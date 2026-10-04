@@ -18,7 +18,7 @@ func sample() []Problem {
 			File: "rules/payments/latency.yaml", Line: 5, Subject: "HighP99Latency",
 			Check: "labels/required", Severity: SeverityWarning,
 			Text:       `required label "team" is missing`,
-			PolicyFile: "rules/ruler.yaml", PolicyLine: 4,
+			PolicyFile: "rules/policy.yaml", PolicyLine: 4,
 		},
 	}
 }
@@ -125,8 +125,8 @@ func TestFormatJSON(t *testing.T) {
 
 	// Where a severity was set is what --explain answers, and a comment
 	// builder needs it for the same reason (spec 7.8).
-	if got[1].PolicyFile != "rules/ruler.yaml" || got[1].PolicyLine != 4 {
-		t.Errorf("policy origin = %s:%d, want rules/ruler.yaml:4", got[1].PolicyFile, got[1].PolicyLine)
+	if got[1].PolicyFile != "rules/policy.yaml" || got[1].PolicyLine != 4 {
+		t.Errorf("policy origin = %s:%d, want rules/policy.yaml:4", got[1].PolicyFile, got[1].PolicyLine)
 	}
 }
 

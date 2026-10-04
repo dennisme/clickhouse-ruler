@@ -20,10 +20,10 @@ spec:
       # reload is the cheaper answer that keeps that state. Nothing the chart
       # only names by reference is here either, because its contents are not
       # readable at render time: an existing rules ConfigMap, a password Secret,
-      # or a Secret holding the whole sources file.
+      # or a Secret holding the whole operator's file.
       annotations:
         {{- if .Values.sources }}
-        checksum/sources: {{ include (print $.Template.BasePath "/configmap-sources.yaml") . | sha256sum }}
+        checksum/config: {{ include (print $.Template.BasePath "/configmap-config.yaml") . | sha256sum }}
         {{- end }}
         {{- if .Values.policy }}
         checksum/policy: {{ include (print $.Template.BasePath "/configmap-policy.yaml") . | sha256sum }}
@@ -83,7 +83,7 @@ spec:
           args:
             - run
             - --rules={{ include "clickhouse-ruler.rulesPath" . }}
-            - --sources={{ include "clickhouse-ruler.sourcesPath" . }}
+            - --config={{ include "clickhouse-ruler.sourcesPath" . }}
             {{- if not .Values.alertmanagerURLs }}
             {{- fail "alertmanagerURLs is required, one entry per member of the Alertmanager cluster" }}
             {{- end }}
@@ -98,7 +98,7 @@ spec:
             # instead changes the drain and leaves the grace period behind it.
             - --shutdown-timeout={{ .Values.ruler.shutdownTimeoutSeconds }}s
             {{- if .Values.policy }}
-            - --config={{ include "clickhouse-ruler.policyPath" . }}
+            - --policy={{ include "clickhouse-ruler.policyPath" . }}
             {{- end }}
             # On, where the binary's own default is off. The default delivery is
             # a sidecar's exec hook, and a hook cannot send a signal into
@@ -194,10 +194,10 @@ spec:
             secretName: {{ .Values.sourcesSecret.name }}
             items:
               - key: {{ .Values.sourcesSecret.key }}
-                path: sources.yaml
+                path: ruler.yaml
           {{- else }}
           configMap:
-            name: {{ include "clickhouse-ruler.fullname" . }}-sources
+            name: {{ include "clickhouse-ruler.fullname" . }}-config
           {{- end }}
         {{- if .Values.policy }}
         - name: policy

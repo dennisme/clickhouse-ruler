@@ -115,22 +115,22 @@ Three files can configure a check, and all three apply at once.
 
 | Scope | Where | Owned by |
 | --- | --- | --- |
-| instance | `ruler.yaml` at the rules root | whoever runs the ruler |
-| datasource | a `checks:` block on a source in `sources.yaml` | whoever runs the ruler |
-| team | `ruler.yaml` in a directory inside the rules tree | that team |
+| instance | `policy.yaml` at the rules root | whoever runs the ruler |
+| datasource | a `checks:` block on a source in `ruler.yaml` | whoever runs the ruler |
+| team | `policy.yaml` in a directory inside the rules tree | that team |
 
 A team file applies to every rule at or below its own directory, so a
-`rules/payments/ruler.yaml` is policy for `rules/payments/` and nothing else:
+`rules/payments/policy.yaml` is policy for `rules/payments/` and nothing else:
 
 ```text
 rules/
-  ruler.yaml            instance policy
-  sources.yaml          the sources file
+  policy.yaml            instance policy
+  ruler.yaml          the operator's file
   payments/
-    ruler.yaml          policy for every rule under payments/
+    policy.yaml          policy for every rule under payments/
     latency.yaml
     critical/
-      ruler.yaml        policy for every rule under payments/critical/
+      policy.yaml        policy for every rule under payments/critical/
       pager.yaml
   search/
     errors.yaml         unaffected by either payments file
@@ -151,8 +151,8 @@ merges, and leaves the error in place.
 severity, which is how you find out which of the three to argue with.
 
 Two file names are reserved inside the rules tree and are never read as rule
-files: `ruler.yaml` is policy and `sources.yaml` is the sources file. Policy
-in any other file is not read, and a rule in a file called `ruler.yaml` is not
+files: `policy.yaml` is policy and `ruler.yaml` is the operator's file. Policy
+in any other file is not read, and a rule in a file called `policy.yaml` is not
 evaluated.
 
 ## The policy file

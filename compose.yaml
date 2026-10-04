@@ -135,7 +135,7 @@ services:
     command:
       - run
       - --rules=/etc/ruler/rules
-      - --sources=/etc/ruler/sources.yaml
+      - --config=/etc/ruler/ruler.yaml
       - --alertmanager=http://alertmanager:9093
       - --listen=:9090
       - --log-level=warn

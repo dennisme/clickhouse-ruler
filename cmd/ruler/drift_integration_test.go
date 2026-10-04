@@ -73,7 +73,7 @@ groups:
 	// table this test created needs: the restricted user is granted one table by
 	// name and granting it another would widen the contract the other tests
 	// prove (spec 6.7.2).
-	writeFile(t, filepath.Join(dir, "sources.yaml"), fmt.Sprintf(`
+	writeFile(t, filepath.Join(dir, "ruler.yaml"), fmt.Sprintf(`
 sources:
   - name: drift_source
     labels: {team: drift}
@@ -94,7 +94,7 @@ sources:
 	go func() {
 		runDone <- runRun(ctx, []string{
 			"--rules", rulesDir,
-			"--sources", filepath.Join(dir, "sources.yaml"),
+			"--config", filepath.Join(dir, "ruler.yaml"),
 			"--alertmanager", amURL,
 			"--listen", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)),
 		}, &stdout, &stderr)

@@ -1,6 +1,6 @@
 # Source checks
 
-Everything reported about `sources.yaml`: how a cluster is reached, the caps
+Everything reported about `ruler.yaml`: how a cluster is reached, the caps
 sent with every query, and the ClickHouse user behind it.
 
 Sources are operator owned. Rule authors are typically kept out of this file
@@ -177,7 +177,7 @@ cluster whose trust is not the default one, and it turns TLS on by itself, so
 stale, and silently picking either connects in a way nobody asked for.
 
 Key material comes from files, never inline, the posture `password_file`
-already sets. The files are read when the sources file is parsed, so a path
+already sets. The files are read when the operator's file is parsed, so a path
 that is wrong fails `ruler check` instead of a daemon at its first evaluation.
 A `cert_file` without its `key_file` is reported too: a certificate with no key
 cannot be presented, and a key with no certificate is never sent, which looks
@@ -218,7 +218,7 @@ they reach are no longer the same claim. It is a downgrade an operator chooses,
 and an exemption is what it costs: a reason and a date, in the operator's own
 file, under the CODEOWNERS that already guard the credentials.
 
-The date is the point. On the day it expires the sources file fails until
+The date is the point. On the day it expires the operator's file fails until
 somebody states the reason again, which is the difference between a downgrade
 taken for a quarter and one nobody remembers taking.
 

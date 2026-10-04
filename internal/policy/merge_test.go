@@ -20,8 +20,8 @@ func scope(file string, sev lint.Severity, keys ...string) *Policy {
 // is make its own rules stricter (spec 7.7).
 func TestMergeTakesStrictestSeverity(t *testing.T) {
 	got := Merge(
-		scope("ruler.yaml", lint.SeverityWarning),
-		scope("sources.yaml", lint.SeverityError),
+		scope("policy.yaml", lint.SeverityWarning),
+		scope("ruler.yaml", lint.SeverityError),
 	)
 	if s := got.For(lint.CheckLabelsRequired).Severity; s != lint.SeverityError {
 		t.Errorf("severity = %v, want error", s)
@@ -30,7 +30,7 @@ func TestMergeTakesStrictestSeverity(t *testing.T) {
 
 func TestMergeCannotLowerSeverity(t *testing.T) {
 	got := Merge(
-		scope("sources.yaml", lint.SeverityError),
+		scope("ruler.yaml", lint.SeverityError),
 		scope("team.yaml", lint.SeverityOff),
 	)
 	if s := got.For(lint.CheckLabelsRequired).Severity; s != lint.SeverityError {
@@ -61,8 +61,8 @@ func TestMergeIsOrderIndependent(t *testing.T) {
 
 func TestMergeUnionsKeys(t *testing.T) {
 	got := Merge(
-		scope("ruler.yaml", lint.SeverityWarning, "team", "severity"),
-		scope("sources.yaml", lint.SeverityWarning, "tier", "team"),
+		scope("policy.yaml", lint.SeverityWarning, "team", "severity"),
+		scope("ruler.yaml", lint.SeverityWarning, "tier", "team"),
 	).For(lint.CheckLabelsRequired)
 
 	want := []string{"severity", "team", "tier"}
@@ -81,12 +81,12 @@ func TestMergeUnionsKeys(t *testing.T) {
 // check is an error.
 func TestMergeKeepsOriginOfWinningScope(t *testing.T) {
 	got := Merge(
-		scope("ruler.yaml", lint.SeverityWarning),
-		scope("sources.yaml", lint.SeverityError),
+		scope("policy.yaml", lint.SeverityWarning),
+		scope("ruler.yaml", lint.SeverityError),
 	).For(lint.CheckLabelsRequired)
 
-	if got.File != "sources.yaml" {
-		t.Errorf("origin = %q, want sources.yaml, the scope that raised it", got.File)
+	if got.File != "ruler.yaml" {
+		t.Errorf("origin = %q, want ruler.yaml, the scope that raised it", got.File)
 	}
 }
 
@@ -104,7 +104,7 @@ func TestMergeWithNoScopesGivesDefaults(t *testing.T) {
 // setting that means "nobody is asked" could be written and never took
 // effect (spec 7.6).
 func TestMergeLetsAnOperatorTurnACheckOff(t *testing.T) {
-	got := Merge(scope("ruler.yaml", lint.SeverityOff)).For(lint.CheckLabelsRequired)
+	got := Merge(scope("policy.yaml", lint.SeverityOff)).For(lint.CheckLabelsRequired)
 
 	if got.Severity != lint.SeverityOff {
 		t.Errorf("severity = %v, want off", got.Severity)
@@ -113,7 +113,7 @@ func TestMergeLetsAnOperatorTurnACheckOff(t *testing.T) {
 
 // Turning one check off leaves every other check at its default.
 func TestMergeLeavesUnconfiguredChecksAtTheirDefaults(t *testing.T) {
-	got := Merge(scope("ruler.yaml", lint.SeverityOff))
+	got := Merge(scope("policy.yaml", lint.SeverityOff))
 
 	if s := got.For(lint.CheckAnnotationsRunbook).Severity; s != lint.SeverityWarning {
 		t.Errorf("annotations/runbook severity = %v, want the default warning", s)
@@ -123,7 +123,7 @@ func TestMergeLeavesUnconfiguredChecksAtTheirDefaults(t *testing.T) {
 // A scope may add keys and may not drop the shipped ones, so a check turned
 // up by one scope still requires everything the defaults asked for.
 func TestMergeKeepsDefaultKeys(t *testing.T) {
-	got := Merge(scope("ruler.yaml", lint.SeverityError, "tier")).For(lint.CheckLabelsRequired)
+	got := Merge(scope("policy.yaml", lint.SeverityError, "tier")).For(lint.CheckLabelsRequired)
 
 	want := []string{"severity", "team", "tier"}
 	if len(got.Keys) != len(want) {

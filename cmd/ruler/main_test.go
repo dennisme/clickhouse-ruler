@@ -28,8 +28,8 @@ func fixture(t *testing.T, rule, config string) (dir string) {
 		}
 	}
 	write(filepath.Join(rules, "latency.yaml"), rule)
-	write(filepath.Join(dir, "sources.yaml"), sourcesYAML)
-	write(filepath.Join(dir, "ruler.yaml"), config)
+	write(filepath.Join(dir, "ruler.yaml"), sourcesYAML)
+	write(filepath.Join(dir, "policy.yaml"), config)
 	return dir
 }
 
@@ -109,7 +109,7 @@ func TestCheckWarningsExitZero(t *testing.T) {
 	dir := fixture(t, bareRule, "")
 
 	code, stdout, _ := runCheck(t, "check",
-		"--sources", filepath.Join(dir, "sources.yaml"),
+		"--config", filepath.Join(dir, "ruler.yaml"),
 		filepath.Join(dir, "rules"))
 
 	if code != 0 {
@@ -126,7 +126,7 @@ func TestCheckErrorsExitNonZero(t *testing.T) {
 	dir := fixture(t, brokenRule, "")
 
 	code, stdout, _ := runCheck(t, "check",
-		"--sources", filepath.Join(dir, "sources.yaml"),
+		"--config", filepath.Join(dir, "ruler.yaml"),
 		filepath.Join(dir, "rules"))
 
 	if code == 0 {
@@ -146,8 +146,8 @@ func TestCheckPolicyRaisesSeverity(t *testing.T) {
 	dir := fixture(t, bareRule, config)
 
 	code, stdout, _ := runCheck(t, "check",
-		"--sources", filepath.Join(dir, "sources.yaml"),
 		"--config", filepath.Join(dir, "ruler.yaml"),
+		"--policy", filepath.Join(dir, "policy.yaml"),
 		filepath.Join(dir, "rules"))
 
 	if code == 0 {
@@ -159,7 +159,7 @@ func TestCheckGitHubFormat(t *testing.T) {
 	dir := fixture(t, brokenRule, "")
 
 	_, stdout, _ := runCheck(t, "check",
-		"--sources", filepath.Join(dir, "sources.yaml"),
+		"--config", filepath.Join(dir, "ruler.yaml"),
 		"--format", "github",
 		filepath.Join(dir, "rules"))
 
@@ -191,7 +191,7 @@ func TestCheckAllowsDuplicateAlertNamesAcrossFiles(t *testing.T) {
 	}
 
 	code, stdout, _ := runCheck(t, "check",
-		"--sources", filepath.Join(dir, "sources.yaml"),
+		"--config", filepath.Join(dir, "ruler.yaml"),
 		filepath.Join(dir, "rules"))
 
 	if code != exitOK {
@@ -209,7 +209,7 @@ func TestCheckRejectsRepeatedGroupNameInOneFile(t *testing.T) {
 	dir := fixture(t, repeatedGroupRule, "")
 
 	code, stdout, _ := runCheck(t, "check",
-		"--sources", filepath.Join(dir, "sources.yaml"),
+		"--config", filepath.Join(dir, "ruler.yaml"),
 		filepath.Join(dir, "rules"))
 
 	if code != exitFinding {
@@ -230,15 +230,15 @@ func TestCheckExplainNamesPolicyOrigin(t *testing.T) {
 	dir := fixture(t, bareRule, config)
 
 	_, stdout, _ := runCheck(t, "check",
-		"--sources", filepath.Join(dir, "sources.yaml"),
 		"--config", filepath.Join(dir, "ruler.yaml"),
+		"--policy", filepath.Join(dir, "policy.yaml"),
 		"--explain",
 		filepath.Join(dir, "rules"))
 
 	if !strings.Contains(stdout, "labels/required") {
 		t.Errorf("explain should list the check, got:\n%s", stdout)
 	}
-	if !strings.Contains(stdout, "ruler.yaml") {
+	if !strings.Contains(stdout, "policy.yaml") {
 		t.Errorf("explain should name the policy file that set it, got:\n%s", stdout)
 	}
 }
@@ -247,7 +247,7 @@ func TestCheckRejectsUnknownFormat(t *testing.T) {
 	dir := fixture(t, bareRule, "")
 
 	code, _, stderr := runCheck(t, "check",
-		"--sources", filepath.Join(dir, "sources.yaml"),
+		"--config", filepath.Join(dir, "ruler.yaml"),
 		"--format", "xml",
 		filepath.Join(dir, "rules"))
 
@@ -265,7 +265,7 @@ func TestCheckJSONFormat(t *testing.T) {
 	dir := fixture(t, brokenRule, "")
 
 	code, stdout, _ := runCheck(t, "check",
-		"--sources", filepath.Join(dir, "sources.yaml"),
+		"--config", filepath.Join(dir, "ruler.yaml"),
 		"--format", "json",
 		filepath.Join(dir, "rules"))
 
@@ -298,7 +298,7 @@ func TestCheckExplainStaysOffStdoutInJSONMode(t *testing.T) {
 	dir := fixture(t, bareRule, "")
 
 	_, stdout, stderr := runCheck(t, "check",
-		"--sources", filepath.Join(dir, "sources.yaml"),
+		"--config", filepath.Join(dir, "ruler.yaml"),
 		"--format", "json",
 		"--explain",
 		filepath.Join(dir, "rules"))
@@ -329,7 +329,7 @@ func TestCheckExplainStaysOffStdoutInGitHubMode(t *testing.T) {
 	dir := fixture(t, bareRule, "")
 
 	_, stdout, stderr := runCheck(t, "check",
-		"--sources", filepath.Join(dir, "sources.yaml"),
+		"--config", filepath.Join(dir, "ruler.yaml"),
 		"--format", "github",
 		"--explain",
 		filepath.Join(dir, "rules"))
@@ -355,12 +355,12 @@ func TestCheckBlocksAnExpiredExemption(t *testing.T) {
         reason: the schema here was frozen while the table was retired
         until: 2020-01-01
 `
-	if err := os.WriteFile(filepath.Join(dir, "sources.yaml"), []byte(expired), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "ruler.yaml"), []byte(expired), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
 	code, stdout, _ := runCheck(t, "check",
-		"--sources", filepath.Join(dir, "sources.yaml"),
+		"--config", filepath.Join(dir, "ruler.yaml"),
 		filepath.Join(dir, "rules"))
 
 	if code == 0 {
@@ -384,12 +384,12 @@ func TestExplainListsExemptions(t *testing.T) {
         reason: the schema here is frozen until the table is retired
         until: 2099-01-01
 `
-	if err := os.WriteFile(filepath.Join(dir, "sources.yaml"), []byte(exempting), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "ruler.yaml"), []byte(exempting), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
 	_, stdout, _ := runCheck(t, "check",
-		"--sources", filepath.Join(dir, "sources.yaml"),
+		"--config", filepath.Join(dir, "ruler.yaml"),
 		"--explain",
 		filepath.Join(dir, "rules"))
 
@@ -407,7 +407,7 @@ func TestCheckSummaryNeedsOnline(t *testing.T) {
 	out := filepath.Join(dir, "summary.md")
 
 	code, _, stderr := runCheck(t, "check",
-		"--sources", filepath.Join(dir, "sources.yaml"),
+		"--config", filepath.Join(dir, "ruler.yaml"),
 		"--summary", out,
 		filepath.Join(dir, "rules"))
 
@@ -430,7 +430,7 @@ func TestCheckWritesTheMarkdownReport(t *testing.T) {
 	path := filepath.Join(dir, "report.md")
 
 	code, stdout, _ := runCheck(t, "check",
-		"--sources", filepath.Join(dir, "sources.yaml"),
+		"--config", filepath.Join(dir, "ruler.yaml"),
 		"--format", "github",
 		"--markdown", path,
 		"--link-prefix", "https://github.com/o/r/blob/abc123/",
@@ -467,7 +467,7 @@ func TestCheckWritesTheMarkdownReportToStdout(t *testing.T) {
 	dir := fixture(t, brokenRule, "")
 
 	_, stdout, _ := runCheck(t, "check",
-		"--sources", filepath.Join(dir, "sources.yaml"),
+		"--config", filepath.Join(dir, "ruler.yaml"),
 		"--markdown", "-",
 		filepath.Join(dir, "rules"))
 
@@ -483,7 +483,7 @@ func TestCheckRefusesTheCostSummaryOnStdoutInGitHubMode(t *testing.T) {
 	dir := fixture(t, brokenRule, "")
 
 	code, stdout, stderr := runCheck(t, "check",
-		"--sources", filepath.Join(dir, "sources.yaml"),
+		"--config", filepath.Join(dir, "ruler.yaml"),
 		"--format", "github",
 		"--summary", "-",
 		filepath.Join(dir, "rules"))
@@ -507,7 +507,7 @@ func TestCheckRefusesTheReportOnStdoutInGitHubMode(t *testing.T) {
 	dir := fixture(t, brokenRule, "")
 
 	code, _, stderr := runCheck(t, "check",
-		"--sources", filepath.Join(dir, "sources.yaml"),
+		"--config", filepath.Join(dir, "ruler.yaml"),
 		"--format", "github",
 		"--markdown", "-",
 		filepath.Join(dir, "rules"))

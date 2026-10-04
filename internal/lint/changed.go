@@ -36,7 +36,7 @@ type Filter struct {
 //
 // dir is anywhere inside the repository, normally the rules directory. widen
 // holds paths whose change affects rules the diff does not name: the sources
-// file and the policy file the caller was given. Any ruler.yaml in the changed
+// file and the policy file the caller was given. Any policy.yaml in the changed
 // set widens too, since a team file raises checks for the tree below it and is
 // not named on the command line (spec 7.7).
 //
@@ -84,7 +84,7 @@ func ChangedSince(dir, ref string, widen []string) Filter {
 	for _, rel := range append(lines(diff), lines(untracked)...) {
 		path := resolvePath(filepath.Join(root, rel))
 
-		if widened[path] || filepath.Base(rel) == "ruler.yaml" {
+		if widened[path] || filepath.Base(rel) == "policy.yaml" {
 			return Filter{Note: fmt.Sprintf(
 				"checking every rule: %s changed, which affects rules the diff does not name", rel)}
 		}

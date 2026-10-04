@@ -45,7 +45,7 @@ Two files, owned by different people. A source says what a cluster is, and
 only the password lives outside the file:
 
 ```yaml
-# rules/sources.yaml
+# rules/ruler.yaml
 sources:
   - name: payments_prod
     labels: {team: payments, env: prod}
@@ -92,9 +92,9 @@ text you typed. Where they disagree, write `{{ .Table }}` and
 Check the files, then run:
 
 ```bash
-ruler check --sources rules/sources.yaml rules/
-ruler check --online --sources rules/sources.yaml rules/
-ruler run --rules ./rules --sources ./rules/sources.yaml \
+ruler check --config rules/ruler.yaml rules/
+ruler check --online --config rules/ruler.yaml rules/
+ruler run --rules ./rules --config ./rules/ruler.yaml \
   --alertmanager http://localhost:9093
 ```
 
@@ -160,7 +160,7 @@ Working, with the manual linked for each:
   workflow commands annotating the diff. Rule and source files are parsed with a
   line number on every finding and unknown fields rejected outright. Correctness
   checks always block; convention checks are warnings an operator raises in
-  `ruler.yaml`, per source or per team directory, and `--explain` names the file
+  `policy.yaml`, per source or per team directory, and `--explain` names the file
   that set each one. Exemptions carry a reason and an expiry that fails the build
   once it passes. `--summary` writes the cost table for a pull request comment.
   [Checks](https://dennisme.github.io/clickhouse-ruler/checks/).

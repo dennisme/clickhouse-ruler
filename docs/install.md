@@ -35,7 +35,7 @@ The archive holds three files and no directory: `ruler`, `LICENSE` and
 ```bash
 tar -xzf clickhouse-ruler_0.1.0_Linux_x86_64.tar.gz
 ./ruler version
-./ruler check --sources rules/sources.yaml rules/
+./ruler check --config rules/ruler.yaml rules/
 ```
 
 There is nothing else to install. The binary carries no runtime dependencies,
@@ -59,7 +59,7 @@ the paths inside the container:
 ```bash
 docker run --rm -v "$PWD/rules:/rules:ro" \
   ghcr.io/dennisme/clickhouse-ruler:v0.1.0 \
-  check --sources /rules/sources.yaml /rules
+  check --config /rules/ruler.yaml /rules
 ```
 
 Running it is the same shape, plus the port it serves on:
@@ -67,7 +67,7 @@ Running it is the same shape, plus the port it serves on:
 ```bash
 docker run --rm -p 9090:9090 -v "$PWD/rules:/rules:ro" \
   ghcr.io/dennisme/clickhouse-ruler:v0.1.0 \
-  run --rules /rules --sources /rules/sources.yaml \
+  run --rules /rules --config /rules/ruler.yaml \
   --alertmanager http://alertmanager:9093
 ```
 

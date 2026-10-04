@@ -202,7 +202,7 @@
     },
     "sources": {
       "type": "array",
-      "description": "Templated into the sources file. No entry may carry a password.",
+      "description": "Templated into the operator's file. No entry may carry a password.",
       "items": {
         "type": "object",
         "additionalProperties": false,

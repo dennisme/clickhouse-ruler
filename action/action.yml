@@ -23,11 +23,11 @@ inputs:
   rules:
     description: Path to the rules directory to check.
     required: true
-  sources:
-    description: Path to the sources file.
-    default: sources.yaml
   config:
-    description: Path to a policy file. Defaults to ruler.yaml beside the rules directory if present.
+    description: Path to the operator's file, which names the sources.
+    default: ruler.yaml
+  policy:
+    description: Path to a policy file. Defaults to policy.yaml beside the rules directory if present.
     default: ""
   format:
     description: >-
@@ -184,8 +184,8 @@ runs:
       env:
         RULER: ${{ steps.install.outputs.ruler }}
         RULES: ${{ inputs.rules }}
-        SOURCES: ${{ inputs.sources }}
         CONFIG: ${{ inputs.config }}
+        POLICY: ${{ inputs.policy }}
         FORMAT: ${{ inputs.format }}
         CHANGED_SINCE: ${{ inputs.changed-since }}
         ONLINE: ${{ inputs.online }}
@@ -213,8 +213,8 @@ runs:
         # call's findings.
         rm -f "$report" "$findings"
 
-        args=(check --sources "$SOURCES" --format "$FORMAT")
-        [ -n "$CONFIG" ] && args+=(--config "$CONFIG")
+        args=(check --config "$CONFIG" --format "$FORMAT")
+        [ -n "$POLICY" ] && args+=(--policy "$POLICY")
         [ -n "$CHANGED_SINCE" ] && args+=(--changed-since "$CHANGED_SINCE")
         [ "$ONLINE" = "true" ] && args+=(--online)
 

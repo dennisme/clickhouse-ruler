@@ -3,7 +3,7 @@
 Every flag the binary takes, and everything it exposes once it is up.
 
 ```bash
-ruler run --rules ./rules --sources ./rules/sources.yaml \
+ruler run --rules ./rules --config ./rules/ruler.yaml \
   --alertmanager http://alertmanager-0:9093 \
   --alertmanager http://alertmanager-1:9093 \
   --alertmanager http://alertmanager-2:9093
@@ -45,12 +45,12 @@ user, so row policies apply to it.
 Paths after the rules directory narrow what is reported:
 
 ```bash
-ruler check --sources rules/sources.yaml rules/ rules/payments/latency.yaml
-ruler check --sources rules/sources.yaml rules/ rules/payments/
+ruler check --config rules/ruler.yaml rules/ rules/payments/latency.yaml
+ruler check --config rules/ruler.yaml rules/ rules/payments/
 ```
 
 The rules directory is still required, and the whole tree is still read. That
-is the point: the severity a finding carries comes from the `ruler.yaml` beside
+is the point: the severity a finding carries comes from the `policy.yaml` beside
 the root and the team files above the rule, and a duplicate alert name is a
 fact about the tree. Naming a subdirectory as the root instead reads a
 different policy and misses those collisions, so a check can pass at your desk
@@ -69,7 +69,7 @@ among the paths named.
 | --- | --- |
 | `0` | nothing found, or nothing found at `error` severity |
 | `1` | at least one `error`-severity finding |
-| `2` | the command could not run: a bad flag, an unreadable rules directory, an unparseable sources file |
+| `2` | the command could not run: a bad flag, an unreadable rules directory, an unparseable operator's file |
 
 Findings and failures are separated so a CI job can tell "your rules are wrong"
 from "the tool could not run".
@@ -79,7 +79,7 @@ from "the tool could not run".
 `error`, and nothing else. Every check that warns by default, including
 [`annotations/template`](checks/rule.md#annotations-template) and
 [`rule/cost`](checks/rule.md#rule-cost), passes. Raising one to `error` in
-`ruler.yaml` is how it starts blocking, and doing that is the same decision as
+`policy.yaml` is how it starts blocking, and doing that is the same decision as
 refusing a ruler that reads the file: the loader and CI run the same checks at
 the same severities.
 
@@ -102,9 +102,9 @@ and is its own flag rather than part of `--sample`: a sample is one read per
 rule and a replay is one per window, so it is consented to separately.
 
 ```bash
-ruler check --backfill --sources rules/sources.yaml rules/
+ruler check --backfill --config rules/ruler.yaml rules/
 ruler check --backfill --backfill-range 168h --backfill-step 5m \
-  --sources rules/sources.yaml rules/
+  --config rules/ruler.yaml rules/
 ```
 
 `--backfill-range` is how far back the replay reaches, 24h by default.
@@ -112,7 +112,7 @@ ruler check --backfill --backfill-range 168h --backfill-step 5m \
 each rule's own group interval, which is the cadence its `for` timer is
 measured in.
 
-Both are durations on the command line rather than keys in `ruler.yaml`,
+Both are durations on the command line rather than keys in `policy.yaml`,
 because a policy ceiling is a whole number and these are spans. What does
 belong in the policy file is the two ceilings: `max-alerts`, which the count is
 measured against, and `max-rows-read`, which the whole replay's predicted total
@@ -124,7 +124,7 @@ is measured against before any of it runs.
 one row per rule and source. `-` writes it to stdout.
 
 ```bash
-ruler check --online --sources rules/sources.yaml --summary cost.md rules/
+ruler check --online --config rules/ruler.yaml --summary cost.md rules/
 ```
 
 ```markdown
@@ -152,7 +152,7 @@ Posting it is the workflow's job. The ruler writes a file, and a job that can
 comment on a pull request already holds the token for it:
 
 ```bash
-ruler check --online --sources rules/sources.yaml --summary cost.md rules/
+ruler check --online --config rules/ruler.yaml --summary cost.md rules/
 gh pr comment "$PR" --body-file cost.md
 ```
 
@@ -168,8 +168,8 @@ is picked up by a reload: changing one needs the process restarted, which
 | --- | --- | --- |
 | `--rules` | required | rules directory |
 | `--alertmanager` | required | Alertmanager base URL, repeated once per member of the cluster. Every value is refused at startup unless it is an `http://` or `https://` URL with a host, because `localhost:9093` with no scheme fails inside `net/http` at the first send instead, and the same address twice is refused too: it is one series on every `alertmanager`-labelled metric, so a failure counter would report two endpoints as one |
-| `--sources` | `sources.yaml` | sources file |
-| `--config` | `ruler.yaml` beside `--rules` | policy file |
+| `--config` | `ruler.yaml` | operator's file |
+| `--policy` | `policy.yaml` beside `--rules` | policy file |
 | `--listen` | `:9090` | address for `/metrics`, `/-/healthy`, `/-/ready`, and `/-/reload` when it is enabled |
 | `--query-concurrency` | `8` | rule queries allowed against ClickHouse at once, across every group; `0` is unbounded. A source can set `max_concurrent_queries` to bound itself further inside this |
 | `--recheck-interval` | `1h` | how often loaded rules are re-checked against recent data for the map keys they read, which no evaluation can see; `0` turns the pass off. One bounded query per rule per source, sharing `--query-concurrency` with evaluation |

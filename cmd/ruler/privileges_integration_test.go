@@ -30,7 +30,7 @@ func writeSources(t *testing.T, dir, username string) string {
 		t.Fatal("RULER_CLICKHOUSE_ADDR is not set, run these through `just integration`")
 	}
 
-	path := filepath.Join(dir, "sources.yaml")
+	path := filepath.Join(dir, "ruler.yaml")
 	body := "sources:\n" +
 		"  - name: otel_traces\n" +
 		"    labels: {team: payments}\n" +
@@ -46,11 +46,11 @@ func writeSources(t *testing.T, dir, username string) string {
 	return path
 }
 
-func checkOnline(t *testing.T, sourcesPath string, args ...string) (int, string) {
+func checkOnline(t *testing.T, configPath string, args ...string) (int, string) {
 	t.Helper()
 
 	var stdout, stderr bytes.Buffer
-	argv := append([]string{"check", "--sources", sourcesPath, "--online"}, args...)
+	argv := append([]string{"check", "--config", configPath, "--online"}, args...)
 	argv = append(argv, filepath.Join("testdata", "rules"))
 
 	code := run(argv, &stdout, &stderr)
@@ -101,13 +101,13 @@ func TestCheckOnlineBlocksWhenPolicyRaisesTheSeverity(t *testing.T) {
 	dir := t.TempDir()
 	path := writeSources(t, dir, "ruler_wide")
 
-	config := filepath.Join(dir, "ruler.yaml")
+	config := filepath.Join(dir, "policy.yaml")
 	body := "checks:\n  source/privileges:\n    severity: error\n"
 	if err := os.WriteFile(config, []byte(body), 0o600); err != nil {
 		t.Fatalf("writing policy: %v", err)
 	}
 
-	code, out := checkOnline(t, path, "--config", config)
+	code, out := checkOnline(t, path, "--policy", config)
 	if code != exitFinding {
 		t.Errorf("exit = %d, want %d: %s", code, exitFinding, out)
 	}
@@ -121,13 +121,13 @@ func TestCheckOnlineSendsNothingWhenOff(t *testing.T) {
 	dir := t.TempDir()
 	path := writeSources(t, dir, "ruler_wide")
 
-	config := filepath.Join(dir, "ruler.yaml")
+	config := filepath.Join(dir, "policy.yaml")
 	body := "checks:\n  source/privileges:\n    severity: off\n"
 	if err := os.WriteFile(config, []byte(body), 0o600); err != nil {
 		t.Fatalf("writing policy: %v", err)
 	}
 
-	code, out := checkOnline(t, path, "--config", config)
+	code, out := checkOnline(t, path, "--policy", config)
 	if code != exitOK {
 		t.Errorf("exit = %d, want %d: %s", code, exitOK, out)
 	}
@@ -142,7 +142,7 @@ func TestCheckStaysOfflineByDefault(t *testing.T) {
 	path := writeSources(t, t.TempDir(), "ruler_wide")
 
 	var stdout, stderr bytes.Buffer
-	code := run([]string{"check", "--sources", path, filepath.Join("testdata", "rules")}, &stdout, &stderr)
+	code := run([]string{"check", "--config", path, filepath.Join("testdata", "rules")}, &stdout, &stderr)
 
 	out := stdout.String() + stderr.String()
 	if code != exitOK {
@@ -168,7 +168,7 @@ func TestRunRefusesASourceFailingTheContract(t *testing.T) {
 		t.Fatalf("sources fixture problems: %v", problems)
 	}
 
-	root, _ := policy.Parse("ruler.yaml", []byte("checks:\n  source/privileges:\n    severity: error\n"))
+	root, _ := policy.Parse("policy.yaml", []byte("checks:\n  source/privileges:\n    severity: error\n"))
 	// The fixture rule warns about a missing runbook; only errors matter here.
 	set, problems := ruleset.Load(filepath.Join("testdata", "rules"), sources, root)
 	for _, p := range problems {

@@ -77,8 +77,8 @@ func check(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("check", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 
-	sourcesPath := fs.String("sources", "sources.yaml", "path to the sources file")
-	configPath := fs.String("config", "", "path to a policy file, defaults to ruler.yaml beside the rules directory if present")
+	configPath := fs.String("config", "ruler.yaml", "path to the operator's file, which names the sources")
+	policyPath := fs.String("policy", "", "path to a policy file, defaults to policy.yaml beside the rules directory if present")
 	format := fs.String("format", lint.FormatText,
 		"output format: "+strings.Join(lint.Formats, ", "))
 	changedSince := fs.String("changed-since", "",
@@ -143,18 +143,18 @@ func check(args []string, stdout, stderr io.Writer) int {
 		return exitUsage
 	}
 
-	sources, problems, err := loadSources(*sourcesPath)
+	sources, problems, err := loadSources(*configPath)
 	if err != nil {
 		printf(stderr, "%s\n", err)
 		return exitUsage
 	}
 
-	root, configProblems, err := loadPolicy(*configPath, dir)
+	root, policyProblems, err := loadPolicy(*policyPath, dir)
 	if err != nil {
 		printf(stderr, "%s\n", err)
 		return exitUsage
 	}
-	problems = append(problems, configProblems...)
+	problems = append(problems, policyProblems...)
 
 	set, ruleProblems := ruleset.Load(dir, sources, root)
 	problems = append(problems, ruleProblems...)
@@ -180,7 +180,7 @@ func check(args []string, stdout, stderr io.Writer) int {
 		// Every source in the file, not only the ones a rule matched. The
 		// finding belongs to the pull request that changed the sources file,
 		// in front of the people who own it (spec 6.7.3).
-		problems = append(problems, checkPrivileges(ctx, *sourcesPath, sources.Sources, root)...)
+		problems = append(problems, checkPrivileges(ctx, *configPath, sources.Sources, root)...)
 
 		// Rules are the other way round: only the sources they matched, since
 		// a rule is read through the cluster it will run on.
@@ -206,7 +206,7 @@ func check(args []string, stdout, stderr io.Writer) int {
 	// here can only drop a finding a full run would also have reported, and
 	// the exit code below follows what is left (spec 10.3).
 	if *changedSince != "" {
-		filter := lint.ChangedSince(dir, *changedSince, []string{*sourcesPath, *configPath})
+		filter := lint.ChangedSince(dir, *changedSince, []string{*configPath, *policyPath})
 		if filter.Note != "" {
 			printf(stderr, "%s\n", filter.Note)
 		}
@@ -274,13 +274,13 @@ func loadSources(path string) (*source.File, []lint.Problem, error) {
 }
 
 // loadPolicy reads the policy file. An explicit path that does not exist is an
-// error, because an operator who passed --config meant it. The implicit
-// ruler.yaml beside the rules is optional, because most repositories will not
+// error, because an operator who passed --policy meant it. The implicit
+// policy.yaml beside the rules is optional, because most repositories will not
 // have one and the defaults are meant to work.
 func loadPolicy(path, dir string) (*policy.Policy, []lint.Problem, error) {
 	explicit := path != ""
 	if !explicit {
-		path = filepath.Join(dir, "ruler.yaml")
+		path = filepath.Join(dir, "policy.yaml")
 	}
 
 	data, err := os.ReadFile(path) //nolint:gosec // an operator-supplied path is the input

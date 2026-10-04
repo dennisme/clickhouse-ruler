@@ -70,13 +70,13 @@ func startRunner(t *testing.T, dir string) *runner {
 
 	reg := prometheus.NewRegistry()
 	r := &runner{
-		rulesDir:    filepath.Join(dir, "rules"),
-		sourcesPath: filepath.Join(dir, "sources.yaml"),
-		log:         slog.New(slog.DiscardHandler),
-		stderr:      io.Discard,
-		metrics:     scheduler.NewMetrics(reg),
-		clock:       scheduler.NewRealClock(),
-		resend:      scheduler.Resend{Interval: notify.DefaultResendInterval, Tolerance: notify.DefaultResendTolerance},
+		rulesDir:   filepath.Join(dir, "rules"),
+		configPath: filepath.Join(dir, "ruler.yaml"),
+		log:        slog.New(slog.DiscardHandler),
+		stderr:     io.Discard,
+		metrics:    scheduler.NewMetrics(reg),
+		clock:      scheduler.NewRealClock(),
+		resend:     scheduler.Resend{Interval: notify.DefaultResendInterval, Tolerance: notify.DefaultResendTolerance},
 	}
 	cadence := scheduler.NewCadence(
 		[]scheduler.Endpoint{{Sender: notify.NewClient("http://127.0.0.1:9093"), URL: "http://127.0.0.1:9093"}},
@@ -331,7 +331,7 @@ func TestReloadRefusesAnUnreadableSourcesFile(t *testing.T) {
 	dir := fixture(t, bareRule, reloadPolicy)
 	r := startRunner(t, dir)
 
-	if err := os.Remove(filepath.Join(dir, "sources.yaml")); err != nil {
+	if err := os.Remove(filepath.Join(dir, "ruler.yaml")); err != nil {
 		t.Fatal(err)
 	}
 	if err := r.reload(context.Background()); err == nil {
@@ -351,7 +351,7 @@ func TestReloadRefusesAnUnreadableSourcesFile(t *testing.T) {
 // more, and the connection of an unchanged source left exactly as it was.
 func TestReloadReconcilesTheOpenConnections(t *testing.T) {
 	dir := fixture(t, bareRule, reloadPolicy)
-	if err := os.WriteFile(filepath.Join(dir, "sources.yaml"), []byte(twoSourcesYAML), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "ruler.yaml"), []byte(twoSourcesYAML), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -413,7 +413,7 @@ func TestReloadReopensASourceWhoseDefinitionChanged(t *testing.T) {
     table: otel_traces
     timestamp_column: Timestamp
 `
-	if err := os.WriteFile(filepath.Join(dir, "sources.yaml"), []byte(moved), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "ruler.yaml"), []byte(moved), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := r.reload(context.Background()); err != nil {

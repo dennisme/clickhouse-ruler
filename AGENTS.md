@@ -43,10 +43,10 @@ includes `just markdownlint`, which CI runs too.
 Running the binary directly:
 
 ```bash
-go run ./cmd/ruler check --sources rules/sources.yaml rules/
-go run ./cmd/ruler check --online --sources rules/sources.yaml rules/
-go run ./cmd/ruler check --sample --sources rules/sources.yaml rules/
-go run ./cmd/ruler run --rules ./rules --sources ./rules/sources.yaml \
+go run ./cmd/ruler check --config rules/ruler.yaml rules/
+go run ./cmd/ruler check --online --config rules/ruler.yaml rules/
+go run ./cmd/ruler check --sample --config rules/ruler.yaml rules/
+go run ./cmd/ruler run --rules ./rules --config ./rules/ruler.yaml \
   --alertmanager http://localhost:9093
 go run ./cmd/ruler version
 ```

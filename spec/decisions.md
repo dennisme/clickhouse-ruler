@@ -24,8 +24,20 @@ and are what the code comments cite.
 - **Name.** Project and repository are `clickhouse-ruler`. Binary is `ruler`,
   following the Prometheus and Mimir convention. Module path
   `github.com/dennisme/clickhouse-ruler`.
-- **Source definitions.** Sources live in their own file, separate from rule
+- **Source definitions.** Sources live in `ruler.yaml`, separate from rule
   files, so CODEOWNERS can gate them. See 6.2.
+- **The operator gets one file, named after the tool.** `ruler.yaml` holds
+  `sources:` and `alertmanagers:`, and `checks:` moves to `policy.yaml`. The
+  axis is ownership rather than direction: an Alertmanager is an operator
+  concern in the way a cluster is, since a team bringing its own needs the
+  operator to hold its credential and let the network reach it. `sources:`
+  stays the right name for what we pull from, so the file was the thing named
+  wrongly, having been called after its only section back when it had one.
+  Prometheus keeps its Alertmanager block in `prometheus.yml` and `pint` keeps
+  the servers it connects to beside its check policy; vmalert's
+  `-notifier.config` is a third file to carry service discovery, which is a
+  thing we refuse. Renamed outright, with no migration, because there are no
+  external users. See 6.5.
 - **Credentials.** No DSN. Address, database and username are written in the
   file; only the password comes from `password_file` or `password_env`, and
   setting both is an error. See 6.2.
@@ -67,6 +79,25 @@ and are what the code comments cite.
   Deriving `team` from a directory was tried and removed: a rule at the tree
   root has no directory, moving a file silently repoints who gets paged, and a
   label in no file is one nobody can grep for. See 6.3.1.
+- **The Alertmanager credential comes from `ruler.yaml`, and `--alertmanager`
+  is removed.** `alertmanagers:` is a list of sets, each carrying `urls:` and
+  Prometheus' own `http_config` names, so an operator who has configured an
+  Alertmanager before reads familiar keys. Exactly one set is supported, and
+  nothing selects between sets: selecting would be routing, which is not ours.
+  The flag goes rather than staying beside the block, because a destination
+  nameable two ways is the same defect as a credential nameable two ways, and
+  `ruler run` already requires the file. Userinfo in a URL is refused rather
+  than deprecated, which deletes the credential scrubbing in `internal/notify`
+  and the redacted URL spelling behind the `alertmanager` label, since neither
+  has anything left to protect. See 6.5.
+- **A second Alertmanager set would select on source labels, never on an
+  alert's.** Source labels are the operator's property, so a set per tenant is
+  the argument that already gives each source its own ClickHouse user. An
+  alert's labels are the author's, so selecting on them is a route tree in the
+  ruler, which is why `alert_relabel_configs` is refused too. It also needs
+  `alertmanager/match`, because a source matching no set fires and pages
+  nobody. Not built, and recorded so the mechanism does not get chosen before
+  the boundary. See 6.5.
 - **The Alertmanager route tree is not generated.** Keying a generated tree on
   `team` so that eval and routing share one source of truth was the plan, and
   it is dropped. Alertmanager's configuration is owned by whoever runs that
@@ -280,16 +311,16 @@ and are what the code comments cite.
   so, while the reverse case needs the result and is not a tier 0 question.
   See 7.6.
 - **Team-scoped policy files are read, and the rules tree reserves two
-  names.** A `ruler.yaml` in a team directory applies to every rule at or
+  names.** A `policy.yaml` in a team directory applies to every rule at or
   below it, alongside the instance file and the matched sources. It needs no
   precedence rule, because the merge is a maximum and the worst a team can do
   with its own file is hold itself to more than the baseline. Which files are
-  policy is decided by name, not by content: `ruler.yaml` is policy,
-  `sources.yaml` is the sources file the quick start keeps beside the rules,
+  policy is decided by name, not by content: `policy.yaml` is policy,
+  `ruler.yaml` is the operator's file the quick start keeps beside the rules,
   and neither is a rule file. Sniffing for a `groups:` key instead would guess
   about a file whose name the author can already read, and would report
   nothing useful about a rule file that misspelled that one key. The
-  `ruler.yaml` at the rules root is the instance scope and not also a team
+  `policy.yaml` at the rules root is the instance scope and not also a team
   file: the severity would be the same either way under a maximum, but the
   origin a finding carries is what `--explain` prints, and it has to name the
   scope that actually set it. See 7.7.
