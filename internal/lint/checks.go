@@ -75,8 +75,10 @@ const (
 	CheckSourceExemption       = "source/exemption"
 	CheckSourcePrivileges      = "source/privileges"
 
-	CheckAlertmanagerURL  = "alertmanager/url"
-	CheckAlertmanagerAuth = "alertmanager/auth"
+	CheckAlertmanagerURL         = "alertmanager/url"
+	CheckAlertmanagerAuth        = "alertmanager/auth"
+	CheckAlertmanagerTLS         = "alertmanager/tls"
+	CheckAlertmanagerTLSInsecure = "alertmanager/tls-insecure"
 
 	CheckPolicyUnknown  = "policy/unknown-check"
 	CheckPolicyFixed    = "policy/fixed-check"
@@ -543,6 +545,19 @@ var checks = []Check{
 	{
 		Name: CheckAlertmanagerAuth, Spec: "6.5", Fixed: true, Always: SeverityError,
 		Summary: "a credential that could not be read, or both credential sources set at once",
+	},
+	{
+		Name: CheckAlertmanagerTLS, Spec: "6.5", Fixed: true, Always: SeverityError,
+		Summary: "TLS key material that could not be read, or a tls_config that reaches no https URL",
+	},
+	// Configurable so an exemption can clear it, which is source/tls-insecure's
+	// design one block over. Unlike the other alertmanager checks it does not
+	// refuse a start: the delivery path works and what is missing is the
+	// server's identity, so an expiry that bricked the next restart would take
+	// an estate's alerting down over a calendar entry (spec 6.5).
+	{
+		Name: CheckAlertmanagerTLSInsecure, Spec: "6.5", Default: SeverityError,
+		Summary: "an Alertmanager reached with certificate verification off and no exemption",
 	},
 	// Configurable so that an exemption can clear it, which is the whole
 	// design: a downgrade an operator chose, with a reason and a date, rather

@@ -3,6 +3,7 @@ package notify
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -161,6 +162,30 @@ func (c *Client) Probe(ctx context.Context) error {
 		return fmt.Errorf("alertmanager returned %s", resp.Status)
 	}
 	return nil
+}
+
+// SetTLS builds the transport this client posts and probes over.
+//
+// Called once, before the client is used. Unlike SetAuthorization this is not
+// a rotation: the roots live inside a built transport, so replacing a CA means
+// replacing this field while sends are in flight, and 6.5 decides that a
+// changed CA needs a restart instead. The client pair rotates without this
+// being called again, because cfg reads it at each handshake.
+func (c *Client) SetTLS(cfg *tls.Config) {
+	// The timeout stays the client's. A transport with no bound would make a
+	// send wait on an Alertmanager that accepted a connection and stopped,
+	// which is the hang the retry ladder is sized against (spec 6.5).
+	// Cloned from the default rather than built empty, so an estate that
+	// reaches Alertmanager through HTTPS_PROXY keeps doing so and the
+	// connection pool keeps the sizes everything else in this process uses.
+	transport, ok := http.DefaultTransport.(*http.Transport)
+	if !ok {
+		return
+	}
+	transport = transport.Clone()
+	transport.TLSClientConfig = cfg
+
+	c.HTTP = &http.Client{Timeout: c.HTTP.Timeout, Transport: transport}
 }
 
 // SetAuthorization replaces the credential every later request authenticates

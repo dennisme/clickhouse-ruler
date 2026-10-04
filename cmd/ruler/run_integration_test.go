@@ -76,22 +76,30 @@ func startSink(t *testing.T) *sink {
 func (s *sink) waitFor(t *testing.T, d time.Duration, cond func([]delivery) bool) []delivery {
 	t.Helper()
 
+	got := s.waitForUpTo(t, d, cond)
+	if !cond(got) {
+		t.Fatalf("condition not met within %s, deliveries so far: %+v", d, got)
+	}
+	return got
+}
+
+// waitForUpTo is waitFor without the failure, for a test whose assertion is
+// that nothing arrives: a delivery that never comes is the expected outcome
+// there, and a helper that fails on it cannot express that.
+func (s *sink) waitForUpTo(t *testing.T, d time.Duration, cond func([]delivery) bool) []delivery {
+	t.Helper()
+
 	deadline := time.Now().Add(d)
-	for time.Now().Before(deadline) {
+	for {
 		s.mu.Lock()
 		got := append([]delivery(nil), s.got...)
 		s.mu.Unlock()
 
-		if cond(got) {
+		if cond(got) || !time.Now().Before(deadline) {
 			return got
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	t.Fatalf("condition not met within %s, deliveries so far: %+v", d, s.got)
-	return nil
 }
 
 // seed writes one slow checkout span under a run-unique ServiceName, so this

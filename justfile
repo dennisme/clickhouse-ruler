@@ -16,6 +16,16 @@ alertmanager_url := env("RULER_ALERTMANAGER_URL", "http://127.0.0.1:9093")
 # above because the anonymous path has to keep being covered too (spec 6.5).
 alertmanager_auth_url := env("RULER_ALERTMANAGER_AUTH_URL", "http://127.0.0.1:9094")
 
+# The third Alertmanager from compose.yaml, serving TLS with a privately signed
+# certificate. Only the TLS tests read it, and it is a separate server for the
+# reason the authenticated one is: the plaintext path has to keep being covered
+# (spec 6.5).
+alertmanager_tls_url := env("RULER_ALERTMANAGER_TLS_URL", "https://127.0.0.1:9095")
+
+# The CA that signed it, written by `just alertmanager-certs`. The tests name
+# this path in a tls_config the way a deployment names a mounted Secret.
+alertmanager_ca := env("RULER_ALERTMANAGER_CA", "deploy/alertmanager/tls/ca.pem")
+
 # The Prometheus scraping the ruler container, also from compose.yaml. Only the
 # dashboard tests read it, and they read it rather than Grafana: the datasource
 # is what knows whether an expression matches anything (spec 9.8).
@@ -64,6 +74,8 @@ integration:
     RULER_CLICKHOUSE_ADDR_2="{{clickhouse_addr_2}}" \
     RULER_ALERTMANAGER_URL="{{alertmanager_url}}" \
     RULER_ALERTMANAGER_AUTH_URL="{{alertmanager_auth_url}}" \
+    RULER_ALERTMANAGER_TLS_URL="{{alertmanager_tls_url}}" \
+    RULER_ALERTMANAGER_CA="$(pwd)/{{alertmanager_ca}}" \
     RULER_PROMETHEUS_URL="{{prometheus_url}}" \
     RULER_OTLP_HTTP_URL="{{otlp_http_url}}" \
         env -u GOROOT GOTOOLCHAIN=auto go test -tags=integration -count=1 -p 1 ./...
@@ -103,6 +115,8 @@ coverage-integration:
     RULER_CLICKHOUSE_ADDR_2="{{clickhouse_addr_2}}" \
     RULER_ALERTMANAGER_URL="{{alertmanager_url}}" \
     RULER_ALERTMANAGER_AUTH_URL="{{alertmanager_auth_url}}" \
+    RULER_ALERTMANAGER_TLS_URL="{{alertmanager_tls_url}}" \
+    RULER_ALERTMANAGER_CA="$(pwd)/{{alertmanager_ca}}" \
     RULER_PROMETHEUS_URL="{{prometheus_url}}" \
     RULER_OTLP_HTTP_URL="{{otlp_http_url}}" \
         env -u GOROOT GOTOOLCHAIN=auto go test -tags=integration -count=1 -p 1 \
@@ -139,8 +153,16 @@ markdownlint:
 pre-commit:
     pre-commit run --all-files
 
+# Generated rather than checked in, and regenerated on every compose-up: a
+# fixture certificate expires, so a checked-in one is a stack that stops coming
+# up on a date nobody changed anything on (spec 6.5, 9.1).
+#
+# Write the private CA and server pair the TLS Alertmanager listens with.
+alertmanager-certs:
+    env -u GOROOT GOTOOLCHAIN=auto go run ./internal/stack/certs -out deploy/alertmanager/tls
+
 # Start the compose stack and wait for it to be healthy.
-compose-up:
+compose-up: alertmanager-certs
     docker compose up -d --wait
 
 # The kind cluster the deployment chain tests act on, and the image tag they

@@ -145,6 +145,51 @@ services:
       timeout: 2s
       retries: 30
 
+  # A third Alertmanager, serving TLS with a certificate a private CA signed,
+  # so the ruler's tls_config is proven against a server that requires it
+  # rather than against a transport a test built itself (spec 6.5).
+  #
+  # Beside the other two rather than TLS on alertmanager-auth, so the plain and
+  # the authenticated paths both keep working unchanged.
+  #
+  # Its material is generated into deploy/alertmanager/tls by
+  # `just alertmanager-certs`, which compose-up runs. The directory is empty in
+  # a fresh checkout, so this service fails to start until it has been run
+  # once.
+  alertmanager-tls:
+    image: prom/alertmanager:v0.28.1
+    container_name: ruler-alertmanager-tls
+    ports:
+      - "127.0.0.1:9095:9093"
+    volumes:
+      - ./deploy/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - ./deploy/alertmanager/web-tls.yml:/etc/alertmanager/web-tls.yml:ro
+      - ./deploy/alertmanager/tls:/etc/alertmanager/tls:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+      - --web.config.file=/etc/alertmanager/web-tls.yml
+      - --storage.path=/alertmanager
+      - --log.level=warn
+    # --no-check-certificate because the image carries BusyBox wget, which has
+    # no --ca-certificate to point at the bundle beside it. What this
+    # healthcheck answers is whether Alertmanager is serving, and whether the
+    # certificate verifies is what the ruler's own tests assert.
+    #
+    # Quoted because the value holds a colon, which a bare compose list item
+    # reads as a mapping.
+    healthcheck:
+      test:
+        - CMD
+        - wget
+        - -qO-
+        - --no-check-certificate
+        - "https://localhost:9093/-/ready"
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
   # Writes the rows the rules read, so a rule is proven against real collector
   # output rather than against rows a test inserted (spec 9.1 item 2).
   #

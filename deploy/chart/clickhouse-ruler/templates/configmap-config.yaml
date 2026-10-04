@@ -36,6 +36,27 @@ data:
           credentials_file: {{ printf "%s/%s" (include "clickhouse-ruler.alertmanagerSecretDir" $) (default "credentials" .authorization.key) }}
       {{- end }}
       {{- end }}
+      {{- with .Values.alertmanagerTLS }}
+      {{- if .secretName }}
+        tls_config:
+        {{- $dir := include "clickhouse-ruler.alertmanagerTLSDir" $ }}
+        {{- with .caKey }}
+          ca_file: {{ printf "%s/%s" $dir . }}
+        {{- end }}
+        {{- with .certKey }}
+          cert_file: {{ printf "%s/%s" $dir . }}
+        {{- end }}
+        {{- with .keyKey }}
+          key_file: {{ printf "%s/%s" $dir . }}
+        {{- end }}
+        {{- with .serverName }}
+          server_name: {{ . | quote }}
+        {{- end }}
+        {{- if .insecureSkipVerify }}
+          insecure_skip_verify: true
+        {{- end }}
+      {{- end }}
+      {{- end }}
     sources:
     {{- range $s := .Values.sources }}
       - name: {{ $s.name | quote }}

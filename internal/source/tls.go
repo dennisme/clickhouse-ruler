@@ -175,23 +175,42 @@ func (s Source) resolveTLS(r *lint.Reader, secure bool, ref tlsRef) *TLS {
 		return nil
 	}
 
+	return tlsReader{r: r, lines: s.lines, check: lint.CheckSourceTLS}.resolve(ref)
+}
+
+// tlsReader reads one tls_config's material, reporting under the check name
+// and the line map of the block that wrote it.
+//
+// The reader rather than the block, because a source and an Alertmanager set
+// configure the same five fields and fail on them for the same five reasons
+// (spec 6.5). What differs is the check a finding carries and which block's
+// lines it points at, which is what this holds.
+type tlsReader struct {
+	r     *lint.Reader
+	lines lint.Lines
+	check string
+}
+
+// resolve reads the material a tls_config names, which is the CA as bytes and
+// the client pair as the two paths.
+func (t tlsReader) resolve(ref tlsRef) *TLS {
 	material := &TLS{
 		ServerName:         ref.serverName,
 		InsecureSkipVerify: ref.insecureSkipVerify,
 	}
 	if ref.caFile != "" {
-		material.CA = s.readCA(r, ref.caFile)
+		material.CA = t.readCA(ref.caFile)
 	}
-	s.readClientCertificate(r, material, ref)
+	t.readClientCertificate(material, ref)
 
 	return material
 }
 
 // readCA reads the PEM bundle the server is verified against.
-func (s Source) readCA(r *lint.Reader, path string) []byte {
-	line := s.lines.Of("tls_config.ca_file", "tls_config")
+func (t tlsReader) readCA(path string) []byte {
+	line := t.lines.Of("tls_config.ca_file", "tls_config")
 
-	raw, ok := s.readMaterial(r, line, "ca_file", path)
+	raw, ok := t.readMaterial(line, "ca_file", path)
 	if !ok {
 		return nil
 	}
@@ -199,15 +218,15 @@ func (s Source) readCA(r *lint.Reader, path string) []byte {
 	// certificate in it verifies nothing, and the driver would report that as
 	// a failure to connect.
 	if !x509.NewCertPool().AppendCertsFromPEM(raw) {
-		r.Add(line, lint.CheckSourceTLS, lint.SeverityError,
+		t.r.Add(line, t.check, lint.SeverityError,
 			"ca_file %q contains no PEM certificate", path)
 		return nil
 	}
 	return raw
 }
 
-// readClientCertificate reads the pair ClickHouse authenticates for mTLS.
-func (s Source) readClientCertificate(r *lint.Reader, material *TLS, ref tlsRef) {
+// readClientCertificate reads the pair the server authenticates for mTLS.
+func (t tlsReader) readClientCertificate(material *TLS, ref tlsRef) {
 	if ref.certFile == "" && ref.keyFile == "" {
 		return
 	}
@@ -215,15 +234,15 @@ func (s Source) readClientCertificate(r *lint.Reader, material *TLS, ref tlsRef)
 	// cannot be presented, and a key with no certificate is not sent at all,
 	// which looks like a cluster refusing a credential that was never offered.
 	if ref.certFile == "" || ref.keyFile == "" {
-		r.Add(s.lines.Of("tls_config.cert_file", "tls_config.key_file", "tls_config"),
-			lint.CheckSourceTLS, lint.SeverityError, "cert_file and key_file go together, set both")
+		t.r.Add(t.lines.Of("tls_config.cert_file", "tls_config.key_file", "tls_config"),
+			t.check, lint.SeverityError, "cert_file and key_file go together, set both")
 		return
 	}
 
-	line := s.lines.Of("tls_config.cert_file", "tls_config")
-	cert, certOK := s.readMaterial(r, line, "cert_file", ref.certFile)
-	key, keyOK := s.readMaterial(r,
-		s.lines.Of("tls_config.key_file", "tls_config"), "key_file", ref.keyFile)
+	line := t.lines.Of("tls_config.cert_file", "tls_config")
+	cert, certOK := t.readMaterial(line, "cert_file", ref.certFile)
+	key, keyOK := t.readMaterial(
+		t.lines.Of("tls_config.key_file", "tls_config"), "key_file", ref.keyFile)
 	if !certOK || !keyOK {
 		return
 	}
@@ -235,7 +254,7 @@ func (s Source) readClientCertificate(r *lint.Reader, material *TLS, ref tlsRef)
 	// crypto/tls gives names neither file, so the finding names both: which of
 	// the two is stale is the question an operator has.
 	if _, err := tls.X509KeyPair(cert, key); err != nil {
-		r.Add(line, lint.CheckSourceTLS, lint.SeverityError,
+		t.r.Add(line, t.check, lint.SeverityError,
 			"cert_file %q and key_file %q are not a pair: %s", ref.certFile, ref.keyFile, err)
 		return
 	}
@@ -246,15 +265,15 @@ func (s Source) readClientCertificate(r *lint.Reader, material *TLS, ref tlsRef)
 // the same two failures and for the same reasons: a read error names the path
 // and never the contents, and an empty file is a projected secret volume that
 // has not populated yet.
-func (s Source) readMaterial(r *lint.Reader, line int, field, path string) ([]byte, bool) {
+func (t tlsReader) readMaterial(line int, field, path string) ([]byte, bool) {
 	raw, err := os.ReadFile(path) //nolint:gosec // an operator-supplied path is the input
 	if err != nil {
-		r.Add(line, lint.CheckSourceTLS, lint.SeverityError,
+		t.r.Add(line, t.check, lint.SeverityError,
 			"cannot read %s %q: %s", field, path, errReason(err))
 		return nil, false
 	}
 	if len(raw) == 0 {
-		r.Add(line, lint.CheckSourceTLS, lint.SeverityError, "%s %q is empty", field, path)
+		t.r.Add(line, t.check, lint.SeverityError, "%s %q is empty", field, path)
 		return nil, false
 	}
 	return raw, true
@@ -273,10 +292,8 @@ func (f *File) InsecureTLS(now time.Time) []lint.Problem {
 	var out []lint.Problem
 
 	for _, s := range f.Sources {
-		if s.TLS == nil || !s.TLS.InsecureSkipVerify {
-			continue
-		}
-		if s.Exempts(lint.CheckSourceTLSInsecure, now) {
+		if s.TLS == nil || !s.TLS.InsecureSkipVerify ||
+			s.Exempts(lint.CheckSourceTLSInsecure, now) {
 			continue
 		}
 		p := lint.NewProblem(f.File,
@@ -285,6 +302,24 @@ func (f *File) InsecureTLS(now time.Time) []lint.Problem {
 			"insecure_skip_verify turns certificate verification off: "+
 				"the connection is encrypted against a server nothing identified")
 		p.Subject = s.Name
+		out = append(out, p)
+	}
+
+	// The same downgrade on the path a page travels, under its own name and
+	// its own exemption. It does not refuse a start, which is the one place an
+	// alertmanager error does not: the delivery path works and what is missing
+	// is the server's identity (spec 6.5).
+	for _, a := range f.Alertmanagers {
+		if a.TLS == nil || !a.TLS.InsecureSkipVerify ||
+			a.Exempts(lint.CheckAlertmanagerTLSInsecure, now) {
+			continue
+		}
+		p := lint.NewProblem(f.File,
+			a.lines.Of("tls_config.insecure_skip_verify", "tls_config"),
+			lint.CheckAlertmanagerTLSInsecure, lint.SeverityError,
+			"insecure_skip_verify turns certificate verification off: "+
+				"alerts are posted over an encrypted connection to a server nothing identified")
+		p.Subject = a.Subject()
 		out = append(out, p)
 	}
 	return out

@@ -1,0 +1,28 @@
+# An Alertmanager behind a private CA, asking for a client certificate.
+#
+# The material is a set of keys in a Secret this chart mounts, never a value in
+# here: a certificate and a key pasted into values is a secret in a git history,
+# which is the posture alertmanagerAuth and sources.passwordSecret already take
+# (spec 6.5, 6.2).
+#
+# Every url is https://, because the scheme is what turns TLS on: a tls_config
+# that reaches no https url is refused rather than ignored.
+alertmanagerURLs:
+  - https://alertmanager-0.monitoring:9093
+  - https://alertmanager-1.monitoring:9093
+alertmanagerTLS:
+  secretName: ruler-alertmanager-tls
+  caKey: ca.pem
+  certKey: tls.crt
+  keyKey: tls.key
+  serverName: alertmanager.monitoring.svc
+rules:
+  gitSync:
+    repo: https://github.com/example/alert-rules
+sources:
+  - name: traces
+    address: clickhouse.data:9000
+    database: otel
+    username: ruler
+    table: otel_traces
+    timestamp_column: Timestamp

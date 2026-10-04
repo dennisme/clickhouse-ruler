@@ -56,6 +56,29 @@ turn it into an `Authorization` header and it would work, which is exactly the
 problem: it would also be in the pod spec, the rendered chart manifest and any
 dump that echoes argv.
 
+**An Alertmanager that requires TLS is reached with a `tls_config`.** The
+scheme is what turns it on, so every url in the set is `https://` once the
+block is written, and material that no url can reach is refused rather than
+ignored. A cluster behind a public CA needs the `https` url and nothing else:
+
+```yaml
+alertmanagers:
+  - urls: [https://alertmanager-0:9093]
+    tls_config:
+      ca_file: /run/secrets/ruler/alertmanager-ca.pem
+      cert_file: /run/secrets/ruler/alertmanager.pem
+      key_file: /run/secrets/ruler/alertmanager-key.pem
+```
+
+The five fields are the five a source takes, with Prometheus' own names, and
+they fail the same ways: an unreadable or empty file, a bundle with no
+certificate in it, and a `cert_file` without its `key_file` are each an error
+from `alertmanager/tls` naming the line. `insecure_skip_verify` keeps the
+connection encrypted and stops anything identifying the server at the other
+end of it, so it is an error that only a dated exemption clears, and it is the
+one `alertmanager` check that does not refuse the start. See
+[the alertmanager checks](checks/alertmanager.md).
+
 **A rotated secret costs a `SIGHUP`. A changed url costs a restart.** The
 credential is re-read on every reload and swapped in place, so rotating it
 disturbs nothing: no firing alert is re-posted and no resend timer is reset.
@@ -69,6 +92,13 @@ If the block does not read cleanly on a reload, the credential already running
 is kept. A secret file that is briefly unreadable is what a rotation looks like
 half way through, and applying what that resolves to, which is nothing, would
 turn a working delivery path into a 401 on every send.
+
+TLS material splits across that line rather than sitting on one side of it. A
+replaced `cert_file` and `key_file` need nothing, because the pair is read at
+each handshake, and a replaced `ca_file` needs a restart: the roots live inside
+a built HTTP transport, so applying a new bundle means replacing that transport
+while sends and probes are using it. A reload that reads different material
+logs that a restart is needed, so an edit that did nothing says so.
 
 **Nowhere to send refuses the start.** No `alertmanagers` block, no urls in it,
 or any `alertmanager/*` finding at error severity, and `ruler run` exits 2

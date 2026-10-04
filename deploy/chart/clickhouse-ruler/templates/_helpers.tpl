@@ -77,6 +77,15 @@ one set of Alertmanagers shares one credential (spec 6.5).
 {{- end -}}
 
 {{/*
+Directory the Alertmanager TLS Secret is mounted at. Its own mount rather than
+the credential's, because a cluster behind a private CA need not be behind auth
+and the two are separate Secrets with separate rotation (spec 6.5).
+*/}}
+{{- define "clickhouse-ruler.alertmanagerTLSDir" -}}
+{{ include "clickhouse-ruler.configDir" . }}/secrets/alertmanager-tls
+{{- end -}}
+
+{{/*
 Names of every Secret a templated source reads its password from, sorted and
 deduplicated, as a JSON list.
 */}}
@@ -155,6 +164,34 @@ which allows no source key the operator's file does not have.
 {{- end -}}
 {{- if and .Values.alertmanagerAuth .Values.alertmanagerAuth.basicAuth .Values.alertmanagerAuth.authorization -}}
 {{- fail "set either alertmanagerAuth.basicAuth or alertmanagerAuth.authorization, not both: they write the same Authorization header" -}}
+{{- end -}}
+{{- $tls := .Values.alertmanagerTLS -}}
+{{- if and $tls $tls.secretName -}}
+{{- if and .Values.sourcesSecret.name -}}
+{{- fail "alertmanagerTLS cannot be set beside sourcesSecret.name: that Secret is the whole operator's file, so its tls_config comes from the Secret too" -}}
+{{- end -}}
+{{/*
+Refused here rather than left to the ruler. The ruler does refuse it, by
+exiting 2 at startup, which in a cluster is a pod that will not come up: a
+rendered manifest that cannot run is a failed install either way, and this one
+names the value.
+*/}}
+{{- range .Values.alertmanagerURLs -}}
+{{- if not (hasPrefix "https://" .) -}}
+{{- fail (printf "alertmanagerTLS is set, so every alertmanagerURLs entry has to be https://, and %q is not" .) -}}
+{{- end -}}
+{{- end -}}
+{{/*
+A certificate with no key cannot be presented and a key with no certificate is
+never sent, which reads as an Alertmanager refusing a credential it was never
+offered.
+*/}}
+{{- if or (and $tls.certKey (not $tls.keyKey)) (and $tls.keyKey (not $tls.certKey)) -}}
+{{- fail "set both alertmanagerTLS.certKey and alertmanagerTLS.keyKey, or neither: a client certificate needs its key" -}}
+{{- end -}}
+{{- end -}}
+{{- if and .Values.alertmanagerTLS (not .Values.alertmanagerTLS.secretName) (or .Values.alertmanagerTLS.caKey .Values.alertmanagerTLS.certKey) -}}
+{{- fail "alertmanagerTLS.secretName is required: the chart mounts that Secret, and the keys name what is inside it" -}}
 {{- end -}}
 {{- end -}}
 
