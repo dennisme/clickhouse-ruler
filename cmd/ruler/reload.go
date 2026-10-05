@@ -68,9 +68,17 @@ func (c *config) refused() bool {
 // resolves to no credential, so both would otherwise start a ruler that posts
 // to the wrong number of members or authenticates with nothing, and say so
 // only on the problem gauge.
+//
+// alertmanager/tls-insecure is the one exception, and it is deliberate rather
+// than an oversight. Verification turned off leaves a path that works: the
+// pages arrive, and what is wrong is that nothing identified the server they
+// arrive at, which is the shape of a finding. Refusing would turn its
+// exemption's expiry date into a landmine armed to the next restart, so a node
+// drain at three in the morning would find a pod that will not start and an
+// estate with no alerting, over a calendar entry (spec 6.5).
 func (c *config) deliverable() error {
 	for _, p := range c.problems {
-		if p.Severity != lint.SeverityError {
+		if p.Severity != lint.SeverityError || p.Check == lint.CheckAlertmanagerTLSInsecure {
 			continue
 		}
 		if ns, _, _ := strings.Cut(p.Check, "/"); ns == "alertmanager" {
@@ -361,6 +369,12 @@ func (r *runner) reload(ctx context.Context) error {
 // is the part that matters: an operator who edited the list has to know the
 // running process still has the old one (spec 6.5).
 //
+// Changed TLS material is reported the same way, and for the same kind of
+// reason: a CA lives inside a built transport, so applying one means replacing
+// a client's transport while sends and probes are using it. The client pair is
+// the exception that needs nothing, because each handshake reads the paths
+// again, so a rotated certificate is not a change this has to see.
+//
 // The block going missing entirely is treated the same way. It refuses a
 // start, but refusing a reload over it would strand a rules change behind an
 // edit to an unrelated section, and the endpoints already running are still
@@ -380,6 +394,10 @@ func (r *runner) rotateAlertmanagerCredential(cfg *config) {
 	if !sameAlertmanagerURLs(r.endpoints, set) {
 		r.log.Warn("the alertmanager urls changed, which a reload cannot apply: restart to pick them up",
 			"file", r.configPath, "running", len(r.endpoints), "configured", len(set.URLs))
+	}
+	if !sameAlertmanagerTLS(r.endpoints, set) {
+		r.log.Warn("the alertmanager tls_config changed, which a reload cannot apply: restart to pick it up",
+			"file", r.configPath)
 	}
 	rotateCredential(r.endpoints, set)
 }

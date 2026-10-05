@@ -134,6 +134,16 @@ jobs:
             --values "$CHART"/ci/monitoring-values.yaml --set replicaCount=2
           refuses "a shutdown timeout of zero" \
             --values "$CHART"/ci/minimal-values.yaml --set ruler.shutdownTimeoutSeconds=0
+          refuses "a tls_config beside a plaintext alertmanager url" \
+            --values "$CHART"/ci/alertmanager-tls-values.yaml \
+            --set-json 'alertmanagerURLs=["http://am:9093"]'
+          refuses "a client certificate with no key" \
+            --values "$CHART"/ci/alertmanager-tls-values.yaml --set alertmanagerTLS.keyKey=null
+          refuses "alertmanager tls keys with no secret to read them from" \
+            --values "$CHART"/ci/alertmanager-tls-values.yaml --set alertmanagerTLS.secretName=null
+          refuses "alertmanager tls beside sourcesSecret" \
+            --values "$CHART"/ci/git-sync-values.yaml \
+            --set sourcesSecret.name=whole --set alertmanagerTLS.secretName=ruler-alertmanager-tls
           refuses "an image digest that is not one" \
             --values "$CHART"/ci/minimal-values.yaml --set image.digest=sha256:latest
           exit $status

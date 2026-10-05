@@ -145,6 +145,44 @@ services:
       timeout: 2s
       retries: 30
 
+  # A third Alertmanager, serving TLS with a certificate a private CA signed,
+  # so the ruler's tls_config is proven against a server that requires it
+  # rather than against a transport a test built itself (spec 6.5).
+  #
+  # Beside the other two rather than TLS on alertmanager-auth, so the plain and
+  # the authenticated paths both keep working unchanged.
+  #
+  # Its material is generated into deploy/alertmanager/tls by
+  # `just alertmanager-certs`, which compose-up runs. The directory is empty in
+  # a fresh checkout, so this service fails to start until it has been run
+  # once.
+  alertmanager-tls:
+    image: prom/alertmanager:v0.28.1
+    container_name: ruler-alertmanager-tls
+    ports:
+      - "127.0.0.1:9095:9093"
+    volumes:
+      - ./deploy/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - ./deploy/alertmanager/web-tls.yml:/etc/alertmanager/web-tls.yml:ro
+      - ./deploy/alertmanager/tls:/etc/alertmanager/tls:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+      - --web.config.file=/etc/alertmanager/web-tls.yml
+      - --storage.path=/alertmanager
+      - --log.level=warn
+    # No healthcheck, for the reason the collector has none: nothing in this
+    # image can ask the question. The only HTTP client here is BusyBox wget,
+    # whose minimal TLS cannot complete a handshake with this server on every
+    # architecture. It does on arm64 and does not on an amd64 runner, where
+    # Alertmanager logs `tls: invalid ClientKeyExchange message` on every probe
+    # and a server that is serving correctly reads as unhealthy forever.
+    #
+    # What proves it is serving is a verified request, and that is what the TLS
+    # tests make before they assert anything, with the same bundle the ruler is
+    # given (spec 9.1).
+
   # Writes the rows the rules read, so a rule is proven against real collector
   # output rather than against rows a test inserted (spec 9.1 item 2).
   #

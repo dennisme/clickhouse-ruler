@@ -101,6 +101,23 @@
       },
       "description": "Credential the ruler authenticates to Alertmanager with. Empty for an Alertmanager that is not behind auth. basicAuth and authorization write the same header, so set one."
     },
+    "alertmanagerTLS": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "secretName": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Secret holding the PEM material, mounted read-only. The material never appears in values."
+        },
+        "caKey": {"type": "string", "minLength": 1, "description": "Key in the Secret holding the CA bundle the Alertmanager is verified against. Replaces the host's trust store rather than adding to it."},
+        "certKey": {"type": "string", "minLength": 1, "description": "Key in the Secret holding the client certificate, for mTLS. Needs keyKey."},
+        "keyKey": {"type": "string", "minLength": 1, "description": "Key in the Secret holding the client certificate's private key. Needs certKey."},
+        "serverName": {"type": "string", "minLength": 1, "description": "Name verified in the Alertmanager's certificate. Set it when the URL names an IP or a tunnel."},
+        "insecureSkipVerify": {"type": "boolean", "description": "Turns verification off. Reported as alertmanager/tls-insecure and cleared only by a dated exemption in the operator's own file."}
+      },
+      "description": "TLS the ruler reaches Alertmanager over, for a private CA or for mTLS. Every alertmanagerURLs entry has to be https:// once this is set."
+    },
     "ruler": {
       "type": "object",
       "required": [

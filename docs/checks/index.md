@@ -7,6 +7,8 @@ Generated from the check table in `internal/lint/checks.go`. Edit the table, the
 | Check | Severity | What it reports |
 | --- | --- | --- |
 | [`alertmanager/auth`](alertmanager.md#alertmanager-auth) | fixed, always `error` | a credential that could not be read, or both credential sources set at once |
+| [`alertmanager/tls`](alertmanager.md#alertmanager-tls) | fixed, always `error` | TLS key material that could not be read, or a tls_config that reaches no https URL |
+| [`alertmanager/tls-insecure`](alertmanager.md#alertmanager-tls-insecure) | `error` by default | an Alertmanager reached with certificate verification off and no exemption |
 | [`alertmanager/url`](alertmanager.md#alertmanager-url) | fixed, always `error` | an Alertmanager URL that will not parse, carries a credential, or is named twice |
 | [`annotations/protected`](rule.md#annotations-protected) | fixed, always `error` | a rule setting an annotation the ruler owns, which the ruler overwrites on a failed template |
 | [`annotations/required`](rule.md#annotations-required) | `warning` by default | an annotation this repository requires on every alert is missing |

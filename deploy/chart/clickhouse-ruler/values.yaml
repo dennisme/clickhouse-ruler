@@ -58,6 +58,32 @@ alertmanagerURLs: []
 #     key: credentials
 alertmanagerAuth: {}
 
+# TLS the ruler reaches Alertmanager over, for a private CA or for mTLS. Only
+# needed when the trust is not the host's: an Alertmanager behind a public CA
+# needs an https URL above and nothing here.
+#
+# The material is never written here. secretName is a Secret this chart mounts
+# and the keys inside it hold the PEM bytes, which is the posture
+# alertmanagerAuth already takes. Every url in alertmanagerURLs has to be
+# https:// once this is set, because a tls_config that reaches no https url is
+# refused.
+#
+# What a rotation costs is worth knowing before one is due: the client pair is
+# read at each handshake, so replacing certKey and keyKey needs nothing, and
+# replacing caKey needs a restart. See docs/checks/alertmanager.md.
+#
+# insecureSkipVerify turns verification off, which is reported as
+# alertmanager/tls-insecure and cleared only by an exemption in the operator's
+# own file, so it belongs with sourcesSecret rather than here.
+#
+# alertmanagerTLS:
+#   secretName: ruler-alertmanager-tls
+#   caKey: ca.pem
+#   certKey: tls.crt
+#   keyKey: tls.key
+#   serverName: alertmanager.monitoring.svc
+alertmanagerTLS: {}
+
 ruler:
   # Port the /metrics, /-/healthy, /-/ready and /-/reload surface listens on.
   # The git-sync exec hook posts to this port on localhost.

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 
@@ -30,7 +31,35 @@ type Alertmanager struct {
 	BasicAuth     *BasicAuth
 	Authorization *Authorization
 
+	// TLS is the transport the HTTP client is built with, nil for a set every
+	// member of which is reached over plaintext or over the host's own trust
+	// store. The same material a source carries, read by the same code, and
+	// held the same way: the CA as bytes, the client pair as the two paths
+	// (spec 6.5, 6.2).
+	TLS *TLS
+
+	// Exemptions are what clears alertmanager/tls-insecure, with a reason and
+	// a date, which is the mechanism a source already carries (spec 7.7).
+	Exemptions []Exemption
+
 	lines lint.Lines
+}
+
+// Exempts reports whether this set has an unexpired exemption for a check.
+func (a Alertmanager) Exempts(check string, now time.Time) bool {
+	return exempts(a.Exemptions, check, now)
+}
+
+// Subject is what a finding about this set is reported against.
+//
+// The first member rather than a name, because a set has none: it is one
+// cluster, and the address an operator wrote first is what identifies it in a
+// finding, in a log line and on the alertmanager metric label.
+func (a Alertmanager) Subject() string {
+	if len(a.URLs) == 0 {
+		return ""
+	}
+	return a.URLs[0]
 }
 
 // BasicAuth is Prometheus' own `basic_auth`, with the secret already resolved
@@ -92,6 +121,7 @@ func parseAlertmanager(r *lint.Reader, n *yaml.Node, env func(string) (string, b
 	a := Alertmanager{lines: lint.NewLines(n.Line)}
 	var basic *basicAuthRef
 	var authz *authorizationRef
+	var tlsConfig tlsRef
 
 	// How many urls the operator wrote, as opposed to how many survived
 	// validation. A set whose one url is a typo has already been told so, and
@@ -107,10 +137,16 @@ func parseAlertmanager(r *lint.Reader, n *yaml.Node, env func(string) (string, b
 			basic = parseBasicAuth(r, e.Value)
 		case "authorization":
 			authz = parseAuthorization(r, e.Value)
+		case "tls_config":
+			tlsConfig = parseTLSConfig(r, e.Value, a.lines)
+		case "exempt":
+			a.Exemptions = parseExemptions(r, e.Value)
 		default:
 			r.UnknownField(e.Key, "alertmanager")
 		}
 	}
+
+	a.TLS = a.resolveTLS(r, tlsConfig)
 
 	if listed == 0 {
 		r.Add(a.lines.Of("urls"), lint.CheckAlertmanagerURL, lint.SeverityError,
@@ -145,6 +181,34 @@ func parseAlertmanager(r *lint.Reader, n *yaml.Node, env func(string) (string, b
 	}
 
 	return a
+}
+
+// resolveTLS reads the material a set's tls_config names, nil for a set that
+// configured none.
+//
+// The scheme is what turns TLS on, because an endpoint is a URL and `https://`
+// already says what a source's `secure: true` says. So material that no member
+// of the set can reach is refused rather than ignored, which is the answer
+// `secure: false` beside a tls_config gets for the same reason: the ruler would
+// post in plaintext while a reviewer reads a file that names a CA (spec 6.5).
+//
+// Every member rather than one of them. The set is one cluster sharing one
+// client, so members that disagree about their transport are a mistake in the
+// file rather than a topology to support.
+func (a Alertmanager) resolveTLS(r *lint.Reader, ref tlsRef) *TLS {
+	if !ref.set {
+		return nil
+	}
+
+	for _, u := range a.URLs {
+		if !strings.HasPrefix(u, "https://") {
+			r.Add(a.lines.Of("tls_config"), lint.CheckAlertmanagerTLS, lint.SeverityError,
+				"tls_config needs every url to be https://, and %q is not", u)
+			return nil
+		}
+	}
+
+	return tlsReader{r: r, lines: a.lines, check: lint.CheckAlertmanagerTLS}.resolve(ref)
 }
 
 // parseAlertmanagerURLs reads and validates the urls of one set.

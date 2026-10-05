@@ -1016,6 +1016,8 @@ that needs no action at all.
 | `ca_file` | a reload, which reopens that source's connection | `SIGHUP`, or `POST /-/reload` |
 | `password_file` on a source | a reload | `SIGHUP`, or `POST /-/reload` |
 | `password_file` or `credentials_file` on an `alertmanagers` entry | a reload | `SIGHUP`, or `POST /-/reload` |
+| `cert_file`, `key_file` on an `alertmanagers` entry | the next handshake | nothing |
+| `ca_file` on an `alertmanagers` entry | nothing | restart the process |
 | a changed `urls` list | nothing | restart the process |
 
 **The client certificate and its key need nothing.** They are read at each TLS
@@ -1037,6 +1039,20 @@ If the block does not read cleanly on a reload, the credential already running
 is kept. A secret file caught half way through being written resolves to no
 credential at all, and applying that would turn a working delivery path into a
 401 on every send.
+
+**An Alertmanager's CA needs a restart, and its client pair needs nothing.**
+The split is the same one the sources have and the reasons are the same, with
+one difference in where it lands: for an HTTP client the roots live inside a
+built transport, so applying a new bundle means replacing that transport while
+sends and probes are using it, which a reload does not do. A reload that reads
+different TLS material logs that a restart is needed and keeps the endpoints
+already running, so an edit that did nothing says so rather than looking
+applied. The client pair is read at each handshake, exactly as it is for a
+source, so a rotated certificate needs no signal.
+
+Plan a CA rotation the way you would plan a version bump, because the restart
+is not free: every pending alert serves its `for` again and resolves being
+retried are forgotten. See [What a restart loses](#what-a-restart-loses).
 
 **A replaced CA needs a reload.** `crypto/tls` takes its roots as a built pool
 with no way to re-read them, so the connection has to be reopened against a new

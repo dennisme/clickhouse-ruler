@@ -50,7 +50,13 @@ var exemptionFormats = []string{time.DateOnly, time.RFC3339}
 
 // Exempts reports whether this source has an unexpired exemption for a check.
 func (s Source) Exempts(check string, now time.Time) bool {
-	for _, e := range s.Exemptions {
+	return exempts(s.Exemptions, check, now)
+}
+
+// exempts is the one reading of a list, because a source and an Alertmanager
+// set both carry one and an exemption means the same thing on either (spec 6.5).
+func exempts(list []Exemption, check string, now time.Time) bool {
+	for _, e := range list {
 		if e.Check == check && now.Before(e.Until) {
 			return true
 		}
@@ -58,26 +64,42 @@ func (s Source) Exempts(check string, now time.Time) bool {
 	return false
 }
 
-// ExpiredExemptions reports every exemption that has run out.
+// ExpiredExemptions reports every exemption that has run out, wherever in the
+// operator's file it was granted.
 //
 // An error rather than a warning, and a finding rather than silence: the date
 // is what makes an exemption a decision with an end, so the file failing on
 // the day it was granted until is the mechanism working. Whoever renews it
 // has to state the reason again, in front of a reviewer.
+//
+// One check name for both blocks. source/exemption is about the mechanism
+// rather than about what granted it, so an Alertmanager set's expiry reports
+// under it too: one page to read, one refusal policy to keep true, and the
+// line number is what says which block it points at (spec 7.7).
 func (f *File) ExpiredExemptions(now time.Time) []lint.Problem {
 	var out []lint.Problem
 
 	for _, s := range f.Sources {
-		for _, e := range s.Exemptions {
-			if now.Before(e.Until) {
-				continue
-			}
-			p := lint.NewProblem(f.File, e.Line, lint.CheckSourceExemption, lint.SeverityError,
-				fmt.Sprintf("the exemption for %s expired on %s: %s",
-					e.Check, e.Until.Format(time.RFC3339), e.Reason))
-			p.Subject = s.Name
-			out = append(out, p)
+		out = append(out, f.expired(s.Exemptions, s.Name, now)...)
+	}
+	for _, a := range f.Alertmanagers {
+		out = append(out, f.expired(a.Exemptions, a.Subject(), now)...)
+	}
+	return out
+}
+
+func (f *File) expired(list []Exemption, subject string, now time.Time) []lint.Problem {
+	var out []lint.Problem
+
+	for _, e := range list {
+		if now.Before(e.Until) {
+			continue
 		}
+		p := lint.NewProblem(f.File, e.Line, lint.CheckSourceExemption, lint.SeverityError,
+			fmt.Sprintf("the exemption for %s expired on %s: %s",
+				e.Check, e.Until.Format(time.RFC3339), e.Reason))
+		p.Subject = subject
+		out = append(out, p)
 	}
 	return out
 }

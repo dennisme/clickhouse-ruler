@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"log/slog"
+	"reflect"
 	"time"
 
 	"github.com/dennisme/clickhouse-ruler/internal/notify"
@@ -33,6 +35,12 @@ const (
 type alertmanagerEndpoint struct {
 	url    string
 	client *notify.Client
+
+	// tls is the material this client's transport was built from, kept so a
+	// reload can say that a replaced bundle needs a restart. The bytes compare
+	// where a built tls.Config cannot: a certificate pool holds a closure per
+	// certificate and two closures are never equal (spec 6.5, 6.2).
+	tls *source.TLS
 }
 
 // alertmanagerEndpoints builds one client per member of the set.
@@ -40,14 +48,28 @@ type alertmanagerEndpoint struct {
 // The credential is resolved once here and set on each client, because every
 // member of one cluster shares it: the set is the cluster, and its auth is a
 // property of the cluster rather than of an address (spec 6.5).
+// The TLS material is resolved once for the same reason: the set is the
+// cluster, so every member is reached over the same trust.
+//
+// An error from Config is what parsing already reported as an
+// alertmanager/tls finding, which refuses the start, so the client is left on
+// the host's trust store rather than this discovering it a second time.
 func alertmanagerEndpoints(set source.Alertmanager) []alertmanagerEndpoint {
 	credential, _ := set.Credential()
+
+	var transport *tls.Config
+	if set.TLS != nil {
+		transport, _ = set.TLS.Config()
+	}
 
 	endpoints := make([]alertmanagerEndpoint, 0, len(set.URLs))
 	for _, u := range set.URLs {
 		client := notify.NewClient(u)
 		client.SetAuthorization(credential)
-		endpoints = append(endpoints, alertmanagerEndpoint{url: u, client: client})
+		if transport != nil {
+			client.SetTLS(transport)
+		}
+		endpoints = append(endpoints, alertmanagerEndpoint{url: u, client: client, tls: set.TLS})
 	}
 	return endpoints
 }
@@ -76,6 +98,21 @@ func sameAlertmanagerURLs(endpoints []alertmanagerEndpoint, set source.Alertmana
 	}
 	for i, e := range endpoints {
 		if e.url != set.URLs[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// sameAlertmanagerTLS reports whether a freshly read set names the material the
+// endpoints already running were built with.
+//
+// The CA is the half that cannot move without rebuilding a transport, and the
+// client pair is held as the two paths and read at each handshake, so this
+// compares the whole block and a rotated pair compares equal (spec 6.5).
+func sameAlertmanagerTLS(endpoints []alertmanagerEndpoint, set source.Alertmanager) bool {
+	for _, e := range endpoints {
+		if !reflect.DeepEqual(e.tls, set.TLS) {
 			return false
 		}
 	}

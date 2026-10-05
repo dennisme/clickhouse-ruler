@@ -927,10 +927,9 @@ This is memory only, as it is in Prometheus. Retention buys surviving a failed
 send, not surviving a restart: a ruler that stops mid-window forgets the resolve
 either way, and that is 12.2's problem rather than this one's.
 
-**How the ruler authenticates to Alertmanager.** `basic_auth` and
-`authorization` ship; `tls_config` is the one part still to come, so an
-Alertmanager that requires TLS to be reachable at all is not reachable by this
-ruler yet. `--alertmanager` is gone.
+**How the ruler authenticates to Alertmanager.** `basic_auth`,
+`authorization` and `tls_config` ship, so an Alertmanager behind a private CA
+or asking for a client certificate is reachable. `--alertmanager` is gone.
 
 It used to work by accident, which is why the URL is now checked for it. Go's
 `http.Client` turns userinfo in a request URL into an `Authorization: Basic`
@@ -992,11 +991,131 @@ carries `urls:` and its own auth, which is the shape that lets a second set be
 added later without rewriting the first. Nothing selects between sets, because
 selecting would be routing and that is not ours (below).
 
-Three check names carry its refusals: `alertmanager/url` for a URL that will
+Four check names carry its refusals: `alertmanager/url` for a URL that will
 not parse or carries userinfo, `alertmanager/auth` for the credential keys,
-reusing the refusals `source/password` already makes, and `alertmanager/tls`
-for TLS material, reusing `source/tls`. The first two ship; the third arrives
-with `tls_config`.
+reusing the refusals `source/password` already makes, `alertmanager/tls` for
+TLS material, reusing `source/tls`, and `alertmanager/tls-insecure` for
+verification turned off, reusing `source/tls-insecure`.
+
+**`tls_config` is the same five fields the sources file already reads,** with
+`prometheus/common`'s names (`config/http_config.go`): `ca_file`, `cert_file`,
+`key_file`, `server_name` and `insecure_skip_verify`. The parsing is the code
+6.2 describes, called from here rather than copied: the Alertmanager block is
+read in `internal/source` beside `tls.go`, so there is one reader, one set of
+refusals and one spelling of every message, under a check name of its own.
+
+| Field | Type | Default | Purpose |
+|---|---|---|---|
+| `ca_file` | path | the host's trust store | PEM bundle the Alertmanager's certificate is verified against, replacing the host's trust store rather than adding to it. |
+| `cert_file` | path | none | Client certificate, PEM. With `key_file`, this is mTLS. |
+| `key_file` | path | none | Private key for `cert_file`. Both or neither. |
+| `server_name` | string | the host in the URL | The name verified in the certificate. Set it when the URL names an IP or a tunnel. |
+| `insecure_skip_verify` | bool | `false` | Skips verification. Reported by `alertmanager/tls-insecure`. |
+
+Key material comes from files and never inline, which is `password_file`'s
+posture and `source/tls`'s. A file that cannot be read, a file that is empty, a
+PEM holding no certificate, and a `cert_file` without its `key_file` are each
+an error from `alertmanager/tls` naming the line of the field, read when the
+file is parsed so that `ruler check` fails on a wrong path rather than a daemon
+failing on its first page.
+
+**The scheme is what turns TLS on, so a `tls_config` beside a plaintext URL is
+refused.** A source has `secure:` and this block does not: an endpoint is a URL,
+and `https://` already says what `secure: true` says. So the contradiction has
+the same shape as `secure: false` with a `tls_config` set and gets the same
+answer rather than a precedence rule. Material that is configured and never
+reached is the failure worth refusing here, because the ruler would connect in
+plaintext while a reviewer reads a file that names a CA. Every URL in the set
+has to be `https://` when a `tls_config` is written, not merely one of them: the
+set is one cluster sharing one client, so members that disagree about their
+transport are a mistake in the file rather than a topology to support.
+
+**`insecure_skip_verify` inherits the dated exemption, so the set carries
+`exempt:` too.** It is the same downgrade with the same decay, written the same
+way, and an operator who has already met it on a staging cluster meets nothing
+new:
+
+```yaml
+alertmanagers:
+  - urls:
+      - https://alertmanager:9093
+    tls_config:
+      ca_file: /run/secrets/ruler/alertmanager-ca.pem
+      insecure_skip_verify: true
+    exempt:
+      - check: alertmanager/tls-insecure
+        reason: the alertmanager's certificate is self-signed until the internal CA lands
+        until: 2026-12-01
+```
+
+The argument against inheriting is that a source's exemption protects query
+results a team reads, where this protects the path a page travels, which is a
+reason to be stricter rather than looser. Being stricter here would mean
+refusing outright, and that is the answer 6.2 already argued down for clusters:
+a self-signed Alertmanager is every compose and kind stack and most staging
+estates, and a tool that cannot reach one is replaced by a tool that can. What
+the exemption buys is the same thing it buys there, which is the date.
+
+**An expired exemption is a finding and does not refuse the start,** which is
+the one place this parts company with the rule above that any error-severity
+`alertmanager` finding refuses it. That rule is about a delivery path the ruler
+cannot use: a URL that will not parse, a credential that resolved to nothing, a
+list that dedupes to fewer members than the operator wrote. Verification turned
+off is not that. The path works, the pages arrive, and what is wrong is that
+nobody identified the server they arrive at, which is exactly the shape of a
+finding: it blocks a merge, it raises `clickhouse_ruler_problem`, and it is
+fixed by a pull request in office hours.
+
+Refusing instead would turn the expiry from a date into a landmine armed to the
+next restart. A reload keeps the version already running, so the ruler pages on
+past the day it expired and nothing says so, until a node drain or an image bump
+at three in the morning finds a pod that will not start and an estate with no
+alerting at all, over a calendar entry somebody forgot to renew. The failure
+would arrive during the incident it was supposed to prevent, caused by the
+mechanism meant to prevent it. So `config.deliverable` skips this one check name
+and takes every other `alertmanager` error, and the skip is named here because a
+reader of that function will otherwise read it as an oversight.
+
+**A reload reads the client pair and does not move the CA.** The block's
+material lands on the same line the credential and the url list are already
+drawn on, and it lands on both sides of it:
+
+| Replaced on disk | What picks it up | What an operator does |
+|---|---|---|
+| `cert_file`, `key_file` | the next handshake | nothing |
+| the credential's `password_file` or `credentials_file` | a reload | `SIGHUP`, or `POST /-/reload` |
+| `ca_file`, or any edit to `tls_config` | a restart | restart the ruler |
+| `urls` | a restart | restart the ruler |
+
+The pair is held as the two paths and read inside `GetClientCertificate`, which
+is 6.2's reasoning unchanged: a certificate manager rotates a pair on a schedule
+nobody signals, and holding the bytes would present an expired certificate at an
+hour nobody chose while the file on disk was correct. The HTTP client has no
+connection lifetime to bound that by, which makes it worse here than it is for a
+source rather than better.
+
+The CA is the half that cannot rotate without rebuilding something. For an HTTP
+client the roots live inside a built `http.Transport`, so applying a new bundle
+means swapping `notify.Client.HTTP` while sends and probes are in flight, the way
+`SetAuthorization` swaps the credential, which costs an atomic pointer on that
+field and a transport rebuilt on the run loop. It is not built. A reload that
+reads different TLS material logs that it needs a restart and keeps the endpoints
+already running, which is the sentence a changed `urls` list already prints, and
+leaves an operator with one model for the whole block: a secret rotates on a
+signal, and anything else is a restart.
+
+What that costs is a real restart on a CA rotation, and a restart is not free in
+the way it is for a source. Every pending alert serves its `for` again (12.2) and
+the resolve retention window above is forgotten, so a rotation is a maintenance
+window rather than a signal, and an estate whose internal CA rotates monthly will
+feel it. That is the argument for building the swap, and it is the thing to build
+first if anybody does: the mechanism is already proven one field over, and the
+rule for a bundle that reads back empty is the rule the credential already
+follows, which is to keep the material already running. `prometheus/common`
+answers the same question a third way, by hashing the CA file on every round trip
+and rebuilding the transport when it changed (`http_config.go`,
+`tlsRoundTripper`), which needs no signal at all and reads a file on every POST
+and every probe.
 
 **Having nowhere usable to send refuses the start, and it is not a finding.**
 Severity says who has to be involved to unblock a contributor, and
@@ -1013,10 +1132,12 @@ to no credential, so taking only the empty case would start a ruler that posts
 to the wrong number of members, or authenticates with nothing, and says so only
 on `clickhouse_ruler_problem`.
 
-**A reload rotates the credential and does not move the URLs.** The block now
-lives in a file a reload re-reads, which is what moving it off a flag bought,
-and the split is the one 6.2 already draws for TLS material: the secret is
-re-read, the topology needs a signal.
+**A reload rotates the credential and does not move the URLs or the TLS
+material.** The block now lives in a file a reload re-reads, which is what
+moving it off a flag bought, and the split is the one 6.2 already draws for TLS
+material: the secret is re-read, the topology needs a signal. Where the
+`tls_config` above sits on that line, and why its CA is on the topology side, is
+written with the block itself.
 
 The credential is swapped in place on each client, so a rotated secret costs a
 `SIGHUP` rather than a restart, and a restart would make every pending alert

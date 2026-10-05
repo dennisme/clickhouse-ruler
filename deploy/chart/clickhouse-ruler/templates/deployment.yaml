@@ -152,6 +152,11 @@ spec:
               mountPath: {{ include "clickhouse-ruler.alertmanagerSecretDir" . }}
               readOnly: true
             {{- end }}
+            {{- if and .Values.alertmanagerTLS .Values.alertmanagerTLS.secretName }}
+            - name: alertmanager-tls
+              mountPath: {{ include "clickhouse-ruler.alertmanagerTLSDir" . }}
+              readOnly: true
+            {{- end }}
             {{- with .Values.extraVolumeMounts }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
@@ -229,6 +234,11 @@ spec:
         - name: alertmanager-credential
           secret:
             secretName: {{ .Values.alertmanagerAuth.secretName }}
+        {{- end }}
+        {{- if and .Values.alertmanagerTLS .Values.alertmanagerTLS.secretName }}
+        - name: alertmanager-tls
+          secret:
+            secretName: {{ .Values.alertmanagerTLS.secretName }}
         {{- end }}
         {{- with .Values.extraVolumes }}
         {{- toYaml . | nindent 8 }}

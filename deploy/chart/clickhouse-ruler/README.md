@@ -55,9 +55,31 @@ header, so the render fails if both are set. A password in an Alertmanager URL
 is refused by the ruler, because it would reach the pod spec and the rendered
 manifest.
 
+An Alertmanager behind a private CA, or one asking for a client certificate,
+is configured under `alertmanagerTLS`. The material is keys in a Secret you
+create, for the reason the credential is:
+
+```yaml
+alertmanagerURLs:
+  - https://alertmanager-0.monitoring:9093
+alertmanagerTLS:
+  secretName: ruler-alertmanager-tls
+  caKey: ca.pem              # the bundle the Alertmanager is verified against
+  certKey: tls.crt           # with keyKey, this is mTLS
+  keyKey: tls.key
+  serverName: alertmanager.monitoring.svc   # when the URL is not the name on the certificate
+```
+
+Every `alertmanagerURLs` entry has to be `https://` once this is set, because
+the scheme is what turns TLS on. An Alertmanager behind a public CA needs an
+`https` URL and nothing here.
+
 Rotating that Secret needs a reload rather than a restart, and changing
-`alertmanagerURLs` needs a restart. See
-[Operations](https://dennisme.github.io/clickhouse-ruler/operations/).
+`alertmanagerURLs` needs a restart. The TLS material splits: replacing
+`certKey` and `keyKey` needs nothing, because the pair is read at each
+handshake, and replacing `caKey` needs a restart. See
+[Operations](https://dennisme.github.io/clickhouse-ruler/operations/) and
+[the alertmanager checks](https://dennisme.github.io/clickhouse-ruler/checks/alertmanager/).
 
 Everything else has a default that runs, and `values.yaml` says what each one
 is for. `values.schema.json` refuses an unknown key at render, so a typo fails
