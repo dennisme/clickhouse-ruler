@@ -1379,6 +1379,20 @@ which is not a container at all for the reason it gives.
    test asserting the modes. There is one, beside the generator. The private key
    this exposes is a key regenerated on every compose-up, signed by a CA whose
    key is never written to disk at all.
+
+   **That one has no healthcheck either**, for the reason item 2 gives for the
+   collector: nothing in the image can ask the question. The only HTTP client
+   there is BusyBox wget, whose minimal TLS does not complete this handshake on
+   every architecture: it does on arm64 and does not on an amd64 runner, where
+   Alertmanager logs `tls: invalid ClientKeyExchange message` on every probe and
+   a server that is serving correctly reads as unhealthy forever. Choosing the
+   certificate's key type to suit that client would be a fixture shaped by its
+   probe rather than by what a ruler meets. So the readiness wait belongs to the
+   tests, which make a verified request with the same bundle the ruler is given
+   before asserting anything, and the unverified request that proves the server
+   is privately signed is made after it rather than before: a server that is not
+   listening yet refuses both, which would pass that assertion for the wrong
+   reason.
 5. **Ruler**, the code under test, built by compose from the `Dockerfile` in
    this checkout rather than pulled. A published image is the last release, and
    the stack exists to run what is in the tree, which is the same reason the
