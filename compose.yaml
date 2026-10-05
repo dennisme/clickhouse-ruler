@@ -172,23 +172,16 @@ services:
       - --web.config.file=/etc/alertmanager/web-tls.yml
       - --storage.path=/alertmanager
       - --log.level=warn
-    # --no-check-certificate because the image carries BusyBox wget, which has
-    # no --ca-certificate to point at the bundle beside it. What this
-    # healthcheck answers is whether Alertmanager is serving, and whether the
-    # certificate verifies is what the ruler's own tests assert.
+    # No healthcheck, for the reason the collector has none: nothing in this
+    # image can ask the question. The only HTTP client here is BusyBox wget,
+    # whose minimal TLS cannot complete a handshake with this server on every
+    # architecture. It does on arm64 and does not on an amd64 runner, where
+    # Alertmanager logs `tls: invalid ClientKeyExchange message` on every probe
+    # and a server that is serving correctly reads as unhealthy forever.
     #
-    # Quoted because the value holds a colon, which a bare compose list item
-    # reads as a mapping.
-    healthcheck:
-      test:
-        - CMD
-        - wget
-        - -qO-
-        - --no-check-certificate
-        - "https://localhost:9093/-/ready"
-      interval: 2s
-      timeout: 2s
-      retries: 30
+    # What proves it is serving is a verified request, and that is what the TLS
+    # tests make before they assert anything, with the same bundle the ruler is
+    # given (spec 9.1).
 
   # Writes the rows the rules read, so a rule is proven against real collector
   # output rather than against rows a test inserted (spec 9.1 item 2).

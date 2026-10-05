@@ -31,23 +31,41 @@ func tlsStack(t *testing.T) (amURL, caFile, chAddr string) {
 			"must be set, run `just integration`")
 	}
 
-	if _, err := http.Get(strings.TrimSuffix(amURL, "/") + "/-/ready"); err == nil { //nolint:noctx,bodyclose // the error is the assertion
-		t.Fatalf("GET /-/ready on %s with the host's trust store succeeded: this server is not "+
-			"privately signed, so nothing here proves verification", amURL)
-	}
-
 	// Verifiable with the bundle, which is what the ruler is about to be given.
 	// Asserted here so a broken certificate reads as a broken fixture rather
 	// than as a broken ruler.
+	//
+	// This is also the readiness wait for the whole fixture. The container has
+	// no healthcheck, because nothing in its image can speak this handshake,
+	// so `docker compose up --wait` returns once the process is running rather
+	// than once it is listening (spec 9.1).
 	pool := caPool(t, caFile)
 	client := &http.Client{Transport: &http.Transport{
 		TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: pool},
 	}}
-	resp, err := client.Get(strings.TrimSuffix(amURL, "/") + "/-/ready") //nolint:noctx // a fixture assertion
-	if err != nil {
-		t.Fatalf("GET /-/ready on %s with the stack CA: %v", amURL, err)
+	ready := strings.TrimSuffix(amURL, "/") + "/-/ready"
+
+	var err error
+	for deadline := time.Now().Add(30 * time.Second); ; {
+		var resp *http.Response
+		resp, err = client.Get(ready) //nolint:noctx // a fixture assertion
+		if err == nil {
+			_ = resp.Body.Close()
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("GET /-/ready on %s with the stack CA: %v", amURL, err)
+		}
+		time.Sleep(200 * time.Millisecond)
 	}
-	_ = resp.Body.Close()
+
+	// Asserted after the wait above rather than before it. A server that is not
+	// listening yet fails this request too, which would pass the assertion for
+	// the wrong reason and leave the premise unproven.
+	if _, err := http.Get(ready); err == nil { //nolint:noctx,bodyclose // the error is the assertion
+		t.Fatalf("GET /-/ready on %s with the host's trust store succeeded: this server is not "+
+			"privately signed, so nothing here proves verification", amURL)
+	}
 
 	return amURL, caFile, chAddr
 }
