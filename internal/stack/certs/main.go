@@ -44,7 +44,17 @@ func main() {
 }
 
 func write(dir string) error {
-	if err := os.MkdirAll(dir, 0o750); err != nil {
+	// Traversable by the Alertmanager container's user, for the reason the file
+	// modes below are readable by it: on Linux the bind mount keeps this
+	// process's ownership, so a directory without x for other is a server that
+	// cannot open the certificate beside it.
+	if err := os.MkdirAll(dir, 0o755); err != nil { //nolint:gosec // G301: traversed by another container's user
+		return err
+	}
+	// Set rather than left to MkdirAll, which leaves an existing directory's
+	// mode alone. A checkout that generated this material under a tighter mode
+	// would otherwise keep it for good.
+	if err := os.Chmod(dir, 0o755); err != nil { //nolint:gosec // G302: traversed by another container's user
 		return err
 	}
 

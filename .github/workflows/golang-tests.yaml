@@ -125,6 +125,18 @@ jobs:
       - name: Integration tests
         run: just coverage-integration-clean
 
+      # What the stack looked like when it did not come up. The recipe installs
+      # its compose-down trap only once the tests themselves run, so a stack
+      # that never became healthy is still here to be read, and that is the
+      # failure this covers: a failing test prints its own output, while
+      # `docker compose up --wait` prints the name of a container and nothing
+      # about why it exited.
+      - name: What was in the stack
+        if: failure()
+        run: |
+          docker compose ps -a || true
+          docker compose logs --tail=50 || true
+
       # Only the pinned leg, which is the required one. A number measured
       # against whatever ClickHouse released this week is not the one to report
       # on a pull request, and both legs would fight over the stored report.
