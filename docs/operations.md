@@ -906,6 +906,7 @@ written off the field names below.
 | warn | `rule loaded with a finding that should have blocked the merge` | Not an operator's problem to fix, and the one line that says a review did not happen: this file would have been blocked in CI and merged anyway, so it is running with nobody told. `team` and `file` say whose and where, `check` names the page, `feed` reads `load`. The two expensive ones are a rule missing a time bound and a rule setting its own `SETTINGS`. |
 | warn | `the re-check pass could not sample a cluster` | Yours. The cluster would not answer the pass, and `error` is the database's own reply with credentials removed. Nothing about a rule is broken: [`rule/attribute-key`](checks/rule.md#rule-attribute-key) simply keeps its previous answer for that cluster rather than being re-asked, so a map key renamed while this is happening goes unreported. `clickhouse_ruler_recheck_sample_failures_total` counts it. |
 | info | `reloading` / `reloaded` | Nothing. A `SIGHUP` or a `POST /-/reload` arrived and the files were re-read. `reloaded` carries the `rules` and `sources` count now running, which is the pair to compare against the `ruler running` line. |
+| info | `applied the changed alertmanager tls_config` | Nothing. A reload read different TLS material and rebuilt each client's transport from it, which is what a CA rotation costs. Written only when the material moved, so a signal over a file nobody edited is silent here. `file` names the operator's file it was read from. |
 | error | `refusing the reload, the previous configuration keeps running` | Read `reason`, then the findings on stderr. The ruler is still evaluating the rules it had before the signal. Nothing is degraded and nothing was applied. |
 
 One line per failed source and one per failed send, never one per alert
@@ -1017,7 +1018,7 @@ that needs no action at all.
 | `password_file` on a source | a reload | `SIGHUP`, or `POST /-/reload` |
 | `password_file` or `credentials_file` on an `alertmanagers` entry | a reload | `SIGHUP`, or `POST /-/reload` |
 | `cert_file`, `key_file` on an `alertmanagers` entry | the next handshake | nothing |
-| `ca_file` on an `alertmanagers` entry | nothing | restart the process |
+| `ca_file` on an `alertmanagers` entry | a reload, which rebuilds each client's transport | `SIGHUP`, or `POST /-/reload` |
 | a changed `urls` list | nothing | restart the process |
 
 **The client certificate and its key need nothing.** They are read at each TLS
@@ -1026,8 +1027,8 @@ the old paths is picked up on the driver's next connection, which is within the
 hour it keeps one for. Nothing to signal, and no window where the ruler presents
 a certificate that has expired.
 
-**An Alertmanager credential needs a reload, and a changed url list needs a
-restart.** The credential is re-read on every reload and swapped into the
+**An Alertmanager credential and CA need a reload, and a changed url list needs
+a restart.** The credential is re-read on every reload and swapped into the
 clients in place, so rotating it disturbs nothing: no firing alert is re-posted
 and no resend timer is reset. The url list is read once at startup, because each
 member owns a probe goroutine and a series of its own, so a reload that reads a
@@ -1035,24 +1036,31 @@ different list logs that a restart is needed and keeps delivering to the
 endpoints it already has. An operator who edited the list is told the running
 process still has the old one.
 
-If the block does not read cleanly on a reload, the credential already running
-is kept. A secret file caught half way through being written resolves to no
+If the block does not read cleanly on a reload, the material already running is
+kept. A secret file caught half way through being written resolves to no
 credential at all, and applying that would turn a working delivery path into a
-401 on every send.
+401 on every send. An unreadable `ca_file` resolves to no bundle, which is the
+host's trust store in place of your private CA.
 
-**An Alertmanager's CA needs a restart, and its client pair needs nothing.**
-The split is the same one the sources have and the reasons are the same, with
-one difference in where it lands: for an HTTP client the roots live inside a
-built transport, so applying a new bundle means replacing that transport while
-sends and probes are using it, which a reload does not do. A reload that reads
-different TLS material logs that a restart is needed and keeps the endpoints
-already running, so an edit that did nothing says so rather than looking
-applied. The client pair is read at each handshake, exactly as it is for a
-source, so a rotated certificate needs no signal.
+**An Alertmanager's CA needs a reload, and its client pair needs nothing.** The
+split is the same one the sources have and the reasons are the same, with one
+difference in where it lands: for an HTTP client the roots live inside a built
+transport, so applying a new bundle means replacing that transport rather than
+reopening a connection. The reload does that, and three things make it safe to
+do under load. Sends and probes already in flight finish on the client they
+started with, which is one request made with the previous roots rather than a
+request lost. The connections the old transport had pooled are closed, so none
+of them keeps serving on roots your file no longer names. And it happens only
+when the material moved, so a signal over a file nobody edited drops no warm
+connection. The line to look for is `applied the changed alertmanager
+tls_config`.
 
-Plan a CA rotation the way you would plan a version bump, because the restart
-is not free: every pending alert serves its `for` again and resolves being
-retried are forgotten. See [What a restart loses](#what-a-restart-loses).
+The client pair is read at each handshake, exactly as it is for a source, so a
+rotated certificate needs no signal at all.
+
+A CA rotation therefore costs a signal rather than a restart, which is what you
+want: see [What a restart loses](#what-a-restart-loses) for what the restart
+would have cost.
 
 **A replaced CA needs a reload.** `crypto/tls` takes its roots as a built pool
 with no way to re-read them, so the connection has to be reopened against a new

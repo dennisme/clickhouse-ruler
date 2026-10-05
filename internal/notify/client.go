@@ -32,8 +32,16 @@ const (
 
 // Client posts alerts to Alertmanager.
 type Client struct {
-	URL  string
-	HTTP *http.Client
+	URL string
+
+	// client is what every send and every probe goes through.
+	//
+	// Atomic for the reason auth below is, and for a harder version of it. A
+	// CA lives inside a built transport and crypto/tls offers no callback for
+	// its roots, so applying a replaced bundle means replacing this whole
+	// client while the delivery worker and this endpoint's probe are using it
+	// (spec 6.5).
+	client atomic.Pointer[http.Client]
 
 	// auth is the Authorization header value sent on every request, unset for
 	// an Alertmanager that is not behind auth. It is built from the credential
@@ -58,13 +66,18 @@ type Client struct {
 }
 
 func NewClient(url string) *Client {
-	return &Client{
+	c := &Client{
 		URL:         strings.TrimSuffix(url, "/"),
-		HTTP:        &http.Client{Timeout: DefaultTimeout},
 		MaxAttempts: DefaultMaxAttempts,
 		Backoff:     DefaultBackoff,
 	}
+	c.client.Store(&http.Client{Timeout: DefaultTimeout})
+	return c
 }
+
+// httpClient is the client this request is made with, read once so a rotation
+// arriving part way through a send cannot move it underneath the request.
+func (c *Client) httpClient() *http.Client { return c.client.Load() }
 
 // Send renders and posts every alert worth notifying about.
 //
@@ -120,7 +133,7 @@ func (c *Client) post(ctx context.Context, body []byte) error {
 	req.Header.Set("Content-Type", "application/json")
 	c.authenticate(req)
 
-	resp, err := c.HTTP.Do(req)
+	resp, err := c.httpClient().Do(req)
 	if err != nil {
 		return retryableError{err}
 	}
@@ -152,7 +165,7 @@ func (c *Client) Probe(ctx context.Context) error {
 	// of the process (spec 8.2).
 	c.authenticate(req)
 
-	resp, err := c.HTTP.Do(req)
+	resp, err := c.httpClient().Do(req)
 	if err != nil {
 		return err
 	}
@@ -164,13 +177,21 @@ func (c *Client) Probe(ctx context.Context) error {
 	return nil
 }
 
-// SetTLS builds the transport this client posts and probes over.
+// SetTLS builds the transport this client posts and probes over, and replaces
+// the one it was using.
 //
-// Called once, before the client is used. Unlike SetAuthorization this is not
-// a rotation: the roots live inside a built transport, so replacing a CA means
-// replacing this field while sends are in flight, and 6.5 decides that a
-// changed CA needs a restart instead. The client pair rotates without this
-// being called again, because cfg reads it at each handshake.
+// A rotation, the way SetAuthorization is, so a replaced ca_file costs a
+// signal rather than a restart. The difference is what has to move: a
+// credential is a header value, while roots live inside a built transport and
+// crypto/tls offers no callback for them, so the whole client is swapped
+// (spec 6.5).
+//
+// Safe while sends and probes are in flight. A request already reading the
+// client finishes on it, which is one request made with the previous roots
+// rather than a request lost, the rule the credential already follows.
+//
+// The client pair rotates without this being called at all, because cfg reads
+// it at each handshake.
 func (c *Client) SetTLS(cfg *tls.Config) {
 	// The timeout stays the client's. A transport with no bound would make a
 	// send wait on an Alertmanager that accepted a connection and stopped,
@@ -185,7 +206,21 @@ func (c *Client) SetTLS(cfg *tls.Config) {
 	transport = transport.Clone()
 	transport.TLSClientConfig = cfg
 
-	c.HTTP = &http.Client{Timeout: c.HTTP.Timeout, Transport: transport}
+	previous := c.httpClient()
+	c.client.Store(&http.Client{Timeout: previous.Timeout, Transport: transport})
+
+	// The replaced transport is dropped, and dropping it is not enough to put
+	// its connections down: each pooled connection has a goroutine of its own
+	// holding the transport, so nothing collects it and the sockets verified
+	// against the previous roots stay open for the life of the process. The
+	// ruler probes every thirty seconds, so there is always one of them.
+	//
+	// Closed after the store, so a request still in flight keeps the
+	// connection it is using and only the idle ones go. The requests that
+	// start next were handed the transport above.
+	if t, ok := previous.Transport.(*http.Transport); ok {
+		t.CloseIdleConnections()
+	}
 }
 
 // SetAuthorization replaces the credential every later request authenticates

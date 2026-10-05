@@ -3,12 +3,19 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/pem"
 	"log/slog"
+	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/dennisme/clickhouse-ruler/internal/lint"
 	"github.com/dennisme/clickhouse-ruler/internal/source"
@@ -26,6 +33,35 @@ func amTLSServer(t *testing.T) (*httptest.Server, []byte) {
 
 	ca := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw})
 	return srv, ca
+}
+
+// unrelatedCA is a valid PEM bundle that signed nothing this test reaches,
+// which is the bundle an operator has half way through a CA rotation.
+//
+// Generated rather than taken from a second httptest server, because every
+// httptest TLS server presents the same built-in certificate, so two of them
+// would compare equal and prove nothing.
+func unrelatedCA(t *testing.T) []byte {
+	t.Helper()
+
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "unrelated-ca"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(time.Hour),
+		IsCA:                  true,
+		KeyUsage:              x509.KeyUsageCertSign,
+		BasicConstraintsValid: true,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
 }
 
 // The material the operator's file named is what the client posts over, which
@@ -55,9 +91,10 @@ func TestAlertmanagerEndpointsWithoutTLSCannotReachOne(t *testing.T) {
 	}
 }
 
-// A changed CA is reported and not applied, which is the line 6.5 draws: the
-// credential rotates in place, the urls and the TLS material need a restart.
-func TestAReloadSaysChangedTLSMaterialNeedsARestart(t *testing.T) {
+// What a reload compares, which is what decides whether anything is rebuilt.
+// Rebuilding on every signal would drop the pooled connection the probe timer
+// keeps warm, for a bundle nobody edited.
+func TestAReloadSeesWhichTLSMaterialChanged(t *testing.T) {
 	srv, ca := amTLSServer(t)
 
 	set := source.Alertmanager{URLs: []string{srv.URL}, TLS: &source.TLS{CA: ca}}
@@ -88,10 +125,71 @@ func TestAReloadSaysChangedTLSMaterialNeedsARestart(t *testing.T) {
 	}
 }
 
-// The log line is what an operator has to go on, so it says which file and
-// what to do rather than only that something changed.
-func TestAReloadLogsThatTLSMaterialNeedsARestart(t *testing.T) {
+// A bundle that now trusts the Alertmanager is applied, so restoring a CA on
+// disk costs a signal. A restart would make every pending alert serve its
+// `for` again (spec 6.5, 12.2).
+func TestAReloadAppliesChangedTLSMaterial(t *testing.T) {
 	srv, ca := amTLSServer(t)
+
+	// Built against a CA that signed something else, which is the half-done
+	// rotation an operator is reloading to get out of.
+	other := unrelatedCA(t)
+	stale := source.Alertmanager{URLs: []string{srv.URL}, TLS: &source.TLS{CA: other}}
+
+	var logs bytes.Buffer
+	r := &runner{
+		configPath: "ruler.yaml",
+		log:        slog.New(slog.NewTextHandler(&logs, nil)),
+		endpoints:  alertmanagerEndpoints(stale),
+	}
+	if err := r.endpoints[0].client.Probe(context.Background()); err == nil {
+		t.Fatal("Probe = nil before the reload, want a verification failure")
+	}
+
+	fixed := source.Alertmanager{URLs: []string{srv.URL}, TLS: &source.TLS{CA: ca}}
+	r.rotateAlertmanagers(&config{alertmanagers: []source.Alertmanager{fixed}})
+
+	if err := r.endpoints[0].client.Probe(context.Background()); err != nil {
+		t.Fatalf("Probe = %v after the reload, want nil\n%s", err, logs.String())
+	}
+
+	// The endpoint now holds what is running, so the next reload of an
+	// unedited file compares equal and rebuilds nothing.
+	if !sameAlertmanagerTLS(r.endpoints, fixed) {
+		t.Error("the endpoint still holds the material it was built with")
+	}
+}
+
+// And the other direction, which is the one that says verification is real: a
+// bundle that no longer names the server's CA stops the sends. A pooled
+// connection that outlived the swap would keep working on roots the file does
+// not name any more.
+func TestAReloadStopsTrustingAWithdrawnCA(t *testing.T) {
+	srv, ca := amTLSServer(t)
+	other := unrelatedCA(t)
+
+	r := &runner{
+		configPath: "ruler.yaml",
+		log:        slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)),
+		endpoints:  alertmanagerEndpoints(source.Alertmanager{URLs: []string{srv.URL}, TLS: &source.TLS{CA: ca}}),
+	}
+	if err := r.endpoints[0].client.Probe(context.Background()); err != nil {
+		t.Fatalf("Probe = %v before the reload, want nil", err)
+	}
+
+	withdrawn := source.Alertmanager{URLs: []string{srv.URL}, TLS: &source.TLS{CA: other}}
+	r.rotateAlertmanagers(&config{alertmanagers: []source.Alertmanager{withdrawn}})
+
+	if err := r.endpoints[0].client.Probe(context.Background()); err == nil {
+		t.Fatal("Probe = nil after the reload, want a verification failure")
+	}
+}
+
+// The log line is what an operator has to go on, so it names the file and says
+// the material was applied rather than only that something changed.
+func TestAReloadLogsThatItAppliedTLSMaterial(t *testing.T) {
+	srv, ca := amTLSServer(t)
+	other := unrelatedCA(t)
 
 	var logs bytes.Buffer
 	r := &runner{
@@ -100,14 +198,22 @@ func TestAReloadLogsThatTLSMaterialNeedsARestart(t *testing.T) {
 		endpoints:  alertmanagerEndpoints(source.Alertmanager{URLs: []string{srv.URL}, TLS: &source.TLS{CA: ca}}),
 	}
 
-	replaced := source.Alertmanager{URLs: []string{srv.URL}, TLS: &source.TLS{CA: []byte("other")}}
-	r.rotateAlertmanagerCredential(&config{alertmanagers: []source.Alertmanager{replaced}})
+	replaced := source.Alertmanager{URLs: []string{srv.URL}, TLS: &source.TLS{CA: other}}
+	r.rotateAlertmanagers(&config{alertmanagers: []source.Alertmanager{replaced}})
 
-	if !strings.Contains(logs.String(), "restart") {
-		t.Errorf("the reload said nothing about needing a restart:\n%s", logs.String())
-	}
 	if !strings.Contains(logs.String(), "tls_config") {
-		t.Errorf("the reload did not name what changed:\n%s", logs.String())
+		t.Errorf("the reload did not name what it applied:\n%s", logs.String())
+	}
+	if strings.Contains(logs.String(), "restart") {
+		t.Errorf("the reload still asks for a restart:\n%s", logs.String())
+	}
+
+	// A second signal over an unedited file is silent, so the line means
+	// something moved.
+	logs.Reset()
+	r.rotateAlertmanagers(&config{alertmanagers: []source.Alertmanager{replaced}})
+	if strings.Contains(logs.String(), "tls_config") {
+		t.Errorf("an unchanged tls_config was reported as applied:\n%s", logs.String())
 	}
 }
 

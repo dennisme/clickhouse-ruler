@@ -12,6 +12,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -174,16 +176,7 @@ func runUntilDelivered(t *testing.T, cfg string, s *sink, serviceName string, wa
 		}, &out, &errOut)
 	}()
 
-	delivered := func(ds []delivery) bool {
-		for _, d := range ds {
-			for _, a := range d.Alerts {
-				if a.Labels["ServiceName"] == serviceName {
-					return true
-				}
-			}
-		}
-		return false
-	}
+	delivered := deliveredFor(serviceName)
 
 	// Longer when something is expected than when nothing is: a delivery has a
 	// seed, a tick and a group interval in front of it, while the absence of
@@ -231,4 +224,161 @@ func tlsConfigFile(t *testing.T, chAddr, amURL, block string) string {
 		t.Fatal(err)
 	}
 	return out
+}
+
+// A replaced ca_file is applied by a reload, in both directions, against the
+// stack's privately signed Alertmanager.
+//
+// Both directions, because each proves something the other cannot. Breaking
+// the bundle proves the running transport was really replaced: a client still
+// holding the previous roots, or serving a request on a connection pooled
+// against them, would go on delivering and the test would pass for the wrong
+// reason. Restoring it proves the rotation an operator actually performs costs
+// a signal, which is the whole point: a restart makes every pending alert
+// serve its `for` again (spec 6.5, 12.2).
+func TestAReloadAppliesAReplacedAlertmanagerCA(t *testing.T) {
+	amURL, caFile, chAddr := tlsStack(t)
+
+	s := startSink(t)
+
+	// The ruler reads a copy, so the test can replace the bundle the way a
+	// rotation replaces a mounted Secret while leaving the stack's own file
+	// alone for the tests beside this one.
+	bundle := filepath.Join(t.TempDir(), "ca.pem")
+	stack, err := os.ReadFile(caFile)
+	if err != nil {
+		t.Fatalf("reading the stack CA: %v", err)
+	}
+	writeBundle(t, bundle, stack)
+
+	cfg := tlsConfigFile(t, chAddr, amURL, "    tls_config:\n      ca_file: "+bundle+"\n")
+
+	before := "checkout-tls-reload-" + strconv.FormatInt(time.Now().UnixNano(), 36)
+	seed(t, chAddr, before)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var out, errOut output
+	runDone := make(chan int, 1)
+	go func() {
+		runDone <- runRun(ctx, []string{
+			"--rules", filepath.Join("testdata", "rules"),
+			"--config", cfg,
+			"--listen", ":0",
+		}, &out, &errOut)
+	}()
+
+	// The premise: this ruler delivers over the bundle it started with. Every
+	// assertion below is about that path changing, so one that never worked
+	// would make all of them vacuous.
+	s.waitFor(t, 30*time.Second, deliveredFor(before))
+
+	// A bundle that signed nothing the stack presents, which is the state a
+	// CA rotation leaves on disk when the wrong half is written first.
+	writeBundle(t, bundle, unrelatedCA(t))
+	hangUp(t)
+	waitForOutput(t, &out, &errOut, "applied the changed alertmanager tls_config", 30*time.Second)
+
+	// A service seeded now is a new fingerprint, so it is posted on the next
+	// evaluation rather than waiting out the resend interval, and the post is
+	// what fails.
+	after := "checkout-tls-reloaded-" + strconv.FormatInt(time.Now().UnixNano(), 36)
+	seed(t, chAddr, after)
+
+	failure := waitForOutput(t, &out, &errOut,
+		"sending alerts to alertmanager failed", 30*time.Second)
+	if !strings.Contains(failure, "certificate") {
+		t.Errorf("the send failed for some reason other than the bundle:\n%s", failure)
+	}
+
+	// And back, which is the rotation finishing.
+	writeBundle(t, bundle, stack)
+	hangUp(t)
+	waitForOutput(t, &out, &errOut, "applied the changed alertmanager tls_config", 30*time.Second)
+
+	s.waitFor(t, 60*time.Second, deliveredFor(after))
+
+	cancel()
+	select {
+	case code := <-runDone:
+		if code != exitOK {
+			t.Errorf("ruler run exited %d\nstdout: %s\nstderr: %s", code, out.String(), errOut.String())
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("ruler run did not shut down within 10s of cancellation")
+	}
+}
+
+// deliveredFor is the condition that an alert for one run-unique service has
+// reached the sink through the Alertmanager under test.
+func deliveredFor(serviceName string) func([]delivery) bool {
+	return func(ds []delivery) bool {
+		for _, d := range ds {
+			for _, a := range d.Alerts {
+				if a.Labels["ServiceName"] == serviceName {
+					return true
+				}
+			}
+		}
+		return false
+	}
+}
+
+// writeBundle replaces the PEM the ruler's ca_file names, which is what a
+// rotation does to a mounted Secret.
+func writeBundle(t *testing.T, path string, pem []byte) {
+	t.Helper()
+
+	if err := os.WriteFile(path, pem, 0o600); err != nil {
+		t.Fatalf("writing %s: %v", path, err)
+	}
+}
+
+// hangUp sends the signal an operator sends. The test binary is the process
+// running the ruler, so this is that signal and not a simulation of one.
+func hangUp(t *testing.T) {
+	t.Helper()
+
+	if err := syscall.Kill(os.Getpid(), syscall.SIGHUP); err != nil {
+		t.Fatalf("sending SIGHUP: %v", err)
+	}
+}
+
+// waitForOutput waits for one line to appear on either stream and returns
+// everything written so far, so the caller can assert on what the line says.
+func waitForOutput(t *testing.T, out, errOut *output, want string, d time.Duration) string {
+	t.Helper()
+
+	for deadline := time.Now().Add(d); ; {
+		body := out.String() + errOut.String()
+		if strings.Contains(body, want) {
+			return body
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%q did not appear within %s:\n%s", want, d, body)
+			return body
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+// output is a stream the ruler writes while the test reads it, which a plain
+// bytes.Buffer cannot be: the run loop logs from its own goroutine and the
+// assertions are made from the test's.
+type output struct {
+	mu   sync.Mutex
+	body bytes.Buffer
+}
+
+func (o *output) Write(p []byte) (int, error) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.body.Write(p)
+}
+
+func (o *output) String() string {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.body.String()
 }

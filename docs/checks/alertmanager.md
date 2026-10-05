@@ -196,20 +196,24 @@ before a certificate rotation is due:
 |---|---|---|
 | `cert_file`, `key_file` | the next handshake | nothing |
 | the credential's `password_file` or `credentials_file` | a reload | `SIGHUP`, or `POST /-/reload` |
-| `ca_file`, or any edit to `tls_config` | a restart | restart the ruler |
+| `ca_file`, or any edit to `tls_config` | a reload | `SIGHUP`, or `POST /-/reload` |
 | `urls` | a restart | restart the ruler |
 
 The client pair is read inside the handshake, so a certificate manager rotating
 it on its own schedule needs nothing from you. The CA is held as the bytes that
 were read, because the roots live inside a built HTTP transport: applying a new
-bundle means replacing that transport while sends and probes are using it,
-which a reload does not do. A reload that reads different material logs that it
-needs a restart and keeps the endpoints already running, so an edit that did
-nothing says so rather than looking applied.
+bundle means replacing that transport, which a reload does. Sends and probes
+already in flight finish on the one they started with, and the connections the
+old transport had pooled are closed, so nothing keeps serving on roots your file
+no longer names.
 
-A restart is not free, which is why it is said out loud: every pending alert
-serves its `for` again, and resolves being retried are forgotten. Plan a CA
-rotation the way you would plan a version bump.
+The reload logs `applied the changed alertmanager tls_config` and only when the
+material moved, so a signal over a file nobody edited rebuilds nothing and says
+nothing.
+
+A CA rotation therefore costs a signal rather than a restart, which matters:
+a restart makes every pending alert serve its `for` again and forgets the
+resolves it was retrying.
 
 All of these are `error` and all of them refuse the start, because an
 Alertmanager this ruler cannot reach is every alert in the checkout rather than

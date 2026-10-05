@@ -79,7 +79,7 @@ end of it, so it is an error that only a dated exemption clears, and it is the
 one `alertmanager` check that does not refuse the start. See
 [the alertmanager checks](checks/alertmanager.md).
 
-**A rotated secret costs a `SIGHUP`. A changed url costs a restart.** The
+**A rotated secret or CA costs a `SIGHUP`. A changed url costs a restart.** The
 credential is re-read on every reload and swapped in place, so rotating it
 disturbs nothing: no firing alert is re-posted and no resend timer is reset.
 The url list is read once at startup, because each member owns a probe
@@ -88,17 +88,21 @@ logs that a restart is needed and keeps delivering to the endpoints it already
 has, so an operator who edited the list is told the running process still has
 the old one.
 
-If the block does not read cleanly on a reload, the credential already running
-is kept. A secret file that is briefly unreadable is what a rotation looks like
+If the block does not read cleanly on a reload, the material already running is
+kept. A secret file that is briefly unreadable is what a rotation looks like
 half way through, and applying what that resolves to, which is nothing, would
-turn a working delivery path into a 401 on every send.
+turn a working delivery path into a 401 on every send. An unreadable `ca_file`
+is the same shape: what it resolves to is the host's trust store in place of
+your private CA.
 
-TLS material splits across that line rather than sitting on one side of it. A
-replaced `cert_file` and `key_file` need nothing, because the pair is read at
-each handshake, and a replaced `ca_file` needs a restart: the roots live inside
-a built HTTP transport, so applying a new bundle means replacing that transport
-while sends and probes are using it. A reload that reads different material
-logs that a restart is needed, so an edit that did nothing says so.
+TLS material sits on the reload side, in two different ways. A replaced
+`cert_file` and `key_file` need nothing at all, because the pair is read at each
+handshake. A replaced `ca_file` needs the signal: the roots live inside a built
+HTTP transport, so a reload rebuilds each client's transport, finishes the sends
+and probes already in flight on the one they started with, and closes the
+connections the old transport had pooled so none of them keeps serving on roots
+your file no longer names. The line `applied the changed alertmanager
+tls_config` is printed only when the material moved.
 
 **Nowhere to send refuses the start.** No `alertmanagers` block, no urls in it,
 or any `alertmanager/*` finding at error severity, and `ruler run` exits 2
