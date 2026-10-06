@@ -117,8 +117,8 @@ type runner struct {
 
 	// endpoints are the Alertmanagers alerts go to, built once at startup.
 	// The list is topology and does not move under a reload, because each
-	// member owns a probe goroutine and a gauge series; only the credential on
-	// each client rotates (spec 6.5).
+	// member owns a probe goroutine and a gauge series; the credential and the
+	// TLS material on each client rotate (spec 6.5).
 	endpoints []alertmanagerEndpoint
 
 	// recheck is how often loaded rules are re-checked against real data, zero
@@ -344,7 +344,7 @@ func (r *runner) reload(ctx context.Context) error {
 		return r.refuse("a source could not be opened", err)
 	}
 
-	r.rotateAlertmanagerCredential(cfg)
+	r.rotateAlertmanagers(cfg)
 
 	r.metrics.ConfigReloads.WithLabelValues("succeeded").Inc()
 
@@ -355,12 +355,12 @@ func (r *runner) reload(ctx context.Context) error {
 	return nil
 }
 
-// rotateAlertmanagerCredential applies the credential just read to every
-// endpoint, which is the whole of what a reload does to the alertmanagers
-// block.
+// rotateAlertmanagers applies the credential and the TLS material just read to
+// every endpoint, which is what a reload does to the alertmanagers block.
 //
-// A rotated secret therefore costs a signal and not a restart, which matters
-// because a restart makes every pending alert serve its `for` again (12.2).
+// A rotated secret and a rotated CA therefore cost a signal and not a restart,
+// which matters because a restart makes every pending alert serve its `for`
+// again and forgets the resolve retention window (12.2).
 //
 // A changed url list is reported and not applied. Each member owns a probe
 // goroutine and a gauge series, so moving the list means starting and stopping
@@ -369,23 +369,23 @@ func (r *runner) reload(ctx context.Context) error {
 // is the part that matters: an operator who edited the list has to know the
 // running process still has the old one (spec 6.5).
 //
-// Changed TLS material is reported the same way, and for the same kind of
-// reason: a CA lives inside a built transport, so applying one means replacing
-// a client's transport while sends and probes are using it. The client pair is
-// the exception that needs nothing, because each handshake reads the paths
-// again, so a rotated certificate is not a change this has to see.
+// The client pair is the half that needs none of this, because each handshake
+// reads the two paths again, so a rotated certificate is not a change this has
+// to see.
 //
-// The block going missing entirely is treated the same way. It refuses a
-// start, but refusing a reload over it would strand a rules change behind an
-// edit to an unrelated section, and the endpoints already running are still
-// the ones the alerts are reaching.
-func (r *runner) rotateAlertmanagerCredential(cfg *config) {
-	// A block that did not read cleanly keeps the credential already running.
-	// A secret file that is briefly unreadable, which is what a rotation looks
+// The block going missing entirely is treated the way an unreadable one is. It
+// refuses a start, but refusing a reload over it would strand a rules change
+// behind an edit to an unrelated section, and the endpoints already running are
+// still the ones the alerts are reaching.
+func (r *runner) rotateAlertmanagers(cfg *config) {
+	// A block that did not read cleanly keeps what is already running. A
+	// secret file that is briefly unreadable, which is what a rotation looks
 	// like half way through, resolves to no credential at all, so applying it
-	// would turn a working delivery path into a 401 on every send.
+	// would turn a working delivery path into a 401 on every send, and an
+	// unreadable ca_file resolves to no bundle, which is the host's trust
+	// store in place of the private CA.
 	if err := cfg.deliverable(); err != nil {
-		r.log.Warn("the alertmanagers block did not read cleanly, keeping the credential already running",
+		r.log.Warn("the alertmanagers block did not read cleanly, keeping the material already running",
 			"file", r.configPath, "reason", err.Error())
 		return
 	}
@@ -395,9 +395,17 @@ func (r *runner) rotateAlertmanagerCredential(cfg *config) {
 		r.log.Warn("the alertmanager urls changed, which a reload cannot apply: restart to pick them up",
 			"file", r.configPath, "running", len(r.endpoints), "configured", len(set.URLs))
 	}
+
+	// Only when it moved. Rebuilding on every signal would drop the pooled
+	// connection the probe timer keeps warm, for a bundle nobody edited, and
+	// the line below would say something happened when nothing did.
 	if !sameAlertmanagerTLS(r.endpoints, set) {
-		r.log.Warn("the alertmanager tls_config changed, which a reload cannot apply: restart to pick it up",
-			"file", r.configPath)
+		if err := rotateTLS(r.endpoints, set); err != nil {
+			r.log.Warn("the alertmanager tls_config could not be applied, keeping the material already running",
+				"file", r.configPath, "error", err.Error())
+		} else {
+			r.log.Info("applied the changed alertmanager tls_config", "file", r.configPath)
+		}
 	}
 	rotateCredential(r.endpoints, set)
 }

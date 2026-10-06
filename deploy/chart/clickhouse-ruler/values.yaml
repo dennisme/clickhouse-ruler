@@ -70,7 +70,7 @@ alertmanagerAuth: {}
 #
 # What a rotation costs is worth knowing before one is due: the client pair is
 # read at each handshake, so replacing certKey and keyKey needs nothing, and
-# replacing caKey needs a restart. See docs/checks/alertmanager.md.
+# replacing caKey needs a reload. See docs/checks/alertmanager.md.
 #
 # insecureSkipVerify turns verification off, which is reported as
 # alertmanager/tls-insecure and cleared only by an exemption in the operator's

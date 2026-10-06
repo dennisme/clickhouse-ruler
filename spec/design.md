@@ -1076,15 +1076,15 @@ mechanism meant to prevent it. So `config.deliverable` skips this one check name
 and takes every other `alertmanager` error, and the skip is named here because a
 reader of that function will otherwise read it as an oversight.
 
-**A reload reads the client pair and does not move the CA.** The block's
-material lands on the same line the credential and the url list are already
-drawn on, and it lands on both sides of it:
+**A reload reads the whole block, and only the url list needs a restart.** The
+block's material lands on the same line the credential and the url list are
+already drawn on, and it lands on both sides of it:
 
 | Replaced on disk | What picks it up | What an operator does |
 |---|---|---|
 | `cert_file`, `key_file` | the next handshake | nothing |
 | the credential's `password_file` or `credentials_file` | a reload | `SIGHUP`, or `POST /-/reload` |
-| `ca_file`, or any edit to `tls_config` | a restart | restart the ruler |
+| `ca_file`, or any edit to `tls_config` | a reload, which rebuilds each client's transport | `SIGHUP`, or `POST /-/reload` |
 | `urls` | a restart | restart the ruler |
 
 The pair is held as the two paths and read inside `GetClientCertificate`, which
@@ -1095,27 +1095,51 @@ connection lifetime to bound that by, which makes it worse here than it is for a
 source rather than better.
 
 The CA is the half that cannot rotate without rebuilding something. For an HTTP
-client the roots live inside a built `http.Transport`, so applying a new bundle
-means swapping `notify.Client.HTTP` while sends and probes are in flight, the way
-`SetAuthorization` swaps the credential, which costs an atomic pointer on that
-field and a transport rebuilt on the run loop. It is not built. A reload that
-reads different TLS material logs that it needs a restart and keeps the endpoints
-already running, which is the sentence a changed `urls` list already prints, and
-leaves an operator with one model for the whole block: a secret rotates on a
-signal, and anything else is a restart.
+client the roots live inside a built `http.Transport`, and Go offers no
+client-side hook for them (golang/go#64796 is on hold), so applying a new bundle
+means replacing the whole `http.Client` while sends and probes are in flight. It
+is held behind an `atomic.Pointer` and swapped on the run loop, which is the way
+`SetAuthorization` swaps the credential one field over, and `SetTLS` stops being
+call-once. A request already reading the pointer finishes on the client it read,
+which is one request made with the previous roots rather than a request lost, the
+rule the credential already follows.
 
-What that costs is a real restart on a CA rotation, and a restart is not free in
-the way it is for a source. Every pending alert serves its `for` again (12.2) and
-the resolve retention window above is forgotten, so a rotation is a maintenance
-window rather than a signal, and an estate whose internal CA rotates monthly will
-feel it. That is the argument for building the swap, and it is the thing to build
-first if anybody does: the mechanism is already proven one field over, and the
-rule for a bundle that reads back empty is the rule the credential already
-follows, which is to keep the material already running. `prometheus/common`
-answers the same question a third way, by hashing the CA file on every round trip
-and rebuilding the transport when it changed (`http_config.go`,
-`tlsRoundTripper`), which needs no signal at all and reads a file on every POST
-and every probe.
+What that buys is the restart. A restart is not free in the way it is for a
+source: every pending alert serves its `for` again (12.2) and the resolve
+retention window above is forgotten, so an estate whose internal CA rotates
+monthly would be taking a maintenance window every month over a file that
+changed. Now it costs a signal.
+
+**The transport being replaced has its idle connections closed.** Dropping it is
+not enough. Each pooled connection has a goroutine of its own holding the
+transport, so nothing collects it, and the sockets verified against the roots
+being withdrawn stay open for the life of the process; the probe runs every
+thirty seconds (8.2), so there is always one of them. They are closed after the
+pointer is stored, so a request still in flight keeps the connection it is using
+and the requests that start next were handed the transport that replaced it.
+`prometheus/common` does the same thing in the same order
+(`http_config.go:1603`).
+
+**Only when the material moved.** Each endpoint keeps the `source.TLS` its
+transport was built from and a reload compares the two, because rebuilding on
+every signal would drop the connection the probe timer keeps warm for a bundle
+nobody edited, and the log line saying the material was applied would be printed
+on reloads where nothing was.
+
+A bundle that does not read cleanly keeps what is running, and this needs no new
+mechanism: an unreadable or non-PEM `ca_file` is an `alertmanager/tls` finding at
+error severity, so `config.deliverable` fails and the reload returns before it
+reaches the material, the same guard the credential is already behind.
+
+`prometheus/common` answers the same question a third way, by hashing the CA file
+on every round trip and rebuilding the transport when it changed
+(`http_config.go:1575`, `tlsRoundTripper`), which needs no signal at all and
+reads a file on every POST and every probe. A signal is the better fit here:
+`SIGHUP` already exists, and a file read per send is a worse trade on a path
+whose failure mode is a missed page. `InsecureSkipVerify` with a hand written
+`VerifyPeerCertificate` is the other option and it is out: it collides with
+`alertmanager/tls-insecure`, and any slip in it is a silent verification bypass
+rather than a failure.
 
 **Having nowhere usable to send refuses the start, and it is not a finding.**
 Severity says who has to be involved to unblock a contributor, and
@@ -1132,12 +1156,11 @@ to no credential, so taking only the empty case would start a ruler that posts
 to the wrong number of members, or authenticates with nothing, and says so only
 on `clickhouse_ruler_problem`.
 
-**A reload rotates the credential and does not move the URLs or the TLS
-material.** The block now lives in a file a reload re-reads, which is what
-moving it off a flag bought, and the split is the one 6.2 already draws for TLS
-material: the secret is re-read, the topology needs a signal. Where the
-`tls_config` above sits on that line, and why its CA is on the topology side, is
-written with the block itself.
+**A reload rotates the credential and the TLS material, and does not move the
+URLs.** The block now lives in a file a reload re-reads, which is what moving it
+off a flag bought, and the split is the one 6.2 already draws: the material is
+re-read, the topology needs a signal. How the `tls_config` above sits on that
+line is written with the block itself.
 
 The credential is swapped in place on each client, so a rotated secret costs a
 `SIGHUP` rather than a restart, and a restart would make every pending alert
@@ -1146,21 +1169,22 @@ it last sent on an alert's fingerprint and never on an endpoint, so replacing a
 client cannot reset a resend timer, and the send queue and the probe goroutines
 keep running.
 
-The URL list is read once. Each member owns a probe goroutine and a gauge
-series, so moving the list means starting and stopping goroutines and deleting
-series nothing would otherwise clear, which is the lifecycle problem
-`deleteSource` exists for and a slice of its own. A reload that reads a
-different list logs that it needs a restart and keeps the endpoints already
-running, because an operator who edited the list has to know the process still
-has the old one.
+The URL list is read once, and it is the one thing here that still needs a
+restart. Each member owns a probe goroutine and a gauge series, so moving the
+list means starting and stopping goroutines and deleting series nothing would
+otherwise clear, which is the lifecycle problem `deleteSource` exists for and a
+slice of its own. A reload that reads a different list logs that it needs a
+restart and keeps the endpoints already running, because an operator who edited
+the list has to know the process still has the old one.
 
-A block that did not read cleanly keeps the credential already running. A
-secret file that is briefly unreadable is what a rotation looks like half way
-through, and applying what that resolves to, which is no credential at all,
-would turn a working delivery path into a 401 on every send. It refuses a start
-and not a reload for the same reason the findings do: the endpoints already
-running are still the ones the alerts are reaching, and refusing would strand a
-rules change behind an edit to an unrelated section.
+A block that did not read cleanly keeps the material already running. A secret
+file that is briefly unreadable is what a rotation looks like half way through,
+and applying what that resolves to, which is no credential at all, would turn a
+working delivery path into a 401 on every send; an unreadable `ca_file`
+resolves to no bundle, which is the host's trust store in place of the private
+CA. It refuses a start and not a reload for the same reason the findings do: the
+endpoints already running are still the ones the alerts are reaching, and
+refusing would strand a rules change behind an edit to an unrelated section.
 
 **Userinfo in a URL is refused.** Not deprecated, refused:
 `parseAlertmanagerURL` rejects a URL carrying one and says which field to use

@@ -77,7 +77,7 @@ the scheme is what turns TLS on. An Alertmanager behind a public CA needs an
 Rotating that Secret needs a reload rather than a restart, and changing
 `alertmanagerURLs` needs a restart. The TLS material splits: replacing
 `certKey` and `keyKey` needs nothing, because the pair is read at each
-handshake, and replacing `caKey` needs a restart. See
+handshake, and replacing `caKey` needs the reload. See
 [Operations](https://dennisme.github.io/clickhouse-ruler/operations/) and
 [the alertmanager checks](https://dennisme.github.io/clickhouse-ruler/checks/alertmanager/).
 

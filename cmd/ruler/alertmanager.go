@@ -37,9 +37,10 @@ type alertmanagerEndpoint struct {
 	client *notify.Client
 
 	// tls is the material this client's transport was built from, kept so a
-	// reload can say that a replaced bundle needs a restart. The bytes compare
-	// where a built tls.Config cannot: a certificate pool holds a closure per
-	// certificate and two closures are never equal (spec 6.5, 6.2).
+	// reload can tell a bundle that moved from one nobody edited and rebuild
+	// only for the first. The bytes compare where a built tls.Config cannot: a
+	// certificate pool holds a closure per certificate and two closures are
+	// never equal (spec 6.5, 6.2).
 	tls *source.TLS
 }
 
@@ -57,36 +58,64 @@ type alertmanagerEndpoint struct {
 func alertmanagerEndpoints(set source.Alertmanager) []alertmanagerEndpoint {
 	credential, _ := set.Credential()
 
-	var transport *tls.Config
-	if set.TLS != nil {
-		transport, _ = set.TLS.Config()
-	}
-
 	endpoints := make([]alertmanagerEndpoint, 0, len(set.URLs))
 	for _, u := range set.URLs {
 		client := notify.NewClient(u)
 		client.SetAuthorization(credential)
-		if transport != nil {
-			client.SetTLS(transport)
-		}
-		endpoints = append(endpoints, alertmanagerEndpoint{url: u, client: client, tls: set.TLS})
+		endpoints = append(endpoints, alertmanagerEndpoint{url: u, client: client})
+	}
+
+	// Only when the set configured it, so a plaintext Alertmanager keeps the
+	// process-wide transport and its connection pool rather than a clone of
+	// its own.
+	if set.TLS != nil {
+		_ = rotateTLS(endpoints, set)
 	}
 	return endpoints
 }
 
 // rotateCredential applies a freshly read credential to every endpoint.
 //
-// What a reload does to this block, and the whole of it. The URLs are topology
-// and are read once at startup, because each one owns a probe goroutine and a
-// gauge series whose lifecycle a changing list would have to manage; the
-// credential is a secret and rotates in place, which is the same split 6.2
-// draws between a CA that needs a reload and a client certificate that does
-// not (spec 6.5).
+// The URLs are topology and are read once at startup, because each one owns a
+// probe goroutine and a gauge series whose lifecycle a changing list would
+// have to manage. The credential is a secret and rotates in place (spec 6.5).
 func rotateCredential(endpoints []alertmanagerEndpoint, set source.Alertmanager) {
 	credential, _ := set.Credential()
 	for _, e := range endpoints {
 		e.client.SetAuthorization(credential)
 	}
+}
+
+// rotateTLS rebuilds every endpoint's transport from freshly read material and
+// records what it was built from, so the next reload compares against what is
+// running.
+//
+// By index, because the material is a field of the endpoint rather than of the
+// client behind it, and a copy would leave the slice holding the bundle that
+// has just been replaced.
+//
+// The error is what parsing already reported as an alertmanager/tls finding,
+// which fails config.deliverable and returns before this is reached, so it is
+// returned rather than ignored only so that a reader is not left wondering
+// which of the two places decides.
+func rotateTLS(endpoints []alertmanagerEndpoint, set source.Alertmanager) error {
+	var transport *tls.Config
+	if set.TLS != nil {
+		var err error
+		if transport, err = set.TLS.Config(); err != nil {
+			return err
+		}
+	}
+
+	// A nil config is a tls_config that was removed, which leaves the endpoint
+	// on the host's trust store. Applied rather than skipped: the urls cannot
+	// move under a reload, so an https endpoint whose block went away is an
+	// operator asking for exactly that.
+	for i := range endpoints {
+		endpoints[i].client.SetTLS(transport)
+		endpoints[i].tls = set.TLS
+	}
+	return nil
 }
 
 // sameAlertmanagerURLs reports whether a freshly read set names the endpoints
