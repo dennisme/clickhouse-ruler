@@ -1,0 +1,48 @@
+name: Check findings
+description: What `ruler check` reported on rules you wrote
+labels: [findings]
+body:
+  - type: markdown
+    attributes:
+      value: >
+        Thank you: this is the most useful thing anybody outside this repository
+        can send. A check costs a name, a page, a severity and a policy key
+        forever, so whether to add one is a counting question rather than a
+        design question. Findings from a real estate are the count.
+
+  - type: textarea
+    id: feed
+    attributes:
+      label: The findings feed
+      description: >
+        `ruler check --config ruler.yaml --format=json ./rules/`. The feed names
+        each check that fired and the rule it fired on. It carries no query
+        text, no table names and no rows.
+      render: json
+    validations:
+      required: true
+
+  - type: input
+    id: scale
+    attributes:
+      label: How many rules
+      description: >
+        How many rule files and how many rules the run covered, so a count of
+        findings has a denominator.
+    validations:
+      required: true
+
+  - type: textarea
+    id: wrong
+    attributes:
+      label: Anything it got wrong
+      description: >
+        A finding you disagree with is worth more than one you accept. Name the
+        check and say what the rule was doing on purpose.
+
+  - type: textarea
+    id: missed
+    attributes:
+      label: Anything it missed
+      description: >
+        A mistake somebody on your team actually wrote that no check caught.

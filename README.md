@@ -157,7 +157,10 @@ The manual is at
 
 ## Status
 
-Honest picture of what exists today.
+Honest picture of what exists today. No estate outside this repository has
+operated it, so rules you wrote are the evidence it is short of:
+[CONTRIBUTING.md](CONTRIBUTING.md) says what to send and why
+`ruler check --format=json` is the safe way to send it.
 
 Working, with the manual linked for each:
 
@@ -276,7 +279,8 @@ Limits to know about, accepted rather than waiting on work:
 ## Development
 
 Requires Go, Docker, and [just](https://github.com/casey/just). Run `just` for
-every recipe; [AGENTS.md](AGENTS.md) has the layout and the conventions.
+every recipe; [CONTRIBUTING.md](CONTRIBUTING.md) is where to start and
+[AGENTS.md](AGENTS.md) has the layout and the conventions.
 
 ```bash
 just init               # mise tool versions and pre-commit hooks

@@ -1,0 +1,39 @@
+name: Bug
+description: Something the tool did that it should not have done
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you ran, and what it did instead of what you expected.
+    validations:
+      required: true
+
+  - type: textarea
+    id: version
+    attributes:
+      label: Version
+      description: >
+        The output of `ruler version`, which names the release, the commit and
+        whether the binary came from a dirty tree. A report against `main` and
+        a report against a release are different reports.
+      render: text
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Log lines or output
+      description: >
+        Passwords never reach a log and ClickHouse driver errors are redacted
+        before they are returned, so a ruler log line is safe to paste. The line
+        names the rule, the source and the file behind the failure.
+      render: text
+
+  - type: input
+    id: clickhouse
+    attributes:
+      label: ClickHouse version
+      description: Only needed if the report involves a query or a source.
