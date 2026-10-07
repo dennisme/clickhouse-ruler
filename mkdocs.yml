@@ -39,7 +39,15 @@ markdown_extensions:
   - admonition
   - toc:
       permalink: true
-  - pymdownx.superfences
+  # Mermaid blocks, which this theme renders by loading its own copy of
+  # mermaid when it sees the class. GitHub renders the same fence natively, so
+  # a diagram in a file read there is a diagram either way, which is the
+  # property the check pages are written for (spec 7.8).
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
 
 nav:
   - Home: index.md

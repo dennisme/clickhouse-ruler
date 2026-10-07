@@ -6,9 +6,10 @@ Every flag the binary takes, and everything it exposes once it is up.
 ruler run --rules ./rules --config ./rules/ruler.yaml
 ```
 
-Where alerts go is a section of the operator's file rather than a flag,
-because the credential that reaches it has to come from a file and never from
-argv:
+## Where alerts go
+
+A section of the operator's file rather than a flag, because the credential
+that reaches it has to come from a file and never from argv:
 
 ```yaml
 # ruler.yaml
@@ -29,6 +30,8 @@ merge, because a ruler that will not start pages nobody. A source failing the
 user contract at error severity is refused on its own: its rules stop
 evaluating and every other source carries on.
 
+### The list is the cluster
+
 **`urls` names every member of one Alertmanager cluster, and there is no
 balancer in front of it.** Members gossip and deduplicate identical
 alerts, so every alert is posted to every member and the cluster's own
@@ -43,6 +46,8 @@ given here are not two routes for the same alert: a send is delivered as soon as
 one of them accepts it, so while the other is down its pages are silently not
 re-tried. Two clusters that must both receive everything are two rulers.
 
+### The credential
+
 **The credential is the cluster's, not an address's.** One `basic_auth` or one
 `authorization` on the set is used for every url in it, because the set is the
 cluster. The names are Prometheus' own, so an operator who has configured an
@@ -55,6 +60,8 @@ A password in the URL is refused rather than ignored. Go's HTTP client would
 turn it into an `Authorization` header and it would work, which is exactly the
 problem: it would also be in the pod spec, the rendered chart manifest and any
 dump that echoes argv.
+
+### TLS to the Alertmanager
 
 **An Alertmanager that requires TLS is reached with a `tls_config`.** The
 scheme is what turns it on, so every url in the set is `https://` once the
@@ -78,6 +85,8 @@ connection encrypted and stops anything identifying the server at the other
 end of it, so it is an error that only a dated exemption clears, and it is the
 one `alertmanager` check that does not refuse the start. See
 [the alertmanager checks](checks/alertmanager.md).
+
+### What a rotation costs
 
 **A rotated secret or CA costs a `SIGHUP`. A changed url costs a restart.** The
 credential is re-read on every reload and swapped in place, so rotating it
@@ -110,6 +119,8 @@ naming the file. This is not one of the findings that loads and raises
 `clickhouse_ruler_problem`: those cost one rule behaving as written, where this
 costs every alert in the checkout.
 
+## Checking rules
+
 `ruler check` stays offline unless it is asked not to. `--online` runs the
 checks that need a connection, connecting as each source's own user, because
 that user is what is being checked. Those read metadata and no rows.
@@ -120,7 +131,7 @@ query is costs a parse, while sampling runs statements against the source's
 data. The sample is bounded by `max-sample-rows` and reads as the source's own
 user, so row policies apply to it.
 
-## Checking one file
+### Checking one file
 
 Paths after the rules directory narrow what is reported:
 
@@ -143,7 +154,7 @@ path. A run that quietly reported nothing would look exactly like a clean one.
 Paths combine with `--changed-since`: asking for both reports the changed files
 among the paths named.
 
-## What a check exits with
+### What a check exits with
 
 | Code | What it means |
 | --- | --- |
@@ -173,7 +184,7 @@ all, by design. The consequence for a job reading only the exit code is that a
 green check can mean the online checks did not run, so read the output, or fail
 the job on `rule/inspect` where the cluster is meant to be reachable from CI.
 
-## Replaying a rule over the past
+### Replaying a rule over the past
 
 `--backfill` replays every rule over a past range and reports how many alerts
 it would have produced, which is
@@ -198,7 +209,7 @@ belong in the policy file is the two ceilings: `max-alerts`, which the count is
 measured against, and `max-rows-read`, which the whole replay's predicted total
 is measured against before any of it runs.
 
-## The cost table
+### The cost table
 
 `--summary` writes a markdown table of what every rule is predicted to read,
 one row per rule and source. `-` writes it to stdout.
@@ -308,6 +319,8 @@ series per rule.
 | `clickhouse_ruler_queries_in_flight` | gauge | none |
 | `clickhouse_ruler_build_info` | gauge | `version`, `revision`, `goversion` |
 
+### Evaluations, counted per cluster
+
 `clickhouse_ruler_rule_evaluations_total` and
 `clickhouse_ruler_rule_evaluation_failures_total` count one evaluation of one
 rule against one cluster. A rule selects sources by label, so a rule matching
@@ -318,6 +331,8 @@ count per, and it is what makes the failure ratio in
 [operations](operations.md#evaluation-failures) a share: counted once per rule, a
 rule whose four clusters all failed read 4.0. A single-source ruler reads the
 same number either way.
+
+### Sends, latency and the queue
 
 The two send counters are per endpoint, which is what `alertmanager` labels:
 `clickhouse_ruler_alerts_sent_total` is what each member took, and
@@ -350,6 +365,8 @@ deliver them in time; nothing was recorded as sent in either case, so the next
 evaluation of that rule enqueues the same instances and the drop spends the same
 `--resend-tolerance` a failed send spends.
 
+### The two problem gauges
+
 The two problem gauges are the only metrics here not addressed to whoever
 operates the ruler, and the only ones worth reading by their labels rather than
 their value. `clickhouse_ruler_problem` is a rule that broke after it merged, so
@@ -363,11 +380,15 @@ series that disappears is somebody fixing something.
 [Operations](operations.md#a-rule-that-broke-while-running) has the whole of how
 to read them, including what clears them and what does not.
 
+### Which build is running
+
 `clickhouse_ruler_build_info` is always 1 and exists for its labels: it says
 which build each replica is running, which matters during a rollout that only
 half landed. `version` is the release tag and reads `dev` for a binary built
 outside a release. `ruler version` prints the same facts, plus whether the
 tree was dirty, for anyone who can reach the binary.
+
+### Whether the Alertmanager answers at all
 
 `clickhouse_ruler_alertmanager_last_probe_successful` is the one delivery
 series that exists before anything fires. The two send counters are labelled
@@ -383,6 +404,8 @@ one Alertmanager serves every replica, so a readiness term would take a whole
 deployment unready during a rolling restart of it.
 [Operations](operations.md#the-alertmanager-not-answering) has what to watch.
 
+### Reloads
+
 The three reload metrics are about the files rather than the rules.
 `clickhouse_ruler_config_reloads_total` counts attempts, `succeeded` or
 `refused`, and is the only one that still shows a refusal somebody retried
@@ -393,6 +416,8 @@ attempt, so a reload the ruler refused holds it at 0 until one succeeds;
 load that succeeded, so it dates the configuration actually being evaluated.
 [Operating the ruler](operations.md) has what a reload refuses and what survives
 one.
+
+### The re-check pass
 
 **The re-check pass is on by default, and what it costs is arithmetic you can
 do.** One bounded query per rule per matched source per interval: 800 rules each
@@ -422,6 +447,8 @@ rule author: the ruler could not ask, so it learned nothing about the rules
 reading that cluster. All three are absent on a ruler started with
 `--recheck-interval=0`.
 
+### Which rules a replica loaded
+
 `clickhouse_ruler_config_info` names the configuration itself, and is always 1
 for its labels the way `clickhouse_ruler_build_info` is: that one says which
 binary a replica runs, this one says which rules it loaded. `revision` is a hash
@@ -439,6 +466,8 @@ a rule by its path inside the rules tree: `payments/checkout.yaml:checkout`. Not
 by where the tree is mounted, because a deployment publishes a revision by
 pointing a symlink at a directory named after the commit, and an identity built
 from that path would rename every series on every merge.
+
+### What a query cost, and what it waited for
 
 The four query cost metrics come from the ClickHouse driver's own callbacks
 as the query runs, so they cost no extra query and do not depend on how long
@@ -465,6 +494,8 @@ there are slots queues against itself. Read it against
 right now. Those two are `prometheus_engine_queries_concurrent_max` and
 `prometheus_engine_queries` under another prefix.
 
+### Annotations that would not render
+
 `clickhouse_ruler_annotation_failures_total` is separate from the evaluation failures on
 purpose: an annotation that will not render still pages, carrying a marker in
 place of the annotation and the template error in `ruler_error` beside it, so it
@@ -472,11 +503,15 @@ is the rule author's bug rather than a failed evaluation. It counts how often
 that happened; whether the rule is still broken is
 `clickhouse_ruler_problem{check="annotations/template"}`.
 
-Two are worth alerting on. `clickhouse_ruler_rule_group_iterations_missed_total` rising
+### Two worth alerting on
+
+`clickhouse_ruler_rule_group_iterations_missed_total` rising
 means an evaluation took longer than its group interval, so alerts are silently
 late. `clickhouse_ruler_rules_unmatched` staying above zero means this ruler loaded rules
 that match none of its sources and will never evaluate them, which is expected
 during a rollout and a problem if it persists.
+
+## Logs
 
 Logs are `log/slog` on stdout, `--log-level` deep, and `--log-format` picks
 whether they are text for a terminal or JSON for a pipeline. A failed query, a

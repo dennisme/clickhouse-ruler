@@ -45,11 +45,35 @@ party that knows when they are complete, so the watching lives beside the ruler
 rather than inside it. The chart runs the ruler with
 `--enable-reload-endpoint`, which the binary does not do by default.
 
+### git-sync, the default delivery
+
 **git-sync is the default delivery.** A sidecar clones the rules repository
 into a worktree and flips a symlink at the rules path, so the ruler cannot read
 a tree half written, and its exec hook posts to `/-/reload` after each
-successful sync. The chain is merge, sync, symlink flip, hook, reload, and the
-lag is the sync period plus one reload.
+successful sync. The lag is the sync period plus one reload.
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant author
+  participant repo as rules repository
+  participant sync as git-sync sidecar
+  participant ruler
+  author->>repo: merge the rule file
+  sync->>repo: fetch, once per sync period
+  sync->>sync: write the worktree, move the symlink
+  sync->>ruler: POST /-/reload
+  ruler->>ruler: re-read the rules path
+  alt the ruler accepted them
+    ruler-->>sync: 200, the merged rule is evaluating
+  else the ruler refused them
+    ruler-->>sync: 4xx, the rules already loaded keep running
+  end
+```
+
+A refused reload is a failed hook, so git-sync retries it on its next sync with
+the previous rules still evaluating. That branch is what
+`clickhouse_ruler_config_last_reload_successful` reports, below.
 
 The chart points the ruler at the symlink plus `rules.subdirectory`, which with
 the defaults is `/rules/current/rules`. An init container syncs once before the
@@ -59,12 +83,16 @@ read and an empty volume is one.
 [`deploy/examples/git-sync.yaml`](https://github.com/dennisme/clickhouse-ruler/blob/main/deploy/examples/git-sync.yaml)
 is that topology as a values file.
 
+### A ConfigMap mount
+
 **A ConfigMap mount is the small-estate case**, for an estate whose rules fit in
 one object and whose authors are its operators. There is no exec hook there, so
 the mount needs a reloader sidecar of its own, which
 [`deploy/examples/configmap.yaml`](https://github.com/dennisme/clickhouse-ruler/blob/main/deploy/examples/configmap.yaml)
 supplies. Without one, editing the ConfigMap changes the files and the ruler
 keeps evaluating what it loaded at startup.
+
+### Which revision is running
 
 Both layouts hand the ruler a rules path built out of symlinks: git-sync's
 `--link`, and kubelet's `..data`. The loader reads each of them exactly once.
