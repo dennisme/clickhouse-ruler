@@ -150,3 +150,63 @@ func documentedInputs(t *testing.T, page string) map[string]bool {
 	}
 	return out
 }
+
+// The floating major tag the release workflow moves, which is derived from the
+// released tag rather than written anywhere in the tree (RELEASE.md). A
+// consumer reads `uses:` off a page and pastes it, so a page naming a major
+// that was never published is a workflow that cannot resolve. This constant is
+// the one place the documented major lives: a v1 release changes it here and
+// the test names every file that has to follow.
+const documentedMajor = "v0"
+
+func TestDocumentedActionMajorIsPublished(t *testing.T) {
+	root := filepath.Join("..", "..")
+
+	skip := map[string]bool{
+		".git": true, "node_modules": true, "site": true, "dist": true,
+	}
+
+	const ref = "dennisme/clickhouse-ruler/action@"
+
+	var seen int
+	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			if skip[d.Name()] {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		switch filepath.Ext(path) {
+		case ".md", ".yml", ".yaml":
+		default:
+			return nil
+		}
+
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		for _, line := range strings.Split(string(data), "\n") {
+			i := strings.Index(line, ref)
+			if i < 0 {
+				continue
+			}
+			seen++
+			got, _, _ := strings.Cut(line[i+len(ref):], "`")
+			got = strings.TrimSpace(got)
+			if got != documentedMajor {
+				t.Errorf("%s names action@%s, which is not the published major %s", path, got, documentedMajor)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if seen == 0 {
+		t.Fatal("no action reference found, so this test asserts nothing")
+	}
+}
