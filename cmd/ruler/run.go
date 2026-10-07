@@ -15,7 +15,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
-	"github.com/dennisme/clickhouse-ruler/internal/notify"
+	"github.com/dennisme/clickhouse-ruler/internal/cli"
 	"github.com/dennisme/clickhouse-ruler/internal/query"
 	"github.com/dennisme/clickhouse-ruler/internal/scheduler"
 )
@@ -24,10 +24,6 @@ import (
 // supervisor can tell "the flags were wrong" from "the ruler could not
 // connect to a source it needs".
 const exitRun = 3
-
-// defaultShutdownTimeout is how long a running evaluation gets to finish
-// once SIGINT or SIGTERM arrives, before the process gives up on it anyway.
-const defaultShutdownTimeout = 30 * time.Second
 
 // parseLogLevel reads the --log-level flag. An unparseable level is refused
 // rather than defaulted, because an operator who asked for debug output and
@@ -60,67 +56,44 @@ func runRun(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 
-	rulesDir := fs.String("rules", "", "path to the rules directory (required)")
-	configPath := fs.String("config", "ruler.yaml", "path to the operator's file, which names the sources")
-	policyPath := fs.String("policy", "", "path to a policy file, defaults to policy.yaml beside the rules directory if present")
-	listen := fs.String("listen", ":9090", "address for the /metrics, /-/healthy and /-/ready HTTP surface")
-	queryConcurrency := fs.Int("query-concurrency", scheduler.DefaultQueryConcurrency,
-		"how many rule queries may run against ClickHouse at once, across every group; 0 means unbounded")
-	recheckInterval := fs.Duration("recheck-interval", scheduler.DefaultRecheckInterval,
-		"how often loaded rules are re-checked against recent data for the map keys they read, "+
-			"which no evaluation can see; 0 turns the pass off")
-	shutdownTimeout := fs.Duration("shutdown-timeout", defaultShutdownTimeout,
-		"how long an in-flight evaluation gets to finish once shutdown starts")
-	resendInterval := fs.Duration("resend-interval", notify.DefaultResendInterval,
-		"how often a still-firing alert is re-posted to Alertmanager; each alert is sent an expiry of four times this")
-	resendTolerance := fs.Int("resend-tolerance", notify.DefaultResendTolerance,
-		"how many resend periods a firing alert stays valid for, so how many consecutive failed evaluations or sends "+
-			"pass before Alertmanager expires an alert that is still firing; 4 is what Prometheus gives itself")
-	queueCapacity := fs.Int("notification-queue-capacity", scheduler.DefaultNotificationQueueCapacity,
-		"how many alerts may wait to be sent to Alertmanager before the oldest are dropped; the send runs off the "+
-			"evaluation goroutine, so this is what an Alertmanager outage fills instead of a group's interval")
-	logLevel := fs.String("log-level", "info", "log verbosity: debug, info, warn or error")
-	logFormat := fs.String("log-format", "text", "log encoding: text or json")
-	reloadEndpoint := fs.Bool("enable-reload-endpoint", false,
-		"serve POST /-/reload, which re-reads the same files SIGHUP does, for deployments where a signal cannot "+
-			"reach the process")
+	opts := cli.RunFlags(fs)
 
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
 	}
-	if *rulesDir == "" {
+	if *opts.RulesDir == "" {
 		printf(stderr, "%s\n", "usage: ruler run --rules <dir> [flags]")
 		return exitUsage
 	}
 	// A non-positive interval makes every firing alert due on every
 	// evaluation and gives it an expiry that has already passed, which
 	// Alertmanager reads as resolved.
-	if *resendInterval <= 0 {
-		printf(stderr, "--resend-interval must be positive, got %s\n", *resendInterval)
+	if *opts.ResendInterval <= 0 {
+		printf(stderr, "--resend-interval must be positive, got %s\n", *opts.ResendInterval)
 		return exitUsage
 	}
 
 	// A queue of nothing drops every alert the moment it is handed over, and
 	// the bound is the whole point of the queue.
-	if *queueCapacity <= 0 {
-		printf(stderr, "--notification-queue-capacity must be positive, got %d\n", *queueCapacity)
+	if *opts.QueueCapacity <= 0 {
+		printf(stderr, "--notification-queue-capacity must be positive, got %d\n", *opts.QueueCapacity)
 		return exitUsage
 	}
 
 	// One period of validity expires a firing alert at the exact moment it is
 	// next due, leaving no room for the send that would have renewed it to
 	// fail. Tolerating nothing is not a tolerance.
-	if *resendTolerance < 2 {
-		printf(stderr, "--resend-tolerance must be at least 2, got %d\n", *resendTolerance)
+	if *opts.ResendTolerance < 2 {
+		printf(stderr, "--resend-tolerance must be at least 2, got %d\n", *opts.ResendTolerance)
 		return exitUsage
 	}
 
-	level, err := parseLogLevel(*logLevel)
+	level, err := parseLogLevel(*opts.LogLevel)
 	if err != nil {
 		printf(stderr, "%s\n", err)
 		return exitUsage
 	}
-	handler, err := newLogHandler(*logFormat, stdout, &slog.HandlerOptions{Level: level})
+	handler, err := newLogHandler(*opts.LogFormat, stdout, &slog.HandlerOptions{Level: level})
 	if err != nil {
 		printf(stderr, "%s\n", err)
 		return exitUsage
@@ -129,18 +102,18 @@ func runRun(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 
 	reg := prometheus.NewRegistry()
 	rn := &runner{
-		rulesDir:    *rulesDir,
-		configPath:  *configPath,
-		policyPath:  *policyPath,
+		rulesDir:    *opts.RulesDir,
+		configPath:  *opts.ConfigPath,
+		policyPath:  *opts.PolicyPath,
 		log:         log,
 		stderr:      stderr,
 		metrics:     scheduler.NewMetrics(reg),
 		clock:       scheduler.NewRealClock(),
-		concurrency: *queryConcurrency,
-		recheck:     *recheckInterval,
+		concurrency: *opts.QueryConcurrency,
+		recheck:     *opts.RecheckInterval,
 		// Both the cadence and each rule's resolved-alert retention are sized
 		// from these two, so they travel as the pair they are (spec 6.5).
-		resend: scheduler.Resend{Interval: *resendInterval, Tolerance: *resendTolerance},
+		resend: scheduler.Resend{Interval: *opts.ResendInterval, Tolerance: *opts.ResendTolerance},
 	}
 	// SIGHUP is the whole trigger. Nothing watches the filesystem: an operator
 	// or whatever rolled the files out says when they are complete, and a
@@ -184,7 +157,7 @@ func runRun(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	// resilience out of deduplication the cluster already has where a balancer
 	// picks one member and hides a partition (spec 6.5).
 	if err := cfg.deliverable(); err != nil {
-		printf(stderr, "refusing to start: %s names no alertmanager to send to: %s\n", *configPath, err)
+		printf(stderr, "refusing to start: %s names no alertmanager to send to: %s\n", *opts.ConfigPath, err)
 		return exitUsage
 	}
 	rn.endpoints = alertmanagerEndpoints(cfg.alertmanagers[0])
@@ -194,7 +167,7 @@ func runRun(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	// outage fills the queue instead of holding a group's evaluation past its
 	// interval (spec 6.5). The queue outlives every reload, as the cadence
 	// behind it does.
-	rn.queue = scheduler.NewSendQueue(cadence, *queueCapacity, rn.metrics, rn.clock, log)
+	rn.queue = scheduler.NewSendQueue(cadence, *opts.QueueCapacity, rn.metrics, rn.clock, log)
 
 	if err := rn.connect(ctx, cfg); err != nil {
 		printf(stderr, "%s\n", err)
@@ -207,18 +180,18 @@ func runRun(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	// Nil unless an operator asked for it, which is what keeps the endpoint off
 	// the surface rather than merely refusing on it (spec 8.1).
 	var reload scheduler.Reload
-	if *reloadEndpoint {
+	if *opts.ReloadEndpoint {
 		reload = func(ctx context.Context) error { return requestReload(ctx, reloads) }
 	}
 
 	httpSrv := &http.Server{
-		Addr:              *listen,
+		Addr:              *opts.Listen,
 		Handler:           scheduler.Handler(reg, rn.ready, reload),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	go func() {
 		if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Error("metrics listener stopped", "listen", *listen, "error", err.Error())
+			log.Error("metrics listener stopped", "listen", *opts.Listen, "error", err.Error())
 		}
 	}()
 
@@ -230,7 +203,7 @@ func runRun(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	}
 
 	rn.sched.Start(ctx)
-	log.Info("ruler running", "rules", len(cfg.set.Rules), "listen", *listen,
+	log.Info("ruler running", "rules", len(cfg.set.Rules), "listen", *opts.Listen,
 		"alertmanagers", len(rn.endpoints))
 
 	for running := true; running; {
@@ -244,8 +217,8 @@ func runRun(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		}
 	}
 
-	log.Info("shutting down", "timeout", shutdownTimeout.String())
-	rn.sched.Shutdown(*shutdownTimeout)
+	log.Info("shutting down", "timeout", opts.ShutdownTimeout.String())
+	rn.sched.Shutdown(*opts.ShutdownTimeout)
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

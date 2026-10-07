@@ -1,7 +1,9 @@
-// Package docs renders the check documentation from the check table.
+// Package docs renders the generated parts of the site: the check pages from
+// the check table, and the flag reference from the flag sets.
 //
 // The facts on a page are generated rather than written, because they are
-// already in internal/lint/checks.go and the resolver reads them from there.
+// already in internal/lint/checks.go and internal/cli, and the resolver and
+// the commands read them from there.
 // A page stating a default by hand can be perfectly consistent with itself
 // and still describe a tool that behaves differently, and the gate that
 // regenerates and diffs would certify it (spec 7.8).
@@ -19,7 +21,7 @@ import (
 	"github.com/dennisme/clickhouse-ruler/internal/lint"
 )
 
-//go:generate go run ./gen -out ../../docs/checks
+//go:generate go run ./gen -out ../../docs
 
 // Pages are the files the checks are documented in, in the order the index
 // lists them.
@@ -158,7 +160,32 @@ func Apply(page, content string) (string, error) {
 		return "", fmt.Errorf("%s closes its generated region before it opens", page)
 	}
 
-	return content[:start] + markerStart + "\n\n" + Facts(page) + "\n" + content[end:], nil
+	return content[:start] + markerStart + "\n\n" + generated(page) + "\n" + content[end:], nil
+}
+
+// generated is what a page's region holds. The check pages carry the check
+// table; the flag reference carries the flag set.
+func generated(page string) string {
+	if page == FlagsPage {
+		return Flags()
+	}
+	return Facts(page)
+}
+
+// Region returns what lies between a page's markers, for a test that has to
+// read back what was written rather than trust that it was.
+func Region(content string) (string, error) {
+	start := strings.Index(content, markerStart)
+	end := strings.Index(content, markerEnd)
+
+	switch {
+	case start < 0 || end < 0:
+		return "", fmt.Errorf("no generated region, expected %s ... %s", markerStart, markerEnd)
+	case end < start:
+		return "", fmt.Errorf("the generated region closes before it opens")
+	}
+
+	return content[start+len(markerStart) : end], nil
 }
 
 // Headings lists the check headings a page carries, in the order they appear,
