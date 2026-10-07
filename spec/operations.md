@@ -2091,20 +2091,20 @@ where the explanation would otherwise be read as output nobody asked for.
 #### The action is composite, and owns nothing but the wiring
 
 7.1 chose a composite action in `action/`, consumed as
-`dennisme/clickhouse-ruler/action@v1`. Holding to that, with two additions
+`dennisme/clickhouse-ruler/action@v0`. Holding to that, with two additions
 that belong in the spec rather than in whoever writes it:
 
 - **The download is verified.** A composite action that fetches a release
   binary and executes it is a supply chain step. Releases publish a checksums
   file; the action checks it before running anything.
 - **Tags are disciplined.** The action version equals the tool version, so a
-  release moves the floating major tag. Without that, everyone pinned to `@v1`
+  release moves the floating major tag. Without that, everyone pinned to `@v0`
   runs whatever the tag pointed at the day they wrote it. The release workflow
   moves it, last, once the binaries and the chart are published, and never for
   a prerelease.
 
   Which leaves the action having to accept a tag that cannot name a release
-  asset, because an asset carries the full version and `v1` is not one. It
+  asset, because an asset carries the full version and `v0` is not one. It
   resolves the newest release under that major and says which one it picked.
   A branch is not a release and is refused: the alternative is a checker whose
   version nobody can state, gating a merge.
