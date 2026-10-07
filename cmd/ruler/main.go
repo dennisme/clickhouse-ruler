@@ -9,14 +9,13 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"strings"
 	"syscall"
 	"time"
 
 	"github.com/dennisme/clickhouse-ruler/internal/buildinfo"
+	"github.com/dennisme/clickhouse-ruler/internal/cli"
 	"github.com/dennisme/clickhouse-ruler/internal/lint"
 	"github.com/dennisme/clickhouse-ruler/internal/policy"
-	"github.com/dennisme/clickhouse-ruler/internal/query"
 	"github.com/dennisme/clickhouse-ruler/internal/ruleset"
 	"github.com/dennisme/clickhouse-ruler/internal/source"
 )
@@ -77,31 +76,7 @@ func check(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("check", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 
-	configPath := fs.String("config", "ruler.yaml", "path to the operator's file, which names the sources")
-	policyPath := fs.String("policy", "", "path to a policy file, defaults to policy.yaml beside the rules directory if present")
-	format := fs.String("format", lint.FormatText,
-		"output format: "+strings.Join(lint.Formats, ", "))
-	changedSince := fs.String("changed-since", "",
-		"only report findings in files that differ from the merge base with this git reference")
-	explain := fs.Bool("explain", false, "print each rule's resolved policy and where every setting came from")
-	online := fs.Bool("online", false,
-		"also run the checks that need a ClickHouse connection, connecting as each source's own user")
-	sample := fs.Bool("sample", false,
-		"also run the checks that read rows, which implies -online")
-	backfill := fs.Bool("backfill", false,
-		"also replay each rule over a past range and report how many alerts it would have produced, "+
-			"which reads rows once per window and implies -online")
-	backfillRange := fs.Duration("backfill-range", query.DefaultBackfillRange,
-		"how far back -backfill reaches")
-	backfillStep := fs.Duration("backfill-step", 0,
-		"the gap between the evaluations -backfill replays, defaulting to the rule's group interval")
-	markdown := fs.String("markdown", "",
-		"write the findings as a markdown table to this path, - for stdout, for a pull request comment")
-	linkPrefix := fs.String("link-prefix", "",
-		"URL a finding's path is appended to in the markdown table, such as "+
-			"https://github.com/owner/repo/blob/<commit>/, which links each finding to its line")
-	summary := fs.String("summary", "",
-		"write a markdown table of what each rule reads to this path, - for stdout, which needs -online")
+	opts := cli.CheckFlags(fs)
 
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
@@ -112,7 +87,7 @@ func check(args []string, stdout, stderr io.Writer) int {
 	}
 	dir := fs.Arg(0)
 
-	if err := lint.Format(io.Discard, *format, nil); err != nil {
+	if err := lint.Format(io.Discard, *opts.Format, nil); err != nil {
 		printf(stderr, "%s\n", err)
 		return exitUsage
 	}
@@ -125,12 +100,12 @@ func check(args []string, stdout, stderr io.Writer) int {
 	// demands: a run that would corrupt stdout is refused whether or not the
 	// cluster the cost table needs could have been reached.
 	for _, dest := range []struct{ flag, path string }{
-		{"--markdown", *markdown},
-		{"--summary", *summary},
+		{"--markdown", *opts.Markdown},
+		{"--summary", *opts.Summary},
 	} {
-		if dest.path == "-" && *format != lint.FormatText {
+		if dest.path == "-" && *opts.Format != lint.FormatText {
 			printf(stderr, "%s - needs --format=%s: stdout already carries the %s output\n",
-				dest.flag, lint.FormatText, *format)
+				dest.flag, lint.FormatText, *opts.Format)
 			return exitUsage
 		}
 	}
@@ -138,18 +113,18 @@ func check(args []string, stdout, stderr io.Writer) int {
 	// The table's numbers come from EXPLAIN ESTIMATE, which needs a cluster
 	// to ask. Offline there is nothing to put in it, and an empty table would
 	// read as an estate where every rule is free (spec 7.10).
-	if *summary != "" && !*online && !*sample && !*backfill {
+	if *opts.Summary != "" && !*opts.Online && !*opts.Sample && !*opts.Backfill {
 		printf(stderr, "%s\n", "--summary needs --online: the cost of a rule is a question for the cluster it runs on")
 		return exitUsage
 	}
 
-	sources, problems, err := loadSources(*configPath)
+	sources, problems, err := loadSources(*opts.ConfigPath)
 	if err != nil {
 		printf(stderr, "%s\n", err)
 		return exitUsage
 	}
 
-	root, policyProblems, err := loadPolicy(*policyPath, dir)
+	root, policyProblems, err := loadPolicy(*opts.PolicyPath, dir)
 	if err != nil {
 		printf(stderr, "%s\n", err)
 		return exitUsage
@@ -174,27 +149,27 @@ func check(args []string, stdout, stderr io.Writer) int {
 	// resolve, so asking for one without the other would leave nothing to read
 	// against (spec 7.3). Neither implies the other, because a replay is a
 	// larger read than a sample and is consented to on its own.
-	if *online || *sample || *backfill {
+	if *opts.Online || *opts.Sample || *opts.Backfill {
 		ctx := context.Background()
 
 		// Every source in the file, not only the ones a rule matched. The
 		// finding belongs to the pull request that changed the sources file,
 		// in front of the people who own it (spec 6.7.3).
-		problems = append(problems, checkPrivileges(ctx, *configPath, sources.Sources, root)...)
+		problems = append(problems, checkPrivileges(ctx, *opts.ConfigPath, sources.Sources, root)...)
 
 		// Rules are the other way round: only the sources they matched, since
 		// a rule is read through the cluster it will run on.
 		inspected, rows := inspectRules(ctx, set, inspectOptions{
-			sampling:      *sample,
-			backfilling:   *backfill,
-			summarising:   *summary != "",
-			backfillRange: *backfillRange,
-			backfillStep:  *backfillStep,
+			sampling:      *opts.Sample,
+			backfilling:   *opts.Backfill,
+			summarising:   *opts.Summary != "",
+			backfillRange: *opts.BackfillRange,
+			backfillStep:  *opts.BackfillStep,
 		})
 		problems = append(problems, inspected...)
 
-		if *summary != "" {
-			if err := writeSummary(*summary, rows, stdout); err != nil {
+		if *opts.Summary != "" {
+			if err := writeSummary(*opts.Summary, rows, stdout); err != nil {
 				printf(stderr, "%s\n", err)
 				return exitUsage
 			}
@@ -205,8 +180,8 @@ func check(args []string, stdout, stderr io.Writer) int {
 	// the checks about a pair or a tree are answers about the tree. Narrowing
 	// here can only drop a finding a full run would also have reported, and
 	// the exit code below follows what is left (spec 10.3).
-	if *changedSince != "" {
-		filter := lint.ChangedSince(dir, *changedSince, []string{*configPath, *policyPath})
+	if *opts.ChangedSince != "" {
+		filter := lint.ChangedSince(dir, *opts.ChangedSince, []string{*opts.ConfigPath, *opts.PolicyPath})
 		if filter.Note != "" {
 			printf(stderr, "%s\n", filter.Note)
 		}
@@ -221,24 +196,24 @@ func check(args []string, stdout, stderr io.Writer) int {
 
 	// Written before the log format, so a workflow gets the annotations and the
 	// comment body from one run of the checks rather than two (spec 10.3).
-	if *markdown != "" {
-		if err := writeReport(*markdown, *linkPrefix, problems, stdout); err != nil {
+	if *opts.Markdown != "" {
+		if err := writeReport(*opts.Markdown, *opts.LinkPrefix, problems, stdout); err != nil {
 			printf(stderr, "%s\n", err)
 			return exitUsage
 		}
 	}
 
-	if err := lint.Format(stdout, *format, problems); err != nil {
+	if err := lint.Format(stdout, *opts.Format, problems); err != nil {
 		printf(stderr, "%s\n", err)
 		return exitUsage
 	}
-	if *explain {
+	if *opts.Explain {
 		// stdout belongs to a machine in every format but text: the workflow
 		// runner parses each line as a command, and json is one document. The
 		// explanation is for a human, so it goes to stderr rather than
 		// becoming stray annotations on the diff or breaking the parse.
 		out := stdout
-		if *format != lint.FormatText {
+		if *opts.Format != lint.FormatText {
 			out = stderr
 		}
 		explainSet(out, set)

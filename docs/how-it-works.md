@@ -2,7 +2,9 @@
 
 Two kinds of file, owned by different people.
 
-**Sources** are operator owned. What a cluster is, where to connect, which
+## The source file
+
+Operator owned. What a cluster is, where to connect, which
 ClickHouse user to connect as, how far behind live data to evaluate, and the
 cost caps. `address` is one endpoint, so put whatever already makes your
 cluster reachable there: a managed service's hostname, a load balancer, or a
@@ -66,6 +68,8 @@ that was supposed to have been rotated away. No password at all is fine for
 local development, and for mTLS, where the client certificate is what
 ClickHouse authenticates.
 
+### TLS to the cluster
+
 **Connections are plaintext unless the source says otherwise.** `secure: true`
 connects over TLS and verifies the server against the host's trust store, which
 is all a managed service needs, ClickHouse Cloud included.
@@ -113,7 +117,9 @@ connection. A replaced `ca_file` does need a reload, because the roots cannot be
 re-read in place, and so does a replaced `password_file`. See
 [rotating a credential or a certificate](operations.md#rotating-a-credential-or-a-certificate).
 
-**Rules** are author owned. A rule names no source; it carries a `sources`
+## The rule file
+
+Author owned. A rule names no source; it carries a `sources`
 selector over source labels, and runs against every source that matches. One
 rule definition covers an estate instead of being copied per cluster.
 
@@ -144,6 +150,8 @@ groups:
           runbook_url: https://runbooks.internal/high-p99-latency
 ```
 
+### Which clusters a rule runs against
+
 `sources` is the only thing deciding which clusters the query runs against.
 `labels` are for Alertmanager routing and nothing else. Adding a term to the
 selector narrows it, so `{team: payments, env: prod}` would run on the prod
@@ -173,18 +181,38 @@ so in its own labels.
 /rules/payments/       @payments
 ```
 
-Four things to notice.
+### One rule, many clusters
 
-**One rule, many clusters.** The `sources` selector matches every source
-carrying its labels, and the rule evaluates against each one. The alerts stay
-separate: every alert carries a protected `source` label naming where it ran,
-so one cluster recovering never resolves another's alert. Collapsing them into
-a single notification is Alertmanager's `group_by`, not something baked into
-the alert's identity.
+The `sources` selector matches every source carrying its labels, and the rule
+evaluates against each one. The alerts stay separate: every alert carries a
+protected `source` label naming where it ran, so one cluster recovering never
+resolves another's alert. Collapsing them into a single notification is
+Alertmanager's `group_by`, not something baked into the alert's identity.
 
-**One returned row is one alert instance.** Columns become labels, the `value`
-column becomes the value. A query returning one row per service produces one
-alert per service, each with its own `for` timer, each resolving on its own.
+```mermaid
+flowchart LR
+  rule["rule HighP99Latency<br/>selector team=payments"]
+  prod["source payments_prod<br/>team=payments env=prod"]
+  stage["source payments_staging<br/>team=payments env=staging"]
+  search["source search_prod<br/>team=search env=prod"]
+  prod --> aprod["alerts labelled source=payments_prod"]
+  stage --> astage["alerts labelled source=payments_staging"]
+  rule --> prod
+  rule --> stage
+  rule -. no match .-> search
+```
+
+Narrowing the selector to `{team: payments, env: prod}` drops the middle
+branch. Widening it to a label the operator put on every source runs the rule
+on all of them.
+
+### One returned row is one alert instance
+
+Columns become labels, the `value` column becomes the value. A query returning
+one row per service produces one alert per service, each with its own `for`
+timer, each resolving on its own.
+
+### The time a rule reads
 
 **The ruler owns the time window.** `{{ .From }}` and `{{ .To }}` are bound as
 ClickHouse query parameters, never pasted into the SQL text. A rule that does
@@ -198,13 +226,45 @@ overlap. Setting it shorter than the interval is a warning: the query still
 runs, but the gap between one window and the next is never examined by any
 evaluation.
 
-**Metrics tables are in scope, and they read differently.** Every example on
+`evaluation_delay` is the source's, and it moves both ends back together. The
+group above ticking at 12:00 with a one minute delay reads `From` 11:54 to
+`To` 11:59, and the tick a minute later reads 11:55 to 12:00:
+
+```mermaid
+gantt
+  dateFormat HH:mm
+  axisFormat %H:%M
+  section tick at 12.00
+  window the query reads : 11:54, 5m
+  evaluation_delay : 11:59, 1m
+  section tick at 12.01
+  window the query reads : 11:55, 5m
+  evaluation_delay : 12:00, 1m
+```
+
+The delay is there because rows arrive after the events in them happened. A
+window running up to the current second reads an interval the collector has
+not finished writing, so the newest rows are missing and the alert reports a
+number that was never true. What the delay costs is the same amount of
+notification latency, and
+[notification latency](operations.md#notification-latency) is where that is
+measured.
+
+Everything after a row is returned is on its own clocks: `for` holds a
+condition before it pages, and the resend cadence and the alert's expiry decide
+how often Alertmanager hears about it again. [Running it](running.md) has both.
+
+### Metrics tables read differently
+
+Every example on
 this page queries a traces table, where a row is an event. The collector's
 ClickHouse exporter writes metrics into tables of their own, where a row is a
 reading on a series and a counter's `Value` is usually a running total rather
 than something to compare against a threshold. A rule that reads one the way it
 would read a traces table fires forever and goes quiet at a restart, so the
 idioms have a page of their own: [rules over metrics tables](metrics.md).
+
+## What is checked, and when
 
 **The query is checked, not just the file.** A rule is SQL, and SQL is where
 the interesting failures live: a missing time bound that scans without limit,
@@ -236,6 +296,8 @@ from evaluating correctly, so by default it is a warning, and a warning is the
 contributor's to act on. Raising it to an error means a repo owner has to be
 involved to unblock someone, which is worth reserving for cases that deserve
 it.
+
+## Where the guarantee comes from
 
 **Half of this is the database's job, and the split is deliberate.** Which
 tables and rows a rule can read, whether it can reach data through `remote()`

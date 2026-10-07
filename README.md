@@ -134,8 +134,14 @@ The manual is at
 - [How it works](https://dennisme.github.io/clickhouse-ruler/how-it-works/):
   the two kinds of file, who owns which, and which half of the guarantee is
   the database's job.
+- [Rules over metrics
+  tables](https://dennisme.github.io/clickhouse-ruler/metrics/): why a counter
+  read the way a traces table is read fires forever, and the shapes that work.
 - [Install](https://dennisme.github.io/clickhouse-ruler/install/): the three
   ways in, and how to tell which build you are running.
+- [Checking a pull
+  request](https://dennisme.github.io/clickhouse-ruler/pull-requests/): the
+  action that gates a merge, and what a required status does not catch.
 - [Running it](https://dennisme.github.io/clickhouse-ruler/running/): every
   flag, and the metrics and logs it exposes.
 - [Operations](https://dennisme.github.io/clickhouse-ruler/operations/): what
@@ -191,6 +197,21 @@ Working, with the manual linked for each:
   what is running, keeping the `for` timer of every pending alert and keeping the
   running version when a file cannot be read.
   [Running it](https://dennisme.github.io/clickhouse-ruler/running/).
+- **Credentials and TLS on both ends, rotated without a restart.** A source and
+  an Alertmanager cluster each take a password from a file or the environment
+  rather than from the file in git, and a `tls_config` with Prometheus' own five
+  field names. A client certificate and key are read at each handshake, so a
+  certificate manager rotating the pair needs nothing signalled; a replaced CA
+  needs a `SIGHUP`, and what a reload cannot read leaves the material already
+  running in place rather than falling back to the host's trust store.
+  [Running it](https://dennisme.github.io/clickhouse-ruler/running/).
+- **An install, and the chain from a merge to a reload proven on a cluster.** A
+  Helm chart with a values file per delivery, the git-sync sidecar that reloads
+  the ruler and a ConfigMap mount for a small estate. A `kind` cluster carries a
+  commit from a read only git repository through the sidecar and waits for the
+  merged rule's group to evaluate and the reload gauge to read 1, with a refused
+  reload asserted to leave the previous configuration running.
+  [Deployment](https://dennisme.github.io/clickhouse-ruler/deployment/).
 - **An operator surface.** Metrics on `/metrics`, `/-/healthy` for the process
   and a `/-/ready` that can fail, structured logs naming the rule and source
   behind every failure, a `log_comment` on every query for reading cost back out

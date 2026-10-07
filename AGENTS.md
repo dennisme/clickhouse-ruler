@@ -30,7 +30,7 @@ just build              # go build ./... plus a vet of the integration-tagged te
 just integration-clean  # start the stack, run integration tests, tear it down
 just coverage           # unit-test coverage, no container needed
 just markdownlint       # markdownlint-cli2 over the docs
-just generate           # rewrite the generated parts of docs/checks
+just generate           # rewrite the generated parts of docs/checks and the flag table
 just docs-serve         # preview the documentation site locally
 just init               # mise tool versions and pre-commit hooks
 just image              # build the container image from this checkout
@@ -120,7 +120,8 @@ Three things that bite:
 
 | Path | What lives there |
 | --- | --- |
-| `cmd/ruler` | CLI: the `check` and `run` subcommands, flag parsing, and the online inspection and user-contract passes behind `check --online` |
+| `cmd/ruler` | CLI: the `check` and `run` subcommands, and the online inspection and user-contract passes behind `check --online` |
+| `internal/cli` | Where each command's flags are registered, so the flag reference on the site can be generated from them |
 | `internal/rule` | Rule file parsing and the offline rule checks |
 | `internal/source` | Sources file parsing, secret loading, label matching, the ClickHouse user contract in `privileges` |
 | `internal/ruleset` | Loading a rules directory and binding each rule to the sources its selector matches |
@@ -156,6 +157,10 @@ Three things that bite:
   with its default severity, key list and the spec section behind it. Building
   a finding goes through `lint.NewProblem`, which refuses a name the table
   does not know, so a check cannot ship without an entry. See spec 7.8.
+- Every flag is registered once, in `internal/cli`, and the flag table on
+  `docs/running.md` is generated from those flag sets. A new flag means
+  `just generate`, which `just check` then diffs, so a flag cannot ship
+  undocumented. See spec 14.
 - Metrics are labelled by rule and group, never by alert instance. A rule
   returning 10,000 rows still produces one series. See spec 8.3.
 - Passwords never reach a log. ClickHouse driver errors go through

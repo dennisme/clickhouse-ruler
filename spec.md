@@ -314,11 +314,15 @@ That is the property we are copying. Everything else follows from it.
    once.
 
    What the chart does not carry is a `PrometheusRule` or the dashboards, and
-   10.2 says why each is left out rather than pending. The claim that is only
-   rendered rather than run is the chain itself: CI templates the chart and
-   validates the manifests, and nothing yet proves on a cluster that a commit
-   reaches the sidecar and the ruler reloads. That wants the stack in 9.1 and is
-   its own slice.
+   10.2 says why each is left out rather than pending. The chain itself is run
+   rather than rendered. CI templates the chart and validates the manifests,
+   which cannot show that a commit arrives, so a `kind` cluster carries one: a
+   read only `git daemon` serves the rules repository, the test commits inside
+   that pod, and the sha it produces is waited on through the symlink, the
+   merged rule's group and the reload gauge. The refusal path is asserted
+   beside it, because a reload the ruler refused has to be a failed hook with
+   the previous configuration still running. 10.2 has the fixture and each
+   link.
 
    One smaller thing on the same chain belonged to 7 below rather than here, and
    is done. There was no CI example that gated a merge: `docs/running.md` showed
@@ -419,6 +423,40 @@ carries a README of its own because GitHub renders it for whoever follows a
 orientation rather than a redirect to a search box. It is a front door for one
 directory, the same job the README does for the repository, and 10.3 says what
 that allows it to say and what belongs on the site instead.
+
+**A diagram is a mermaid fence, and it has to earn its place.** Mermaid
+because GitHub renders the fence natively and the theme renders the same one,
+so a diagram is text in the file it explains rather than an image somebody has
+to rebuild and commit, and it keeps working where the check pages are read
+(7.8). Three earn it: which clusters a rule's selector matches and what each
+alert is then labelled, where one evaluation's window and `evaluation_delay`
+sit against the clock, and the chain from a merge to a reload including the
+branch where the ruler refuses. Each is a fan-out, a timeline or a sequence,
+which is a shape prose has to walk the reader through one edge at a time. The
+alert state machine is the one deliberately left undrawn: it is Inactive,
+Pending, Firing copied from Prometheus exactly (6.3), so a diagram of it would
+restate what its reader already has.
+
+**The flag reference is generated from the flag set, for the reason the check
+pages are generated from the check table.** `running.md` opened by promising
+every flag the binary takes and then explained each one wherever its behaviour
+came up, across two pages, so the one question an operator asks first, what can
+I set, had no answer anywhere. A hand-written table would answer it and go
+stale the first time a default moved, which is the failure 7.8 already names:
+a page can be perfectly consistent with itself and describe a tool that behaves
+differently, and the gate that regenerates and diffs would certify it.
+
+So the flag set is the table of record. `flag.FlagSet` already holds every
+flag's name, default and usage string, and the usage strings are what `--help`
+prints, so generating from them means the page and the terminal cannot disagree
+either. What this costs is where the flags are registered: a generator cannot
+import `package main`, so registration moves to `internal/cli`, which the
+commands and the generator both read. The command bodies stay where they are.
+
+The split is 7.8's split. The generated region carries the facts, which are the
+name, the default and the usage line. Everything about why a flag exists and
+what happens at the edges of it stays hand written outside the markers, and the
+table links each flag to the section that explains it where there is one.
 
 ## 13. Sources
 

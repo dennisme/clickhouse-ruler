@@ -16,7 +16,7 @@ import (
 )
 
 func main() {
-	out := flag.String("out", "docs/checks", "directory holding the check pages")
+	out := flag.String("out", "docs", "directory holding the documentation")
 	flag.Parse()
 
 	if err := run(*out); err != nil {
@@ -26,9 +26,12 @@ func main() {
 }
 
 func run(dir string) error {
+	pages := map[string]string{docs.FlagsPage: filepath.Join(dir, docs.FlagsPage)}
 	for _, page := range docs.Pages {
-		path := filepath.Join(dir, page)
+		pages[page] = filepath.Join(dir, "checks", page)
+	}
 
+	for page, path := range pages {
 		content, err := os.ReadFile(path) //nolint:gosec // a path this repository owns
 		if err != nil {
 			return fmt.Errorf("reading %s: %w", path, err)
@@ -45,7 +48,7 @@ func run(dir string) error {
 		}
 	}
 
-	index := filepath.Join(dir, "index.md")
+	index := filepath.Join(dir, "checks", "index.md")
 	if err := os.WriteFile(index, []byte(docs.Index()), 0o600); err != nil { //nolint:gosec // as above
 		return fmt.Errorf("writing %s: %w", index, err)
 	}
