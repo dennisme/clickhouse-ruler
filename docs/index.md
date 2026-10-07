@@ -24,6 +24,9 @@ door and carries the status; everything longer than a screen lives here.
 - **[How it works](how-it-works.md)** — the two kinds of file, who owns
   which, how a rule reaches a cluster, and which half of the guarantee is the
   database's job rather than a check's.
+- **[Rules over metrics tables](metrics.md)** — why a counter read the way a
+  traces table is read fires forever, the two columns that decide it, and the
+  shapes that work.
 - **[Install](install.md)** — a release archive, the container image, or
   `go install`, and how to tell which build you ended up with.
 - **[Checking a pull request](pull-requests.md)** — the action that gates a
@@ -51,6 +54,8 @@ that trips it.
   annotations, timing, and the SQL it carries.
 - **[Source checks](checks/source.md)** — reaching a cluster, the caps sent
   with every query, and the ClickHouse user behind it.
+- **[Alertmanager checks](checks/alertmanager.md)** — the urls alerts are
+  posted to, the credential that reaches them, and their TLS material.
 - **[File and policy checks](checks/policy.md)** — YAML that will not parse,
   and a policy file configuring something it cannot configure.
 
