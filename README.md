@@ -170,7 +170,7 @@ Working, with the manual linked for each:
   once it passes. `--summary` writes the cost table for a pull request comment.
   [Checks](https://dennisme.github.io/clickhouse-ruler/checks/).
 - **A merge gate you can require.** A composite action,
-  `dennisme/clickhouse-ruler/action@v1`, annotating the diff on the line at
+  `dennisme/clickhouse-ruler/action@v0`, annotating the diff on the line at
   fault and keeping one summary comment up to date, checking only the rules a
   pull request affects. Everything it does is a flag the binary already has.
   [Checking a pull

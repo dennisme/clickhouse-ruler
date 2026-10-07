@@ -22,7 +22,7 @@ jobs:
           # shallow checkout has none.
           fetch-depth: 0
 
-      - uses: dennisme/clickhouse-ruler/action@v1
+      - uses: dennisme/clickhouse-ruler/action@v0
         with:
           rules: ./rules
           sources: ./rules/ruler.yaml

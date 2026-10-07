@@ -332,7 +332,7 @@ That is the property we are copying. Everything else follows from it.
    page rather than `action/README.md` is where the checker is documented.
 
 7. **The pull request checker.** Built. 7.1 chose a composite action in
-   `action/` consumed as `dennisme/clickhouse-ruler/action@v1`, and 10.3 settled
+   `action/` consumed as `dennisme/clickhouse-ruler/action@v0`, and 10.3 settled
    its wiring down to checksum verification, tag discipline, permissions and the
    JSON feed behind the summary comment. All of it ships.
 
@@ -367,7 +367,7 @@ That is the property we are copying. Everything else follows from it.
    nobody can state is not one to gate a merge on.
 
    Documented now as well, which it was not when this entry first said it all
-   ships. `dennisme/clickhouse-ruler/action@v1` appeared in `action/README.md`
+   ships. `dennisme/clickhouse-ruler/action@v0` appeared in `action/README.md`
    and in no other file in the tree: not the README, not the site, not the nav.
    The one argument in 4 with no workaround anywhere was the one thing a reader
    could not find, and a checker nobody can find gates nothing. 10.3 has the

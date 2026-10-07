@@ -28,7 +28,7 @@ jobs:
           # says so, which is the safe direction but slower.
           fetch-depth: 0
 
-      - uses: dennisme/clickhouse-ruler/action@v1
+      - uses: dennisme/clickhouse-ruler/action@v0
         with:
           rules: ./rules
           config: ./rules/ruler.yaml
@@ -142,7 +142,7 @@ write token, which is not a price worth paying for a comment.
 
 ## Which version runs
 
-`@v1` is the newest v1 release and picks up fixes without an edit. `@v1.2.3`
+`@v0` is the newest v0 release and picks up fixes without an edit. `@v0.2.0`
 pins one release, which is what stops a release that adds a check from turning
 every open pull request red.
 
@@ -151,9 +151,9 @@ versions match by default. Set `version` to break that on purpose, such as
 holding the checker back while a fleet upgrades:
 
 ```yaml
-      - uses: dennisme/clickhouse-ruler/action@v1
+      - uses: dennisme/clickhouse-ruler/action@v0
         with:
-          version: v1.1.0
+          version: v0.1.0
           rules: ./rules
 ```
 

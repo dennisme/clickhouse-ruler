@@ -38,7 +38,7 @@ YAML themselves guarantees a dozen slightly different versions, some pinned to
 a stale release. Ship one:
 
 ```yaml
-- uses: dennisme/clickhouse-ruler/action@v1
+- uses: dennisme/clickhouse-ruler/action@v0
   with:
     path: rules/
 ```
