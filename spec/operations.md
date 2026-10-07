@@ -1799,12 +1799,13 @@ ruler inferring one from a path a sidecar chose the name of.
 
 #### Proving the chain on a cluster
 
-The chain above is rendered rather than run. `helm.yaml` templates the chart
-over every values file that matters and validates the output against the
-Kubernetes schemas, which catches the ordinary breakage cheaply and cannot show
-that a commit arrives. What is unproven is every link after the merge, and the
-two symlink layouts the paragraph above says constrain the loader: both are unit
-tested, and neither has met a real kubelet or a real git-sync worktree.
+Rendering the chain is not running it. `helm.yaml` templates the chart over
+every values file that matters and validates the output against the Kubernetes
+schemas, which catches the ordinary breakage cheaply and cannot show that a
+commit arrives. So a `kind` cluster carries one, and what it covers is every
+link after the merge plus the two symlink layouts the paragraph above says
+constrain the loader: both were unit tested against neither a real kubelet nor a
+real git-sync worktree.
 
 **`kind`, not `k3d`.** Either would do. `kind` is what the chart ecosystem
 tests on, its action is maintained, and `kind load docker-image` puts the image
