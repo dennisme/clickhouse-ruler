@@ -1,0 +1,54 @@
+name: Check proposal
+description: A new check, or a change to an existing one's severity
+labels: [check]
+body:
+  - type: markdown
+    attributes:
+      value: >
+        Every check is declared once, in the table in `internal/lint/checks.go`,
+        and cannot ship without a documentation page. That permanence is why the
+        evidence field below is the one that decides this.
+
+  - type: textarea
+    id: mistake
+    attributes:
+      label: The mistake
+      description: >
+        The rule somebody writes that looks correct and is not, and what it
+        costs them when it reaches production.
+    validations:
+      required: true
+
+  - type: textarea
+    id: evidence
+    attributes:
+      label: How often it is written
+      description: >
+        Who has written it, and how many times. Being able to reproduce a
+        mistake is not the same as knowing anybody makes it. A **Check
+        findings** issue from your own estate is the strongest form of this.
+    validations:
+      required: true
+
+  - type: textarea
+    id: signal
+    attributes:
+      label: What the check reads
+      description: >
+        Which tier it belongs in: a rule file alone, the columns a query
+        returns, rows read once, or something only a running ruler can see.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: severity
+    attributes:
+      label: Severity
+      description: >
+        A check with legitimate exceptions is a warning. `error` on a check
+        somebody needs to break teaches contributors to reach for an exemption.
+      options:
+        - warning, because the heuristic has legitimate exceptions
+        - error, because there is no correct reason to write it
+    validations:
+      required: true

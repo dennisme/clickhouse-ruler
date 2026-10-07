@@ -1,4 +1,4 @@
-# Markdownlint rules for grex docs and repo markdown.
+# Markdownlint rules for the site and the repository's own markdown.
 # See https://github.com/DavidAnson/markdownlint/blob/main/doc/Rules.md
 default: true
 
