@@ -1,6 +1,6 @@
 # Builds ruler from this checkout. The release image is built by goreleaser
 # from an already-compiled binary; see Dockerfile.goreleaser.
-FROM golang:1.26.8-alpine3.24 AS build
+FROM golang:1.27.2-alpine3.24 AS build
 
 # Version is the one symbol worth stamping. The commit and build time normally
 # come from the toolchain's vcs record, which a docker build cannot produce:

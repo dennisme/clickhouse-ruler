@@ -139,7 +139,7 @@ Three things that bite:
 
 ## Conventions
 
-- Go 1.26. Module `github.com/dennisme/clickhouse-ruler`. Standard library
+- Go 1.27. Module `github.com/dennisme/clickhouse-ruler`. Standard library
   first; the only direct dependencies are the ClickHouse driver, the Prometheus
   client and `yaml.v3`. Adding a dependency is a decision to raise, not to make.
 - `golangci-lint` v2 with `misspell`, `unconvert`, `unparam`, `gosec`, plus

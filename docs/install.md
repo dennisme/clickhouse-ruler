@@ -109,7 +109,7 @@ ruler dev
 commit unknown
 built  unknown
 dirty  false
-go     go1.26.8
+go     go1.27.2
 ```
 
 The tag is still recorded, as the module version rather than as the ruler's

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -43,7 +44,12 @@ func TestReadinessAnswersWhileAReloadHoldsTheLock(t *testing.T) {
 	go func() { answered <- r.ready(context.Background()) }()
 
 	select {
-	case <-answered:
+	case err := <-answered:
+		// The fixture names no source, so the answer is the verdict a ruler
+		// with nothing to query gives. What matters here is that it arrives.
+		if err == nil || !strings.Contains(err.Error(), "no source answering") {
+			t.Fatalf("readiness answered %v, want the no source verdict", err)
+		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("readiness did not answer while a reload held the lock")
 	}
